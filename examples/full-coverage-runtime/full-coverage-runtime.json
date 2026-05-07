@@ -1,0 +1,978 @@
+{
+  "schemaVersion": 1,
+  "name": "full-coverage-runtime",
+  "variables": {
+    "root": "${plan.dir}\\..\\..\\.artifacts\\full-coverage-runtime",
+    "solutionName": "FullCoverage",
+    "projectName": "FullCoverage",
+    "cppProjectName": "FullCpp",
+    "plcProjectName": "FullPlc",
+    "plcInstanceName": "FullPlc Instance",
+    "primaryInstanceBaseName": "Full_Primary",
+    "primaryInstanceName": "Full_Primary (FullCpp)",
+    "auxModuleName": "AuxModule",
+    "auxInstanceBaseName": "Full_Aux",
+    "auxInstanceName": "Full_Aux (AuxModule)",
+    "solutionPath": "${root}\\${solutionName}.sln",
+    "projectPath": "${root}\\${projectName}\\${projectName}.tsproj",
+    "payloadDir": "${root}\\_json_plan_payloads",
+    "evidenceDir": "${root}\\_json_plan_evidence",
+    "runtimeTaskName": "RuntimeTask",
+    "auxTaskName": "AuxTask",
+    "runtimeTaskPriority": 15,
+    "auxTaskPriority": 18,
+    "runtimeTaskCycleTimeNs": 10000000,
+    "auxTaskCycleTimeNs": 20000000,
+    "runtimeTaskCycleTimeUs": 10000,
+    "auxTaskCycleTimeUs": 20000,
+    "runtimeTaskAmsPort": 360,
+    "auxTaskAmsPort": 361,
+    "plcAmsPort": 851,
+    "signingLicenseName": "optcnc",
+    "signingLicensePassword": "123",
+    "signingCertificatePath": "C:\\ProgramData\\Beckhoff\\TwinCAT\\3.1\\CustomConfig\\Certificates\\optcnc.tccert",
+    "includeSigningSettings": true,
+    "includeCertificateGrant": false,
+    "includeExplicitBinarySigning": true,
+    "includeActivation": true,
+    "includeAdsRead": true,
+    "includeExploratoryDataPointerValues": true,
+    "includeIoTaskImage": true,
+    "includeProjectIoReplacement": true,
+    "includeGenericXmlMutations": true,
+    "includeMergeFragment": true
+  },
+  "defaults": {
+    "solution-path": "${solutionPath}",
+    "project-path": "${projectPath}",
+    "visible": false,
+    "startup-delay-ms": 8000
+  },
+  "files": [
+    {
+      "path": "${payloadDir}\\datatypes.xml",
+      "content": "<DataTypes>\n  <DataType><Name>ST_FullCoverageProcessData</Name></DataType>\n  <DataType><Name>ST_FullCoverageRuntimeCounters</Name></DataType>\n  <DataType><Name>ST_FullCoverageAdsProbe</Name></DataType>\n</DataTypes>\n"
+    },
+    {
+      "path": "${payloadDir}\\parameter-plan.json",
+      "content": [
+        {
+          "instanceName": "${primaryInstanceName}",
+          "parameterName": "Parameter.data1",
+          "valueText": "123"
+        },
+        {
+          "instanceName": "${auxInstanceName}",
+          "parameterName": "Parameter.data1",
+          "valueText": "17"
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\interface-pointer-plan.json",
+      "content": [
+        {
+          "instanceName": "${primaryInstanceName}",
+          "pointerName": "CyclicCaller",
+          "objectId": "${steps.ensureRuntimeTask.outputs.objectId}"
+        },
+        {
+          "instanceName": "${auxInstanceName}",
+          "pointerName": "CyclicCaller",
+          "objectId": "${steps.ensureAuxTask.outputs.objectId}"
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\data-pointer-plan.json",
+      "content": [
+        {
+          "instanceName": "${primaryInstanceName}",
+          "pointerName": "DataIn",
+          "objectId": "${steps.addAuxModuleInstance.outputs.objectId}",
+          "areaNo": 2,
+          "byteOffset": 0,
+          "byteSize": 4
+        },
+        {
+          "instanceName": "${primaryInstanceName}",
+          "pointerName": "DataOut",
+          "objectId": "${steps.addAuxModuleInstance.outputs.objectId}",
+          "areaNo": 1,
+          "byteOffset": 0,
+          "byteSize": 4
+        },
+        {
+          "instanceName": "${auxInstanceName}",
+          "pointerName": "DataIn",
+          "objectId": "${steps.addPrimaryModuleInstance.outputs.objectId}",
+          "areaNo": 2,
+          "byteOffset": 0,
+          "byteSize": 4
+        },
+        {
+          "instanceName": "${auxInstanceName}",
+          "pointerName": "DataOut",
+          "objectId": "${steps.addPrimaryModuleInstance.outputs.objectId}",
+          "areaNo": 1,
+          "byteOffset": 0,
+          "byteSize": 4
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\ads-read-symbols.json",
+      "content": [
+        {
+          "symbolPath": "MAIN.nCycle",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nSeed",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nStage1",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nStage1ChangeCount",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nStage2Seed",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nStage2",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nStage2ChangeCount",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.bHeartbeat",
+          "dataType": "Boolean"
+        },
+        {
+          "symbolPath": "MAIN.bPipelineOk",
+          "dataType": "Boolean"
+        },
+        {
+          "symbolPath": "MAIN.nMismatchCount",
+          "dataType": "UInt32"
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\upsert-element.json",
+      "content": {
+        "parentPath": [
+          {
+            "elementName": "Project"
+          },
+          {
+            "elementName": "System"
+          }
+        ],
+        "elementName": "FullCoverageMetadata",
+        "attributes": [
+          {
+            "name": "GeneratedBy",
+            "value": "TwinCatAutomationKit"
+          },
+          {
+            "name": "Purpose",
+            "value": "full-coverage-runtime"
+          }
+        ],
+        "childValues": [
+          {
+            "elementName": "RuntimeTask",
+            "value": "${runtimeTaskName}"
+          },
+          {
+            "elementName": "AuxTask",
+            "value": "${auxTaskName}"
+          },
+          {
+            "elementName": "PrimaryInstance",
+            "value": "${primaryInstanceName}"
+          },
+          {
+            "elementName": "AuxInstance",
+            "value": "${auxInstanceName}"
+          }
+        ],
+        "conflictPolicy": 0
+      }
+    },
+    {
+      "path": "${payloadDir}\\upsert-fragment.json",
+      "content": {
+        "parentPath": [
+          {
+            "elementName": "Project"
+          },
+          {
+            "elementName": "System"
+          }
+        ],
+        "fragmentXml": "<FullCoverageFragment><Name>RuntimeAdsProbe</Name><Symbols>MAIN.nCycle;MAIN.nStage1;MAIN.nStage2;MAIN.bPipelineOk</Symbols></FullCoverageFragment>",
+        "matchElementName": "FullCoverageFragment",
+        "matchNameValue": "RuntimeAdsProbe",
+        "conflictPolicy": 0
+      }
+    },
+    {
+      "path": "${payloadDir}\\apply-mutation-plan.json",
+      "content": {
+        "elementUpserts": [
+          {
+            "parentPath": [
+              {
+                "elementName": "Project"
+              },
+              {
+                "elementName": "System"
+              }
+            ],
+            "elementName": "FullCoverageBatchMetadata",
+            "attributes": [
+              {
+                "name": "Source",
+                "value": "tsproj.apply-mutation-plan"
+              }
+            ],
+            "childValues": [
+              {
+                "elementName": "ParameterPlan",
+                "value": "parameter-plan.json"
+              },
+              {
+                "elementName": "DataPointerPlan",
+                "value": "data-pointer-plan.json"
+              }
+            ],
+            "conflictPolicy": 0
+          }
+        ],
+        "fragmentUpserts": [
+          {
+            "parentPath": [
+              {
+                "elementName": "Project"
+              },
+              {
+                "elementName": "System"
+              }
+            ],
+            "fragmentXml": "<FullCoverageBatchFragment><Name>RuntimeLinkGraph</Name><Primary>${primaryInstanceName}</Primary><Aux>${auxInstanceName}</Aux><Plc>${plcInstanceName}</Plc></FullCoverageBatchFragment>",
+            "matchElementName": "FullCoverageBatchFragment",
+            "matchNameValue": "RuntimeLinkGraph",
+            "conflictPolicy": 0
+          }
+        ]
+      }
+    },
+    {
+      "path": "${root}\\${projectName}\\${plcProjectName}\\POUs\\MAIN.TcPOU",
+      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<TcPlcObject>\n  <POU Name=\"MAIN\">\n    <Declaration><![CDATA[\nPROGRAM MAIN\nVAR\n    nSeed AT %Q* : UDINT := 5;\n    nStage2Seed AT %Q* : UDINT := 11;\n    nStage1 AT %I* : UDINT;\n    nStage2 AT %I* : UDINT;\n    nCycle : UDINT;\n    nExpectedStage1Now : UDINT;\n    nExpectedStage1Lag : UDINT;\n    nExpectedStage2Now : UDINT;\n    nExpectedStage2Lag : UDINT;\n    nLastStage1 : UDINT;\n    nLastStage2 : UDINT;\n    nStage1ChangeCount : UDINT;\n    nStage2ChangeCount : UDINT;\n    nMismatchCount : UDINT;\n    bStage1Ok : BOOL;\n    bStage2Ok : BOOL;\n    bPipelineOk : BOOL;\n    bEverPipelineOk : BOOL;\n    bHeartbeat : BOOL;\n    bMonitoringEnabled : BOOL;\n    bMismatchActive : BOOL;\nEND_VAR\n    ]]></Declaration>\n    <Implementation>\n      <ST><![CDATA[\n(* full-coverage-runtime -- plcproj: ${steps.createPlcProject.outputs.projectFilePath} *)\nnCycle := nCycle + 1;\nbHeartbeat := NOT bHeartbeat;\n\nIF (nCycle MOD 100) = 0 THEN\n    nSeed := nSeed + 1;\n    nStage2Seed := nStage2Seed + 2;\nEND_IF;\n\nIF nStage1 <> nLastStage1 THEN\n    nStage1ChangeCount := nStage1ChangeCount + 1;\nEND_IF;\nIF nStage2 <> nLastStage2 THEN\n    nStage2ChangeCount := nStage2ChangeCount + 1;\nEND_IF;\nnLastStage1 := nStage1;\nnLastStage2 := nStage2;\n\nnExpectedStage1Now := nSeed + 123;\nnExpectedStage1Lag := nSeed + 122;\nnExpectedStage2Now := nStage2Seed + 17;\nnExpectedStage2Lag := nStage2Seed + 15;\n\nbStage1Ok := (nStage1 = nExpectedStage1Now) OR (nStage1 = nExpectedStage1Lag);\nbStage2Ok := (nStage2 = nExpectedStage2Now) OR (nStage2 = nExpectedStage2Lag);\nbPipelineOk := bStage1Ok AND bStage2Ok AND (nStage1ChangeCount > 0) AND (nStage2ChangeCount > 0);\n\nIF bPipelineOk THEN\n    bEverPipelineOk := TRUE;\n    bMonitoringEnabled := TRUE;\n    bMismatchActive := FALSE;\nELSIF bMonitoringEnabled THEN\n    IF NOT bMismatchActive THEN\n        nMismatchCount := nMismatchCount + 1;\n        bMismatchActive := TRUE;\n    END_IF;\nEND_IF;\n      ]]></ST>\n    </Implementation>\n  </POU>\n</TcPlcObject>\n"
+    }
+  ],
+  "steps": [
+    {
+      "id": "createSolution",
+      "kind": "engineering.create-xae-solution",
+      "options": {
+        "solution-directory": "${root}",
+        "solution-name": "${solutionName}",
+        "project-name": "${projectName}"
+      }
+    },
+    {
+      "id": "createCppProject",
+      "kind": "engineering.create-cpp-project",
+      "options": {
+        "cpp-project-name": "${cppProjectName}"
+      }
+    },
+    {
+      "id": "createPlcProject",
+      "kind": "engineering.create-plc-project",
+      "options": {
+        "plc-project-name": "${plcProjectName}"
+      }
+    },
+    {
+      "id": "setBuildTimeSigningLicense",
+      "kind": "signing.set-license",
+      "enabled": "${includeSigningSettings}",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "license-name": "${signingLicenseName}",
+        "password": "${signingLicensePassword}",
+        "enable-signing": true
+      }
+    },
+    {
+      "id": "createAuxModule",
+      "kind": "engineering.create-module",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "module-name": "${auxModuleName}",
+        "allow-offline-fallback": true
+      }
+    },
+    {
+      "id": "addPrimaryModuleInstance",
+      "kind": "engineering.add-module-instance",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "instance-base-name": "${primaryInstanceBaseName}",
+        "module-class-name": "${cppProjectName}",
+        "allow-offline-fallback": true
+      }
+    },
+    {
+      "id": "addAuxModuleInstance",
+      "kind": "engineering.add-module-instance",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "instance-base-name": "${auxInstanceBaseName}",
+        "module-class-name": "${auxModuleName}",
+        "allow-offline-fallback": true
+      }
+    },
+    {
+      "id": "ensureRuntimeTask",
+      "kind": "engineering.ensure-task",
+      "options": {
+        "task-name": "${runtimeTaskName}",
+        "task-subtype": 0,
+        "priority": "${runtimeTaskPriority}",
+        "cycle-time-us": "${runtimeTaskCycleTimeUs}",
+        "ams-port": "${runtimeTaskAmsPort}",
+        "io-at-begin": true
+      }
+    },
+    {
+      "id": "ensureAuxTask",
+      "kind": "engineering.ensure-task",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "task-subtype": 0,
+        "priority": "${auxTaskPriority}",
+        "cycle-time-us": "${auxTaskCycleTimeUs}",
+        "ams-port": "${auxTaskAmsPort}",
+        "io-at-begin": true
+      }
+    },
+    {
+      "id": "exportCppBeforeOffline",
+      "kind": "engineering.export-tree-item-xml",
+      "options": {
+        "tree-item-path": "TIXC^${cppProjectName}",
+        "destination-path": "${evidenceDir}\\cpp.before-offline.xml",
+        "recursive": true
+      }
+    },
+    {
+      "id": "exportTasksBeforeOffline",
+      "kind": "engineering.export-tree-item-xml",
+      "options": {
+        "tree-item-path": "TIRT",
+        "destination-path": "${evidenceDir}\\tasks.before-offline.xml",
+        "recursive": true
+      }
+    },
+    {
+      "id": "saveBeforeOffline",
+      "kind": "engineering.save-all",
+      "options": {}
+    },
+    {
+      "id": "closeBeforeOffline",
+      "kind": "engineering.close-visual-studio",
+      "options": {
+        "save-before-close": true
+      }
+    },
+    {
+      "id": "ensureRuntimeTaskOffline",
+      "kind": "tsproj.ensure-task",
+      "options": {
+        "task-name": "${runtimeTaskName}",
+        "priority": "${runtimeTaskPriority}",
+        "cycle-time-ns": "${runtimeTaskCycleTimeNs}",
+        "ams-port": "${runtimeTaskAmsPort}",
+        "io-at-begin": true
+      }
+    },
+    {
+      "id": "ensureAuxTaskOffline",
+      "kind": "tsproj.ensure-task",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "priority": "${auxTaskPriority}",
+        "cycle-time-ns": "${auxTaskCycleTimeNs}",
+        "ams-port": "${auxTaskAmsPort}",
+        "io-at-begin": true
+      }
+    },
+    {
+      "id": "clearAuxTaskLayout",
+      "kind": "tsproj.clear-task-layout",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "remove-vars": true,
+        "remove-image": true
+      }
+    },
+    {
+      "id": "ensureAuxTaskInputVars",
+      "kind": "tsproj.ensure-task-vars-group",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "group-name": "AuxInputs",
+        "var-grp-type": 1,
+        "insert-type": 1,
+        "base-var-name": "AuxIn",
+        "type-name": "UDINT",
+        "count": 4,
+        "bit-stride": 32,
+        "external-address-stride": 4,
+        "start-index": 1,
+        "replace-existing-group": true
+      }
+    },
+    {
+      "id": "ensureAuxTaskOutputVars",
+      "kind": "tsproj.ensure-task-vars-group",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "group-name": "AuxOutputs",
+        "var-grp-type": 2,
+        "insert-type": 1,
+        "base-var-name": "AuxOut",
+        "type-name": "UDINT",
+        "count": 4,
+        "bit-stride": 32,
+        "external-address-stride": 4,
+        "start-index": 1,
+        "replace-existing-group": true
+      }
+    },
+    {
+      "id": "ensureAuxTaskImage",
+      "kind": "tsproj.ensure-task-image",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "image-id": 2,
+        "address-type": 1,
+        "image-type": 1,
+        "size-in": 16,
+        "size-out": 16,
+        "image-name": "AuxImage",
+        "io-at-begin": true,
+        "replace-existing-image": true
+      }
+    },
+    {
+      "id": "ensurePlcInstance",
+      "kind": "tsproj.ensure-plc-instance",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}"
+      }
+    },
+    {
+      "id": "bindPlcRuntimeTask",
+      "kind": "tsproj.bind-plc-instance-task",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "plc-task-name": "${runtimeTaskName}",
+        "task-object-id": "${steps.ensureRuntimeTask.outputs.objectId}",
+        "priority": "${runtimeTaskPriority}",
+        "cycle-time-ns": "${runtimeTaskCycleTimeNs}",
+        "context-id": 0
+      }
+    },
+    {
+      "id": "setRuntimeTaskAffinity",
+      "kind": "tsproj.set-task-affinity",
+      "options": {
+        "task-name": "${runtimeTaskName}",
+        "affinity": "#x1",
+        "enable-adt-tasks": true
+      }
+    },
+    {
+      "id": "setAuxTaskAffinity",
+      "kind": "tsproj.set-task-affinity",
+      "options": {
+        "task-name": "${auxTaskName}",
+        "affinity": "#x1",
+        "enable-adt-tasks": true
+      }
+    },
+    {
+      "id": "setPlcProjectProperties",
+      "kind": "tsproj.set-plc-project-properties",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "ams-port": "${plcAmsPort}",
+        "reload-tmc": true,
+        "file-archive-settings": "#x0002"
+      }
+    },
+    {
+      "id": "setPlcMetadata",
+      "kind": "tsproj.set-plc-instance-metadata",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "tc-sm-class": "PlcTask",
+        "keep-unrestored-links": "2",
+        "class-factory": "${plcProjectName}"
+      }
+    },
+    {
+      "id": "clearPlcVars",
+      "kind": "tsproj.clear-plc-instance-vars",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}"
+      }
+    },
+    {
+      "id": "ensurePlcOutputVars",
+      "kind": "tsproj.ensure-plc-instance-vars-group",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "group-name": "PlcTask Outputs",
+        "var-grp-type": 2,
+        "area-no": 1,
+        "variables": "MAIN.nSeed:UDINT:0:0;MAIN.nStage2Seed:UDINT:32:4"
+      }
+    },
+    {
+      "id": "ensurePlcInputVars",
+      "kind": "tsproj.ensure-plc-instance-vars-group",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "group-name": "PlcTask Inputs",
+        "var-grp-type": 1,
+        "area-no": 0,
+        "variables": "MAIN.nStage1:UDINT:0:0;MAIN.nStage2:UDINT:32:4"
+      }
+    },
+    {
+      "id": "clearInitSymbols",
+      "kind": "tsproj.clear-plc-init-symbols",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "clearTaskPouOids",
+      "kind": "tsproj.clear-plc-task-pou-oids",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "ensureRuntimeTaskPouOid",
+      "kind": "tsproj.ensure-task-pou-oid",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "priority": "${runtimeTaskPriority}",
+        "object-id": "${steps.ensureRuntimeTask.outputs.objectId}"
+      }
+    },
+    {
+      "id": "ensureRuntimeTaskInitSymbol",
+      "kind": "tsproj.ensure-init-symbol",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "symbol-name": "MAIN.__RuntimeTaskOid",
+        "object-id": "${steps.ensureRuntimeTask.outputs.objectId}"
+      }
+    },
+    {
+      "id": "ensureAuxTaskInitSymbol",
+      "kind": "tsproj.ensure-init-symbol",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "symbol-name": "MAIN.__AuxTaskOid",
+        "object-id": "${steps.ensureAuxTask.outputs.objectId}"
+      }
+    },
+    {
+      "id": "replaceDataTypes",
+      "kind": "tsproj.replace-data-types-section",
+      "options": {
+        "xml-file": "${payloadDir}\\datatypes.xml",
+        "insert-before-project": true
+      }
+    },
+    {
+      "id": "replaceSystemSettings",
+      "kind": "tsproj.replace-system-settings-section",
+      "options": {
+        "settings-xml": "<Settings><MaxCycles>0</MaxCycles><SyncUnits>1</SyncUnits><RoutingProbe>full-coverage-runtime</RoutingProbe></Settings>",
+        "insert-before-tasks": true
+      }
+    },
+    {
+      "id": "replaceProjectIoSection",
+      "kind": "tsproj.replace-project-io-section",
+      "enabled": "${includeProjectIoReplacement}",
+      "options": {
+        "io-xml": "<Io><Name>FullCoverageJsonOwnedIo</Name></Io>"
+      }
+    },
+    {
+      "id": "ensureRuntimeIoTaskImage",
+      "kind": "tsproj.ensure-io-task-image",
+      "enabled": "${includeIoTaskImage}",
+      "options": {
+        "task-name": "${runtimeTaskName}",
+        "instance-name": "${primaryInstanceName}",
+        "image-id": 1,
+        "size-in": 40,
+        "size-out": 10,
+        "pointer-name": "IoTaskImage",
+        "ensure-default-task-variables": true,
+        "input-real-count": 10,
+        "output-byte-count": 10,
+        "io-at-begin": true
+      }
+    },
+    {
+      "id": "bindPrimaryInstanceTask",
+      "kind": "tsproj.bind-instance-task",
+      "options": {
+        "instance-name": "${primaryInstanceName}",
+        "task-object-id": "${steps.ensureRuntimeTask.outputs.objectId}",
+        "priority": "${runtimeTaskPriority}",
+        "cycle-time-ns": "${runtimeTaskCycleTimeNs}",
+        "include-cyclic-caller": true
+      }
+    },
+    {
+      "id": "bindAuxInstanceContext",
+      "kind": "tsproj.bind-instance-context",
+      "options": {
+        "instance-name": "${auxInstanceName}",
+        "task-object-id": "${steps.ensureAuxTask.outputs.objectId}",
+        "priority": "${auxTaskPriority}",
+        "cycle-time-ns": "${auxTaskCycleTimeNs}",
+        "context-id": 1,
+        "context-name": "AuxTaskCtx",
+        "include-cyclic-caller": true,
+        "remove-cyclic-caller-when-excluded": false
+      }
+    },
+    {
+      "id": "clearPrimaryParameterValues",
+      "kind": "tsproj.clear-instance-parameter-values",
+      "options": {
+        "instance-name": "${primaryInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "clearAuxParameterValues",
+      "kind": "tsproj.clear-instance-parameter-values",
+      "options": {
+        "instance-name": "${auxInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "applyParameterPlan",
+      "kind": "tsproj.apply-instance-parameter-plan",
+      "options": {
+        "json-file": "${payloadDir}\\parameter-plan.json"
+      }
+    },
+    {
+      "id": "ensurePrimaryParameter",
+      "kind": "tsproj.ensure-parameter",
+      "options": {
+        "instance-name": "${primaryInstanceName}",
+        "parameter-name": "Parameter.data1",
+        "value-text": "123"
+      }
+    },
+    {
+      "id": "applyInterfacePointerPlan",
+      "kind": "tsproj.apply-instance-interface-pointer-plan",
+      "options": {
+        "json-file": "${payloadDir}\\interface-pointer-plan.json"
+      }
+    },
+    {
+      "id": "ensureAuxCyclicCallerPointer",
+      "kind": "tsproj.ensure-interface-pointer",
+      "options": {
+        "instance-name": "${auxInstanceName}",
+        "pointer-name": "CyclicCaller",
+        "object-id": "${steps.ensureAuxTask.outputs.objectId}"
+      }
+    },
+    {
+      "id": "clearPrimaryDataPointerValues",
+      "kind": "tsproj.clear-instance-data-pointer-values",
+      "options": {
+        "instance-name": "${primaryInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "clearAuxDataPointerValues",
+      "kind": "tsproj.clear-instance-data-pointer-values",
+      "options": {
+        "instance-name": "${auxInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "applyExploratoryDataPointerPlan",
+      "kind": "tsproj.apply-instance-data-pointer-plan",
+      "enabled": "${includeExploratoryDataPointerValues}",
+      "options": {
+        "json-file": "${payloadDir}\\data-pointer-plan.json"
+      }
+    },
+    {
+      "id": "ensurePrimaryDataPointer",
+      "kind": "tsproj.ensure-data-pointer",
+      "enabled": "${includeExploratoryDataPointerValues}",
+      "options": {
+        "instance-name": "${primaryInstanceName}",
+        "pointer-name": "DataIn",
+        "object-id": "${steps.addAuxModuleInstance.outputs.objectId}",
+        "area-no": 2,
+        "byte-offset": 0,
+        "byte-size": 4
+      }
+    },
+    {
+      "id": "clearMappings",
+      "kind": "tsproj.clear-mappings",
+      "options": {}
+    },
+    {
+      "id": "replaceMappingsWithEmptySection",
+      "kind": "tsproj.replace-mappings-section",
+      "options": {
+        "mappings-xml": "<Mappings></Mappings>"
+      }
+    },
+    {
+      "id": "clearUnrestoredVarLinks",
+      "kind": "tsproj.clear-unrestored-var-links",
+      "options": {}
+    },
+    {
+      "id": "mapPlcSeedToPrimaryInput",
+      "kind": "tsproj.ensure-mapping-link",
+      "options": {
+        "owner-a-name": "TIPC^${plcProjectName}^${plcInstanceName}",
+        "owner-b-name": "TIXC^${cppProjectName}^${primaryInstanceName}",
+        "var-a": "PlcTask Outputs^MAIN.nSeed",
+        "var-b": "Input^DataIn"
+      }
+    },
+    {
+      "id": "mapPrimaryOutputToPlcStage1",
+      "kind": "tsproj.ensure-mapping-link",
+      "options": {
+        "owner-a-name": "TIXC^${cppProjectName}^${primaryInstanceName}",
+        "owner-b-name": "TIPC^${plcProjectName}^${plcInstanceName}",
+        "var-a": "Output^DataOut",
+        "var-b": "PlcTask Inputs^MAIN.nStage1"
+      }
+    },
+    {
+      "id": "mapPlcSeedToAuxInput",
+      "kind": "tsproj.ensure-mapping-link",
+      "options": {
+        "owner-a-name": "TIPC^${plcProjectName}^${plcInstanceName}",
+        "owner-b-name": "TIXC^${cppProjectName}^${auxInstanceName}",
+        "var-a": "PlcTask Outputs^MAIN.nStage2Seed",
+        "var-b": "Input^DataIn"
+      }
+    },
+    {
+      "id": "mapAuxOutputToPlcStage2",
+      "kind": "tsproj.ensure-mapping-link",
+      "options": {
+        "owner-a-name": "TIXC^${cppProjectName}^${auxInstanceName}",
+        "owner-b-name": "TIPC^${plcProjectName}^${plcInstanceName}",
+        "var-a": "Output^DataOut",
+        "var-b": "PlcTask Inputs^MAIN.nStage2"
+      }
+    },
+    {
+      "id": "upsertElement",
+      "kind": "tsproj.upsert-element",
+      "enabled": "${includeGenericXmlMutations}",
+      "options": {
+        "json-file": "${payloadDir}\\upsert-element.json"
+      }
+    },
+    {
+      "id": "upsertFragment",
+      "kind": "tsproj.upsert-fragment",
+      "enabled": "${includeGenericXmlMutations}",
+      "options": {
+        "json-file": "${payloadDir}\\upsert-fragment.json"
+      }
+    },
+    {
+      "id": "applyMutationPlan",
+      "kind": "tsproj.apply-mutation-plan",
+      "enabled": "${includeGenericXmlMutations}",
+      "options": {
+        "json-file": "${payloadDir}\\apply-mutation-plan.json"
+      }
+    },
+    {
+      "id": "mergeDataTypeFragment",
+      "kind": "tsproj.merge-fragment",
+      "enabled": "${includeMergeFragment}",
+      "options": {
+        "parent-element-name": "DataTypes",
+        "fragment-xml": "<DataType><Name>ST_FullCoverageMergedAudit</Name></DataType>",
+        "match-element-name": "DataType",
+        "match-name-value": "ST_FullCoverageMergedAudit",
+        "replace-existing": true,
+        "fragment-source": "examples/full-coverage-runtime/full-coverage-runtime.json inline fragment; replaceDataTypes creates the unique DataTypes parent first",
+        "target-parent-path": "root DataTypes element inserted before Project by tsproj.replace-data-types-section",
+        "field-meaning": "Adds a named audit DataType so merge-fragment coverage has a deterministic and non-runtime-critical target",
+        "verification-evidence": "Offline .tsproj reopen/build is the immediate check; runtime ADS proof is provided by MAIN symbols after activation"
+      }
+    },
+    {
+      "id": "reopenAfterOfflineMutations",
+      "kind": "engineering.open-xae-solution",
+      "options": {}
+    },
+    {
+      "id": "exportCppAfterOffline",
+      "kind": "engineering.export-tree-item-xml",
+      "options": {
+        "tree-item-path": "TIXC^${cppProjectName}",
+        "destination-path": "${evidenceDir}\\cpp.after-offline.xml",
+        "recursive": true
+      }
+    },
+    {
+      "id": "exportTasksAfterOffline",
+      "kind": "engineering.export-tree-item-xml",
+      "options": {
+        "tree-item-path": "TIRT",
+        "destination-path": "${evidenceDir}\\tasks.after-offline.xml",
+        "recursive": true
+      }
+    },
+    {
+      "id": "buildSolution",
+      "kind": "engineering.build-solution",
+      "options": {
+        "timeout-ms": 1800000
+      }
+    },
+    {
+      "id": "grantSigningCertificate",
+      "kind": "signing.grant-certificate",
+      "enabled": "${includeCertificateGrant}",
+      "options": {
+        "certificate-path": "${signingCertificatePath}",
+        "password": "${signingLicensePassword}",
+        "quiet": true
+      }
+    },
+    {
+      "id": "signTwinCatBinaryExplicitly",
+      "kind": "signing.sign-twincat-binary",
+      "enabled": "${includeExplicitBinarySigning}",
+      "options": {
+        "certificate-path": "${signingCertificatePath}",
+        "cpp-project-name": "${cppProjectName}",
+        "configuration": "Release",
+        "platform": "TwinCAT OS (x64)",
+        "password": "${signingLicensePassword}",
+        "quiet": true
+      }
+    },
+    {
+      "id": "verifyTwinCatBinarySignature",
+      "kind": "signing.verify-twincat-binary",
+      "enabled": "${includeExplicitBinarySigning}",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "configuration": "Release",
+        "platform": "TwinCAT OS (x64)",
+        "allow-test-mode-warning": true,
+        "quiet": true
+      }
+    },
+    {
+      "id": "activate",
+      "kind": "engineering.activate-configuration",
+      "enabled": "${includeActivation}",
+      "options": {
+        "save-configuration-archive": true,
+        "configuration-archive-path": "${evidenceDir}\\activated.tszip"
+      }
+    },
+    {
+      "id": "adsScan",
+      "kind": "validation.ads-scan",
+      "enabled": "${includeAdsRead}",
+      "options": {
+        "net-id": "local",
+        "ports": "100,200,300,800,851,852,10000"
+      }
+    },
+    {
+      "id": "adsReadRuntimeSymbols",
+      "kind": "validation.ads-read-symbols",
+      "enabled": "${includeAdsRead}",
+      "options": {
+        "net-id": "local",
+        "port": "${plcAmsPort}",
+        "json-file": "${payloadDir}\\ads-read-symbols.json",
+        "auto-reconnect": true,
+        "continue-on-error": false
+      }
+    },
+    {
+      "id": "adsReadSingleHeartbeat",
+      "kind": "validation.ads-read",
+      "enabled": "${includeAdsRead}",
+      "options": {
+        "net-id": "local",
+        "port": "${plcAmsPort}",
+        "symbol": "MAIN.bHeartbeat",
+        "type": "Boolean",
+        "auto-reconnect": true
+      }
+    }
+  ]
+}

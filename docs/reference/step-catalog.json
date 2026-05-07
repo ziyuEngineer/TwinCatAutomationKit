@@ -1,0 +1,2818 @@
+﻿{
+  "DocumentKind": "TwinCatAutomationKit.StepCatalog",
+  "SchemaVersion": 2,
+  "SourceOfTruth": "src/TwinCatAutomationKit.TwinCat/TwinCatAutomationKit.TwinCat/TwinCatStepCatalog.cs",
+  "GeneratedBy": "dotnet run --project ./src/TwinCatAutomationKit.Cli/TwinCatAutomationKit.Cli/TwinCatAutomationKit.Cli.csproj -- generate-docs",
+  "CompanionMarkdown": "docs/reference/step-catalog.md",
+  "RelatedDocs": [
+    "docs/cli/json-plan.md",
+    "docs/reference/recommended-execution-order.md",
+    "examples/json-plans/*.json"
+  ],
+  "ReadThisFirst": [
+    "This file is the machine-readable step interface catalog, not a run-plan JSON file.",
+    "Use Steps as the only step contract list in this file; do not infer extra steps from prose or examples.",
+    "Use RecommendedExecutionOrder as the default ordering guide when assembling a new plan.",
+    "Use docs/cli/json-plan.md for the surrounding run-plan file shape and variable syntax.",
+    "Use examples/json-plans/*.json for complete plan examples."
+  ],
+  "AgentUsageRules": [
+    "Select a step by exact Kind.",
+    "Supply every input with Required=true unless the plan intentionally obtains it from prior step outputs or defaults documented elsewhere.",
+    "Treat Preconditions as operational requirements that must be satisfied before the step runs.",
+    "Treat VerificationNotes as evidence requirements for judging success.",
+    "Do not use tsproj.merge-fragment or generic tsproj.upsert-* when a dedicated tsproj primitive exists.",
+    "If needed behavior is missing from Steps, report the missing human operation, XML before/after shape, target path, field meanings, verification method, and suggested API name instead of inventing a hidden step."
+  ],
+  "SyncPolicy": [
+    "docs/reference/step-catalog.json and docs/reference/step-catalog.md are generated companions from the same catalog source.",
+    "Do not hand-edit either generated file.",
+    "Any change to step specs or generated reference wording must regenerate both files in the same change.",
+    "If the JSON and Markdown disagree, treat the generated pair as stale and rerun generate-docs; do not merge the disagreement manually.",
+    "For public step contract changes, update TwinCatStepCatalog.cs, implementation/CLI/tests as needed, then run generate-docs."
+  ],
+  "StepFieldMeanings": {
+    "Kind": "Stable public step identifier used in invoke-step and JSON plan steps.",
+    "MethodName": "Service method that implements the step behavior.",
+    "Category": "High-level step family such as engineering, tsproj, signing, or validation.",
+    "Summary": "Short behavior description.",
+    "Preconditions": "Required state or environment before running the step.",
+    "Inputs": "Request fields accepted by the step payload or direct CLI options.",
+    "Inputs.Required": "True means the caller must provide a value unless a wrapper supplies it explicitly.",
+    "Inputs.Example": "Scalar example for that field; it is not a full step payload.",
+    "Outputs": "Named values exposed by the step outcome and available to later JSON plan steps.",
+    "VerificationNotes": "Evidence or readback expected after running the step."
+  },
+  "PlanAuthoringRules": [
+    "A run-plan file has variables/files/steps structure from docs/cli/json-plan.md; this catalog only describes valid step kinds and payload fields.",
+    "Each plan step should reference one catalog Kind and pass a payload matching Inputs.",
+    "Prefer small explicit steps over macro commands when durable evidence or precise repair is needed.",
+    "Keep deviations from RecommendedExecutionOrder intentional and explain them in plan comments or evidence."
+  ],
+  "RecommendedExecutionOrder": [
+    "engineering.launch-visual-studio",
+    "engineering.create-xae-solution",
+    "engineering.create-cpp-project",
+    "engineering.create-module",
+    "engineering.add-module-instance",
+    "engineering.ensure-task",
+    "engineering.export-tree-item-xml",
+    "engineering.save-all",
+    "engineering.close-visual-studio",
+    "tsproj.ensure-task",
+    "tsproj.clear-task-layout",
+    "tsproj.ensure-task-vars-group",
+    "tsproj.ensure-task-image",
+    "tsproj.ensure-cpp-instance",
+    "tsproj.ensure-plc-instance",
+    "tsproj.bind-instance-context",
+    "tsproj.set-task-affinity",
+    "tsproj.set-plc-project-properties",
+    "tsproj.set-plc-instance-metadata",
+    "tsproj.clear-plc-instance-vars",
+    "tsproj.ensure-plc-instance-vars-group",
+    "tsproj.clear-plc-task-pou-oids",
+    "tsproj.clear-plc-init-symbols",
+    "tsproj.clear-mappings",
+    "tsproj.clear-unrestored-var-links",
+    "tsproj.replace-mappings-section",
+    "tsproj.replace-project-io-section",
+    "tsproj.replace-data-types-section",
+    "tsproj.replace-system-settings-section",
+    "tsproj.ensure-io-task-image",
+    "tsproj.bind-instance-task",
+    "tsproj.bind-plc-instance-task",
+    "tsproj.ensure-task-pou-oid",
+    "tsproj.ensure-init-symbol",
+    "tsproj.clear-instance-parameter-values",
+    "tsproj.clear-instance-data-pointer-values",
+    "tsproj.apply-instance-parameter-plan",
+    "tsproj.apply-instance-interface-pointer-plan",
+    "tsproj.apply-instance-data-pointer-plan",
+    "tsproj.ensure-parameter",
+    "tsproj.ensure-interface-pointer",
+    "tsproj.ensure-data-pointer",
+    "tsproj.ensure-mapping-link",
+    "tsproj.upsert-element",
+    "tsproj.upsert-fragment",
+    "tsproj.apply-mutation-plan",
+    "tsproj.merge-fragment",
+    "engineering.open-xae-solution",
+    "engineering.build-solution",
+    "signing.grant-certificate",
+    "signing.set-license",
+    "signing.sign-twincat-binary",
+    "signing.verify-twincat-binary",
+    "engineering.activate-configuration",
+    "validation.ads-scan",
+    "validation.ads-read",
+    "validation.ads-read-symbols"
+  ],
+  "Steps": [
+    {
+      "Kind": "engineering.activate-configuration",
+      "MethodName": "TwinCatEngineeringService.ActivateConfiguration",
+      "Category": "engineering",
+      "Summary": "Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback.",
+      "Preconditions": [
+        "A solution must be loaded and its ITcSysManager must be available."
+      ],
+      "Inputs": [
+        {
+          "Name": "SaveConfigurationArchive",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to attempt SaveConfiguration before activate.",
+          "Example": "true"
+        },
+        {
+          "Name": "ConfigurationArchivePath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional override for the generated .tszip path.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "activationCommand",
+          "Type": "string",
+          "Description": "The command or fallback path used for activation."
+        }
+      ],
+      "VerificationNotes": [
+        "Confirm that either ITcSysManager.ActivateConfiguration or a DTE command succeeded."
+      ]
+    },
+    {
+      "Kind": "engineering.add-module-instance",
+      "MethodName": "TwinCatEngineeringService.AddModuleInstance",
+      "Category": "engineering",
+      "Summary": "Adds a TcCOM instance from a project TMC by resolving the module GUID and calling CreateChild on the project node.",
+      "Preconditions": [
+        "The target C\u002B\u002B project and its .tmc file must exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Owning C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectTmcPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute path to the project TMC.",
+          "Example": null
+        },
+        {
+          "Name": "InstanceBaseName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Base name to use when creating the instance.",
+          "Example": null
+        },
+        {
+          "Name": "ModuleClassName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional module class name when the TMC contains multiple classes.",
+          "Example": null
+        },
+        {
+          "Name": "AllowOfflineFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether AddModuleInstance may inject a deterministic instance skeleton through .tsproj file mutation when COM CreateChild fails.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "TwinCAT tree path for the instance."
+        },
+        {
+          "Name": "objectId",
+          "Type": "string",
+          "Description": "Resolved instance ObjectId / OTCID."
+        }
+      ],
+      "VerificationNotes": [
+        "Export the instance XML and confirm that the expected CLSID and Name are present."
+      ]
+    },
+    {
+      "Kind": "engineering.build-solution",
+      "MethodName": "TwinCatEngineeringService.BuildCurrentSolution",
+      "Category": "engineering",
+      "Summary": "Runs SolutionBuild.Build and waits until the DTE build state reaches done.",
+      "Preconditions": [
+        "A solution must be loaded in the DTE session."
+      ],
+      "Inputs": [
+        {
+          "Name": "TimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum build wait time.",
+          "Example": "300000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "lastBuildInfo",
+          "Type": "int",
+          "Description": "DTE LastBuildInfo value."
+        }
+      ],
+      "VerificationNotes": [
+        "Treat LastBuildInfo == 0 as the engineering success condition."
+      ]
+    },
+    {
+      "Kind": "engineering.close-visual-studio",
+      "MethodName": "TwinCatEngineeringService.CloseVisualStudio",
+      "Category": "engineering",
+      "Summary": "Closes the current Visual Studio DTE session, optionally issuing SaveAll first.",
+      "Preconditions": [
+        "A live DTE session must exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "SaveBeforeClose",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether SaveAll should run before closing the session.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Confirm that the DTE process exits and the session object is no longer usable."
+      ]
+    },
+    {
+      "Kind": "engineering.create-cpp-project",
+      "MethodName": "TwinCatEngineeringService.CreateCppProject",
+      "Category": "engineering",
+      "Summary": "Creates a TwinCAT C\u002B\u002B project beneath TIXC using a specified Beckhoff wizard id.",
+      "Preconditions": [
+        "A bound TwinCAT engineering session must exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Requested C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "WizardId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Wizard identifier for the project template.",
+          "Example": "TcVersionedDriverWizard"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "TwinCAT tree path for the C\u002B\u002B project."
+        },
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Expected .vcxproj path."
+        }
+      ],
+      "VerificationNotes": [
+        "Verify the TIXC child exists and the .vcxproj file lands on disk."
+      ]
+    },
+    {
+      "Kind": "engineering.create-module",
+      "MethodName": "TwinCatEngineeringService.CreateModule",
+      "Category": "engineering",
+      "Summary": "Creates a module class inside a TwinCAT C\u002B\u002B project via the module wizard id.",
+      "Preconditions": [
+        "A TwinCAT C\u002B\u002B project must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Owning C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "ModuleName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Requested module class name.",
+          "Example": null
+        },
+        {
+          "Name": "WizardId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Beckhoff module wizard id.",
+          "Example": "TcModuleClassWizard"
+        },
+        {
+          "Name": "AllowOfflineFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether CreateModule may patch module skeleton artifacts when module wizard automation fails.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "TwinCAT tree path for the created module node."
+        },
+        {
+          "Name": "moduleCppPath",
+          "Type": "string",
+          "Description": "Expected .cpp path for the module."
+        }
+      ],
+      "VerificationNotes": [
+        "Confirm that the module files exist and the tree node is visible after save/refresh."
+      ]
+    },
+    {
+      "Kind": "engineering.create-plc-project",
+      "MethodName": "TwinCatEngineeringService.CreatePlcProject",
+      "Category": "engineering",
+      "Summary": "Creates a PLC project using the first compatible Beckhoff PLC template available on the machine.",
+      "Preconditions": [
+        "A bound TwinCAT engineering session must exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project name.",
+          "Example": null
+        },
+        {
+          "Name": "AllowOfflineFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether CreatePlcProject may synthesize a minimal PLC project file mutation when COM/template creation fails.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "TwinCAT tree path for the PLC project."
+        },
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Expected .plcproj path."
+        }
+      ],
+      "VerificationNotes": [
+        "Check that the PLC node exists and that the .plcproj file was created."
+      ]
+    },
+    {
+      "Kind": "engineering.create-xae-solution",
+      "MethodName": "TwinCatEngineeringService.CreateTwinCatSolution",
+      "Category": "engineering",
+      "Summary": "Creates a fresh TwinCAT XAE solution and binds the automation session to its ITcSysManager root.",
+      "Preconditions": [
+        "An active DTE session must exist.",
+        "At least one default TwinCAT XAE template path must exist on the machine."
+      ],
+      "Inputs": [
+        {
+          "Name": "SolutionDirectory",
+          "Type": "string",
+          "Required": true,
+          "Description": "Directory where the solution should be created.",
+          "Example": null
+        },
+        {
+          "Name": "SolutionName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Visual Studio solution name.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT project name.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "solutionPath",
+          "Type": "string",
+          "Description": "Absolute .sln path."
+        },
+        {
+          "Name": "projectPath",
+          "Type": "string",
+          "Description": "Absolute .tsproj path."
+        }
+      ],
+      "VerificationNotes": [
+        "Check that the .sln and .tsproj files exist and that ITcSysManager can be retrieved."
+      ]
+    },
+    {
+      "Kind": "engineering.ensure-task",
+      "MethodName": "TwinCatEngineeringService.EnsureTask",
+      "Category": "engineering",
+      "Summary": "Creates or reuses a Task under TIRT and normalizes its timing, priority, and AMS port.",
+      "Preconditions": [
+        "A bound TwinCAT engineering session must exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "TaskSubtype",
+          "Type": "int",
+          "Required": true,
+          "Description": "TwinCAT task subtype passed to CreateChild.",
+          "Example": null
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": true,
+          "Description": "Task priority.",
+          "Example": null
+        },
+        {
+          "Name": "CycleTimeUs",
+          "Type": "int",
+          "Required": true,
+          "Description": "Task cycle time in microseconds.",
+          "Example": null
+        },
+        {
+          "Name": "AmsPort",
+          "Type": "int",
+          "Required": true,
+          "Description": "Assigned AMS port.",
+          "Example": null
+        },
+        {
+          "Name": "IoAtBegin",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Optional TaskDef IoAtBegin setting.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "TwinCAT tree path for the task."
+        },
+        {
+          "Name": "objectId",
+          "Type": "string",
+          "Description": "Task OTCID / ObjectId."
+        }
+      ],
+      "VerificationNotes": [
+        "Read back ProduceXml(true) and confirm TaskDef/Context values were updated."
+      ]
+    },
+    {
+      "Kind": "engineering.export-tree-item-xml",
+      "MethodName": "TwinCatEngineeringService.ExportTreeItemXml",
+      "Category": "engineering",
+      "Summary": "Exports ProduceXml output for any TwinCAT tree node as durable evidence.",
+      "Preconditions": [
+        "A bound TwinCAT engineering session must exist.",
+        "The target tree path must be valid."
+      ],
+      "Inputs": [
+        {
+          "Name": "TreeItemPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT tree path such as TIXC^MyProject.",
+          "Example": null
+        },
+        {
+          "Name": "DestinationPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute output file path.",
+          "Example": null
+        },
+        {
+          "Name": "Recursive",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether ProduceXml(true) should be used.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "xmlPath",
+          "Type": "string",
+          "Description": "Saved XML evidence file."
+        }
+      ],
+      "VerificationNotes": [
+        "Re-open the XML file and verify it contains the expected node metadata."
+      ]
+    },
+    {
+      "Kind": "engineering.launch-visual-studio",
+      "MethodName": "TwinCatEngineeringService.LaunchVisualStudio",
+      "Category": "engineering",
+      "Summary": "Starts a new DTE session that later steps can use for XAE creation, build, and activation.",
+      "Preconditions": [
+        "Visual Studio with TwinCAT XAE must be installed on the machine."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProgId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Visual Studio DTE ProgId.",
+          "Example": "VisualStudio.DTE.17.0"
+        },
+        {
+          "Name": "StartupDelayMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Warm-up delay before the DTE session is used.",
+          "Example": "5000"
+        },
+        {
+          "Name": "Visible",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether the launched Visual Studio window should be visible.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "session",
+          "Type": "TwinCatEngineeringSession",
+          "Description": "Live DTE session stored in pipeline state."
+        }
+      ],
+      "VerificationNotes": [
+        "Read back DTE version or solution state to confirm the COM server is reachable."
+      ]
+    },
+    {
+      "Kind": "engineering.open-xae-solution",
+      "MethodName": "TwinCatEngineeringService.OpenTwinCatSolution",
+      "Category": "engineering",
+      "Summary": "Re-opens an existing TwinCAT solution and re-attaches COM references after .tsproj file mutations.",
+      "Preconditions": [
+        "An active DTE session must exist.",
+        "The target .sln and .tsproj must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "SolutionPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute .sln path.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute .tsproj path.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "solutionPath",
+          "Type": "string",
+          "Description": "Absolute .sln path."
+        },
+        {
+          "Name": "projectPath",
+          "Type": "string",
+          "Description": "Absolute .tsproj path."
+        }
+      ],
+      "VerificationNotes": [
+        "Confirm that the project can be found again in the DTE solution model."
+      ]
+    },
+    {
+      "Kind": "engineering.save-all",
+      "MethodName": "TwinCatEngineeringService.SaveAll",
+      "Category": "engineering",
+      "Summary": "Flushes pending Visual Studio document and solution changes before build, reopen, or .tsproj file mutation steps.",
+      "Preconditions": [
+        "A live DTE session must exist."
+      ],
+      "Inputs": [],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-check file timestamps or solution dirtiness after the command."
+      ]
+    },
+    {
+      "Kind": "signing.grant-certificate",
+      "MethodName": "TwinCatSigningService.GrantCertificate",
+      "Category": "signing",
+      "Summary": "Grants or removes local TcSignTool authorization for a TwinCAT signing certificate.",
+      "Preconditions": [
+        "TwinCAT SDK TcSignTool.exe must be installed.",
+        "The certificate file must exist on this machine."
+      ],
+      "Inputs": [
+        {
+          "Name": "CertificatePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path to the .tccert certificate file.",
+          "Example": null
+        },
+        {
+          "Name": "Password",
+          "Type": "string",
+          "Required": false,
+          "Description": "Certificate password. Prefer CLI password-file or password-env-var input; it is never emitted in step outputs.",
+          "Example": null
+        },
+        {
+          "Name": "RemoveGrant",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Remove the local grant instead of adding it.",
+          "Example": "false"
+        },
+        {
+          "Name": "Quiet",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Pass /q to TcSignTool.",
+          "Example": "true"
+        },
+        {
+          "Name": "ToolPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional TcSignTool.exe override.",
+          "Example": "C:\\Program Files (x86)\\Beckhoff\\TwinCAT\\3.1\\SDK\\Bin\\TcSignTool.exe"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "exitCode",
+          "Type": "int",
+          "Description": "TcSignTool process exit code."
+        },
+        {
+          "Name": "commandLine",
+          "Type": "string",
+          "Description": "Redacted command line used for evidence."
+        }
+      ],
+      "VerificationNotes": [
+        "Run signing.sign-twincat-binary and signing.verify-twincat-binary after grant to close the loop."
+      ]
+    },
+    {
+      "Kind": "signing.set-license",
+      "MethodName": "TwinCatSigningService.SetLicense",
+      "Category": "signing",
+      "Summary": "Writes TwinCAT C\u002B\u002B project signing license settings used by MSBuild/TcSignTool.",
+      "Preconditions": [
+        "The C\u002B\u002B .vcxproj file must exist.",
+        "Run this before engineering.build-solution so the generated .tmx is signed during build."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectFilePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path to the C\u002B\u002B .vcxproj file, or resolve it from ProjectPath and CppProjectName.",
+          "Example": null
+        },
+        {
+          "Name": "LicenseName",
+          "Type": "string",
+          "Required": false,
+          "Description": "TwinCAT signing certificate/license name written to TcSignTwinCatCertName.",
+          "Example": "optcnc"
+        },
+        {
+          "Name": "Password",
+          "Type": "string",
+          "Required": false,
+          "Description": "TwinCAT signing certificate/license password written to TcSignTwinCatCertPW. Prefer password-file or password-env-var outside demo plans.",
+          "Example": null
+        },
+        {
+          "Name": "EnableSigning",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Write TcSignTwinCat=true so TwinCAT MSBuild signs the output.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Updated C\u002B\u002B .vcxproj path."
+        },
+        {
+          "Name": "licenseName",
+          "Type": "string",
+          "Description": "Configured TwinCAT signing license name."
+        },
+        {
+          "Name": "enableSigning",
+          "Type": "bool",
+          "Description": "Whether TwinCAT signing is enabled."
+        },
+        {
+          "Name": "passwordWritten",
+          "Type": "bool",
+          "Description": "Whether a password value was written; the password itself is never emitted."
+        }
+      ],
+      "VerificationNotes": [
+        "Inspect the C\u002B\u002B .vcxproj or generated TcSignTwinCatCmd.txt after build; do not expect ADS/runtime state to change until the project is rebuilt and activated."
+      ]
+    },
+    {
+      "Kind": "signing.sign-twincat-binary",
+      "MethodName": "TwinCatSigningService.Sign",
+      "Category": "signing",
+      "Summary": "Signs one or more built TwinCAT C\u002B\u002B binaries with Beckhoff TcSignTool.",
+      "Preconditions": [
+        "engineering.build-solution must have produced the target .tmx/.sys binary.",
+        "The certificate file must exist on this machine."
+      ],
+      "Inputs": [
+        {
+          "Name": "CertificatePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path to the .tccert certificate file.",
+          "Example": null
+        },
+        {
+          "Name": "TargetPaths",
+          "Type": "string[]",
+          "Required": true,
+          "Description": "One or more TwinCAT binary paths to sign.",
+          "Example": null
+        },
+        {
+          "Name": "Password",
+          "Type": "string",
+          "Required": false,
+          "Description": "Certificate password. Prefer CLI password-file or password-env-var input; it is piped to TcSignTool instead of placed on the process command line.",
+          "Example": null
+        },
+        {
+          "Name": "Quiet",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Pass /q to TcSignTool.",
+          "Example": "true"
+        },
+        {
+          "Name": "ToolPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional TcSignTool.exe override.",
+          "Example": "C:\\Program Files (x86)\\Beckhoff\\TwinCAT\\3.1\\SDK\\Bin\\TcSignTool.exe"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "targetPaths",
+          "Type": "string",
+          "Description": "Semicolon-separated signed binary paths."
+        },
+        {
+          "Name": "exitCode",
+          "Type": "int",
+          "Description": "TcSignTool process exit code."
+        },
+        {
+          "Name": "commandLine",
+          "Type": "string",
+          "Description": "Redacted command line used for evidence."
+        }
+      ],
+      "VerificationNotes": [
+        "Run signing.verify-twincat-binary and then activate the configuration with the signed binary."
+      ]
+    },
+    {
+      "Kind": "signing.verify-twincat-binary",
+      "MethodName": "TwinCatSigningService.Verify",
+      "Category": "signing",
+      "Summary": "Verifies that one or more TwinCAT binaries carry a valid TcSignTool signature.",
+      "Preconditions": [
+        "The target TwinCAT binary must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "TargetPaths",
+          "Type": "string[]",
+          "Required": true,
+          "Description": "One or more TwinCAT binary paths to verify.",
+          "Example": null
+        },
+        {
+          "Name": "Quiet",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Pass /q to TcSignTool.",
+          "Example": "true"
+        },
+        {
+          "Name": "ToolPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional TcSignTool.exe override.",
+          "Example": "C:\\Program Files (x86)\\Beckhoff\\TwinCAT\\3.1\\SDK\\Bin\\TcSignTool.exe"
+        },
+        {
+          "Name": "AllowTestModeWarning",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Treat TcSignTool exit code 2 as success when the output says the file has a signature but the OEM certificate is not signed by Beckhoff.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "targetPaths",
+          "Type": "string",
+          "Description": "Semicolon-separated verified binary paths."
+        },
+        {
+          "Name": "exitCode",
+          "Type": "int",
+          "Description": "TcSignTool process exit code."
+        },
+        {
+          "Name": "acceptedTestModeWarning",
+          "Type": "bool",
+          "Description": "Whether a TcSignTool test-mode certificate warning was accepted."
+        },
+        {
+          "Name": "commandLine",
+          "Type": "string",
+          "Description": "Redacted command line used for evidence."
+        }
+      ],
+      "VerificationNotes": [
+        "Treat exit code 0 as signed/verified; for local test certificates, set AllowTestModeWarning only when test-mode activation is acceptable.",
+        "Keep the signed binary path as activation evidence."
+      ]
+    },
+    {
+      "Kind": "tsproj.apply-instance-data-pointer-plan",
+      "MethodName": "TwinCatTsprojMutationService.ApplyInstanceDataPointerPlan",
+      "Category": "tsproj",
+      "Summary": "Applies a batch of instance data pointer writes in one deterministic .tsproj mutation pass.",
+      "Preconditions": [
+        "Each referenced instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "Items",
+          "Type": "IReadOnlyList\u003CInstanceDataPointerMutation\u003E",
+          "Required": true,
+          "Description": "Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, and ByteSize.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify DataPointerValues entries for each requested instance/pointer pair."
+      ]
+    },
+    {
+      "Kind": "tsproj.apply-instance-interface-pointer-plan",
+      "MethodName": "TwinCatTsprojMutationService.ApplyInstanceInterfacePointerPlan",
+      "Category": "tsproj",
+      "Summary": "Applies a batch of instance interface pointer writes in one deterministic .tsproj mutation pass.",
+      "Preconditions": [
+        "Each referenced instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "Items",
+          "Type": "IReadOnlyList\u003CInstanceInterfacePointerMutation\u003E",
+          "Required": true,
+          "Description": "Batch entries containing InstanceName, PointerName, and ObjectId.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify InterfacePointerValues entries for each requested instance/pointer pair."
+      ]
+    },
+    {
+      "Kind": "tsproj.apply-instance-parameter-plan",
+      "MethodName": "TwinCatTsprojMutationService.ApplyInstanceParameterPlan",
+      "Category": "tsproj",
+      "Summary": "Applies a batch of instance parameter writes in one deterministic .tsproj mutation pass.",
+      "Preconditions": [
+        "Each referenced instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "Items",
+          "Type": "IReadOnlyList\u003CInstanceParameterMutation\u003E",
+          "Required": true,
+          "Description": "Batch entries containing InstanceName, ParameterName, and optional Value/Enum/String payloads.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm each target instance received the expected ParameterValues updates."
+      ]
+    },
+    {
+      "Kind": "tsproj.apply-mutation-plan",
+      "MethodName": "TwinCatTsprojMutationService.ApplyMutationPlan",
+      "Category": "tsproj",
+      "Summary": "Applies generic element and fragment upserts in one deterministic .tsproj mutation pass.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "Use this for JSON-owned low-level mutations that do not yet have a dedicated primitive."
+      ],
+      "Inputs": [
+        {
+          "Name": "ElementUpserts",
+          "Type": "IReadOnlyList\u003CTsprojElementUpsertRequest\u003E",
+          "Required": false,
+          "Description": "Element upserts to apply in order.",
+          "Example": null
+        },
+        {
+          "Name": "FragmentUpserts",
+          "Type": "IReadOnlyList\u003CTsprojFragmentUpsertRequest\u003E",
+          "Required": false,
+          "Description": "Fragment upserts to apply in order.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify all requested low-level mutations landed; FailOnConflict aborts the plan."
+      ]
+    },
+    {
+      "Kind": "tsproj.bind-instance-context",
+      "MethodName": "TwinCatTsprojMutationService.BindInstanceContext",
+      "Category": "tsproj",
+      "Summary": "Writes Instance TmcDesc Context/ManualConfig binding with configurable context id/name and CyclicCaller behavior.",
+      "Preconditions": [
+        "The target instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "TaskObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task OTCID, for example #x02010020.",
+          "Example": null
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": true,
+          "Description": "Context priority.",
+          "Example": null
+        },
+        {
+          "Name": "CycleTimeNs",
+          "Type": "int",
+          "Required": true,
+          "Description": "Context cycle time in nanoseconds.",
+          "Example": null
+        },
+        {
+          "Name": "ContextId",
+          "Type": "int",
+          "Required": false,
+          "Description": "Context Id value used for lookup/create.",
+          "Example": "1"
+        },
+        {
+          "Name": "ContextName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional Context Name value to enforce.",
+          "Example": null
+        },
+        {
+          "Name": "IncludeCyclicCaller",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to ensure InterfacePointerValues/CyclicCaller exists.",
+          "Example": "true"
+        },
+        {
+          "Name": "RemoveCyclicCallerWhenExcluded",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to remove CyclicCaller when IncludeCyclicCaller is false.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm Context Id/ManualConfig/OTCID plus optional CyclicCaller state."
+      ]
+    },
+    {
+      "Kind": "tsproj.bind-instance-task",
+      "MethodName": "TwinCatTsprojMutationService.BindInstanceToTask",
+      "Category": "tsproj",
+      "Summary": "Writes ManualConfig/OTCID and context timing values back into an instance TmcDesc, optionally also updating CyclicCaller.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "The task ObjectId must already be known."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "TaskObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task OTCID, for example #x02010010.",
+          "Example": null
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": true,
+          "Description": "Context priority.",
+          "Example": null
+        },
+        {
+          "Name": "CycleTimeNs",
+          "Type": "int",
+          "Required": true,
+          "Description": "Context cycle time in nanoseconds.",
+          "Example": null
+        },
+        {
+          "Name": "IncludeCyclicCaller",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to also bind InterfacePointerValues/CyclicCaller.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj or produce instance XML again and confirm OTCID/CycleTime/Priority are present."
+      ]
+    },
+    {
+      "Kind": "tsproj.bind-plc-instance-task",
+      "MethodName": "TwinCatTsprojMutationService.BindPlcInstanceToTask",
+      "Category": "tsproj",
+      "Summary": "Writes PLC instance Context/ManualConfig binding so PLC execution context tracks an explicit task object id.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "PlcTaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC task name written into Context/Name.",
+          "Example": null
+        },
+        {
+          "Name": "TaskObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task OTCID, for example #x02010020.",
+          "Example": null
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": true,
+          "Description": "PLC context priority.",
+          "Example": null
+        },
+        {
+          "Name": "CycleTimeNs",
+          "Type": "int",
+          "Required": true,
+          "Description": "PLC context cycle time in nanoseconds.",
+          "Example": null
+        },
+        {
+          "Name": "ContextId",
+          "Type": "int",
+          "Required": false,
+          "Description": "PLC context Id value.",
+          "Example": "0"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the PLC instance Context/ManualConfig contains OTCID/Priority/CycleTime."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-instance-data-pointer-values",
+      "MethodName": "TwinCatTsprojMutationService.ClearInstanceDataPointerValues",
+      "Category": "tsproj",
+      "Summary": "Clears DataPointerValues under a C\u002B\u002B instance TmcDesc before activation or before applying a known-good data pointer plan.",
+      "Preconditions": [
+        "The referenced instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "RemoveContainerWhenEmpty",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Remove the DataPointerValues container instead of leaving it empty.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm stale DataPointerValues entries are gone before activation."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-instance-parameter-values",
+      "MethodName": "TwinCatTsprojMutationService.ClearInstanceParameterValues",
+      "Category": "tsproj",
+      "Summary": "Clears ParameterValues under a C\u002B\u002B instance TmcDesc before applying a deterministic parameter plan.",
+      "Preconditions": [
+        "The referenced instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "RemoveContainerWhenEmpty",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Remove the ParameterValues container instead of leaving it empty.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm stale ParameterValues entries are gone before new values are applied."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-mappings",
+      "MethodName": "TwinCatTsprojMutationService.ClearMappings",
+      "Category": "tsproj",
+      "Summary": "Removes all root-level Mappings sections so mapping links can be rebuilt from a known empty state.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk."
+      ],
+      "Inputs": [],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify root-level Mappings nodes are absent."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-plc-init-symbols",
+      "MethodName": "TwinCatTsprojMutationService.ClearPlcInitSymbols",
+      "Category": "tsproj",
+      "Summary": "Clears all InitSymbol entries under a PLC Instance InitSymbols section.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "RemoveContainerWhenEmpty",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether empty InitSymbols container should be removed.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the PLC instance has no InitSymbol entries."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-plc-instance-vars",
+      "MethodName": "TwinCatTsprojMutationService.ClearPlcInstanceVars",
+      "Category": "tsproj",
+      "Summary": "Removes all Vars groups under a PLC Instance node so PLC variable layout can be rebuilt deterministically.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the PLC instance contains no Vars child elements."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-plc-task-pou-oids",
+      "MethodName": "TwinCatTsprojMutationService.ClearPlcTaskPouOids",
+      "Category": "tsproj",
+      "Summary": "Clears all TaskPouOid entries under a PLC Instance TaskPouOids section.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "RemoveContainerWhenEmpty",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether empty TaskPouOids container should be removed.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the PLC instance has no TaskPouOid entries."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-task-layout",
+      "MethodName": "TwinCatTsprojMutationService.ClearTaskLayout",
+      "Category": "tsproj",
+      "Summary": "Removes Vars and/or Image child nodes from a Task so task layout can be rebuilt deterministically.",
+      "Preconditions": [
+        "The target Task node must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "RemoveVars",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to remove all Vars groups under the task.",
+          "Example": "true"
+        },
+        {
+          "Name": "RemoveImage",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to remove all Image entries under the task.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the selected child node categories were removed from the target Task."
+      ]
+    },
+    {
+      "Kind": "tsproj.clear-unrestored-var-links",
+      "MethodName": "TwinCatTsprojMutationService.ClearUnrestoredVarLinks",
+      "Category": "tsproj",
+      "Summary": "Removes stale UnrestoredVarLinks blocks so unresolved TwinCAT links do not survive into activation.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk."
+      ],
+      "Inputs": [],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify no UnrestoredVarLinks nodes remain before rebuilding mappings."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-cpp-instance",
+      "MethodName": "TwinCatTsprojMutationService.EnsureCppInstance",
+      "Category": "tsproj",
+      "Summary": "Ensures a named C\u002B\u002B Instance node exists under Cpp/Project and carries a minimal TmcDesc skeleton.",
+      "Preconditions": [
+        "The target C\u002B\u002B Project must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "CppProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project node name under Cpp.",
+          "Example": null
+        },
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "ObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Instance OTCID/ObjectId, for example #x02010010.",
+          "Example": null
+        },
+        {
+          "Name": "ContextId",
+          "Type": "int",
+          "Required": false,
+          "Description": "Context Id value used for lookup/create.",
+          "Example": "1"
+        },
+        {
+          "Name": "ContextName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Context Name value to enforce.",
+          "Example": "FallbackCtx"
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": false,
+          "Description": "ManualConfig/Priority value used for skeleton.",
+          "Example": "0"
+        },
+        {
+          "Name": "CycleTimeNs",
+          "Type": "int",
+          "Required": false,
+          "Description": "ManualConfig/CycleTime value used for skeleton.",
+          "Example": "0"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify Cpp/Project/Instance plus TmcDesc/Contexts/ParameterValues/InterfacePointerValues/DataPointerValues exist."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-data-pointer",
+      "MethodName": "TwinCatTsprojMutationService.EnsureDataPointerValue",
+      "Category": "tsproj",
+      "Summary": "Writes or updates a DataPointerValues entry beneath an instance TmcDesc.",
+      "Preconditions": [
+        "The target instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "PointerName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Data pointer field name.",
+          "Example": null
+        },
+        {
+          "Name": "ObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Referenced OTCID.",
+          "Example": null
+        },
+        {
+          "Name": "AreaNo",
+          "Type": "int",
+          "Required": true,
+          "Description": "TwinCAT data area number.",
+          "Example": null
+        },
+        {
+          "Name": "ByteOffset",
+          "Type": "int",
+          "Required": true,
+          "Description": "Offset inside the area.",
+          "Example": null
+        },
+        {
+          "Name": "ByteSize",
+          "Type": "int",
+          "Required": true,
+          "Description": "Byte width of the pointed segment.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the named DataPointerValues/Value entry matches the requested offsets."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-init-symbol",
+      "MethodName": "TwinCatTsprojMutationService.EnsureInitSymbol",
+      "Category": "tsproj",
+      "Summary": "Ensures a PLC InitSymbol exists and writes Data from the provided ObjectId using TwinCAT little-endian encoding.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "SymbolName",
+          "Type": "string",
+          "Required": true,
+          "Description": "InitSymbol name, for example MAIN.fbStateMachine.oidInstance.",
+          "Example": null
+        },
+        {
+          "Name": "ObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "ObjectId used to produce InitSymbol Data, for example #x02010010.",
+          "Example": null
+        },
+        {
+          "Name": "TypeName",
+          "Type": "string",
+          "Required": false,
+          "Description": "InitSymbol Type element value.",
+          "Example": "OTCID"
+        },
+        {
+          "Name": "TypeGuid",
+          "Type": "string",
+          "Required": false,
+          "Description": "GUID attribute written on InitSymbol Type.",
+          "Example": "{18071995-0000-0000-0000-00000000000F}"
+        },
+        {
+          "Name": "AreaNo",
+          "Type": "string",
+          "Required": false,
+          "Description": "InitSymbol AreaNo value.",
+          "Example": "#x00000003"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm InitSymbols contains the requested symbol name/type/area/data."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-interface-pointer",
+      "MethodName": "TwinCatTsprojMutationService.EnsureInterfacePointerValue",
+      "Category": "tsproj",
+      "Summary": "Writes or updates an InterfacePointerValues entry beneath an instance TmcDesc.",
+      "Preconditions": [
+        "The target instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "PointerName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Interface pointer field name.",
+          "Example": null
+        },
+        {
+          "Name": "ObjectId",
+          "Type": "string",
+          "Required": true,
+          "Description": "Referenced OTCID.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the named InterfacePointerValues/Value entry contains the OTCID."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-io-task-image",
+      "MethodName": "TwinCatTsprojMutationService.EnsureIoTaskImage",
+      "Category": "tsproj",
+      "Summary": "Ensures IO Task Image structure on a task and binds the instance IoTaskImage pointer to the derived or specified Image ObjectId.",
+      "Preconditions": [
+        "The target Task and instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "ImageId",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image Id used to derive the default ObjectId.",
+          "Example": "1"
+        },
+        {
+          "Name": "SizeIn",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image input size in bytes.",
+          "Example": "40"
+        },
+        {
+          "Name": "SizeOut",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image output size in bytes.",
+          "Example": "10"
+        },
+        {
+          "Name": "PointerName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Interface pointer name to bind on the instance.",
+          "Example": "IoTaskImage"
+        },
+        {
+          "Name": "EnsureDefaultTaskVariables",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to regenerate default Inputs/Outputs Vars groups.",
+          "Example": "true"
+        },
+        {
+          "Name": "InputRealCount",
+          "Type": "int",
+          "Required": false,
+          "Description": "Default input REAL variable count.",
+          "Example": "10"
+        },
+        {
+          "Name": "OutputByteCount",
+          "Type": "int",
+          "Required": false,
+          "Description": "Default output BYTE variable count.",
+          "Example": "10"
+        },
+        {
+          "Name": "IoAtBegin",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to set Task IoAtBegin.",
+          "Example": "true"
+        },
+        {
+          "Name": "ImageObjectId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional explicit image ObjectId override.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm Task Image plus instance InterfacePointerValues/IoTaskImage were updated."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-mapping-link",
+      "MethodName": "TwinCatTsprojMutationService.EnsureMappingLink",
+      "Category": "tsproj",
+      "Summary": "Ensures a deterministic Mapping OwnerA/OwnerB/Link triple exists without replacing unrelated mappings.",
+      "Preconditions": [
+        "Owner names and variable names must match TwinCAT path/value expectations."
+      ],
+      "Inputs": [
+        {
+          "Name": "OwnerAName",
+          "Type": "string",
+          "Required": true,
+          "Description": "OwnerA Name attribute, for example TIXC^Demo^ObjA.",
+          "Example": null
+        },
+        {
+          "Name": "OwnerBName",
+          "Type": "string",
+          "Required": true,
+          "Description": "OwnerB Name attribute, for example TIXC^Demo^ObjB.",
+          "Example": null
+        },
+        {
+          "Name": "VarA",
+          "Type": "string",
+          "Required": true,
+          "Description": "VarA attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "VarB",
+          "Type": "string",
+          "Required": true,
+          "Description": "VarB attribute value.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm Mappings contains the requested OwnerA/OwnerB/Link entry."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-parameter",
+      "MethodName": "TwinCatTsprojMutationService.EnsureParameterValue",
+      "Category": "tsproj",
+      "Summary": "Upserts a parameter default under TmcDesc/ParameterValues for an instance.",
+      "Preconditions": [
+        "The target instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact TwinCAT instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "ParameterName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Parameter name.",
+          "Example": null
+        },
+        {
+          "Name": "ValueText",
+          "Type": "string",
+          "Required": false,
+          "Description": "Scalar value text.",
+          "Example": null
+        },
+        {
+          "Name": "EnumText",
+          "Type": "string",
+          "Required": false,
+          "Description": "Enum value text.",
+          "Example": null
+        },
+        {
+          "Name": "StringText",
+          "Type": "string",
+          "Required": false,
+          "Description": "String value text.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the Value node now exists with the expected child elements."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-plc-instance",
+      "MethodName": "TwinCatTsprojMutationService.EnsurePlcInstance",
+      "Category": "tsproj",
+      "Summary": "Ensures Plc/Project/Instance nodes exist for a named PLC project and instance.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify Plc/Project(Name)/Instance(Name) exists for the requested names."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-plc-instance-vars-group",
+      "MethodName": "TwinCatTsprojMutationService.EnsurePlcInstanceVarsGroup",
+      "Category": "tsproj",
+      "Summary": "Ensures a named Vars group exists under a PLC Instance with deterministic Var definitions.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "GroupName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Vars group Name value, for example PlcTask Outputs.",
+          "Example": null
+        },
+        {
+          "Name": "VarGrpType",
+          "Type": "int",
+          "Required": true,
+          "Description": "Vars VarGrpType attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "InsertType",
+          "Type": "int",
+          "Required": false,
+          "Description": "Vars InsertType attribute value.",
+          "Example": "1"
+        },
+        {
+          "Name": "AreaNo",
+          "Type": "int",
+          "Required": false,
+          "Description": "Optional Vars AreaNo attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "Variables",
+          "Type": "IReadOnlyList\u003CPlcInstanceVarItem\u003E",
+          "Required": false,
+          "Description": "Variable definitions written under Vars/Var.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceExistingGroup",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to replace an existing Vars group with the same Name.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the PLC instance Vars group attributes and Var entries."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-task",
+      "MethodName": "TwinCatTsprojMutationService.EnsureTaskDefinition",
+      "Category": "tsproj",
+      "Summary": "Creates or updates the declarative task node inside a .tsproj generated by XAE.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": true,
+          "Description": "Task priority.",
+          "Example": null
+        },
+        {
+          "Name": "CycleTimeNs",
+          "Type": "int",
+          "Required": true,
+          "Description": "Task cycle time in nanoseconds.",
+          "Example": null
+        },
+        {
+          "Name": "AmsPort",
+          "Type": "int",
+          "Required": true,
+          "Description": "Assigned AMS port.",
+          "Example": null
+        },
+        {
+          "Name": "IoAtBegin",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Optional TaskDef IoAtBegin setting.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the Task attributes match the requested values."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-task-image",
+      "MethodName": "TwinCatTsprojMutationService.EnsureTaskImage",
+      "Category": "tsproj",
+      "Summary": "Ensures a Task Image entry exists with deterministic Id, size, and addressing attributes.",
+      "Preconditions": [
+        "The target Task node must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "ImageId",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image Id attribute value.",
+          "Example": "1"
+        },
+        {
+          "Name": "AddressType",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image AddrType attribute value.",
+          "Example": "1"
+        },
+        {
+          "Name": "ImageType",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image ImageType attribute value.",
+          "Example": "1"
+        },
+        {
+          "Name": "SizeIn",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image input byte size.",
+          "Example": "40"
+        },
+        {
+          "Name": "SizeOut",
+          "Type": "int",
+          "Required": false,
+          "Description": "Task Image output byte size.",
+          "Example": "10"
+        },
+        {
+          "Name": "ImageName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Task Image Name child value.",
+          "Example": "Image"
+        },
+        {
+          "Name": "IoAtBegin",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Optional Task IoAtBegin attribute update.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceExistingImage",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether existing Task Image nodes should be replaced.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the target Task contains the expected Image attributes and Name value."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-task-pou-oid",
+      "MethodName": "TwinCatTsprojMutationService.EnsureTaskPouOid",
+      "Category": "tsproj",
+      "Summary": "Ensures a PLC TaskPouOid entry exists with the requested priority and optional OTCID.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "Priority",
+          "Type": "int",
+          "Required": true,
+          "Description": "TaskPouOid Prio attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "ObjectId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional TaskPouOid OTCID value.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm TaskPouOids/TaskPouOid has the requested Prio and OTCID."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-task-vars-group",
+      "MethodName": "TwinCatTsprojMutationService.EnsureTaskVarsGroup",
+      "Category": "tsproj",
+      "Summary": "Ensures a named Vars group exists under a Task with deterministic variable shape and addressing.",
+      "Preconditions": [
+        "The target Task node must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "GroupName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Vars group Name element value, for example Inputs.",
+          "Example": null
+        },
+        {
+          "Name": "VarGrpType",
+          "Type": "int",
+          "Required": true,
+          "Description": "Vars VarGrpType attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "InsertType",
+          "Type": "int",
+          "Required": true,
+          "Description": "Vars InsertType attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "BaseVarName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Base text used for generated Var names.",
+          "Example": null
+        },
+        {
+          "Name": "TypeName",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT variable type, for example REAL.",
+          "Example": null
+        },
+        {
+          "Name": "Count",
+          "Type": "int",
+          "Required": true,
+          "Description": "Number of Var nodes to generate.",
+          "Example": null
+        },
+        {
+          "Name": "BitStride",
+          "Type": "int",
+          "Required": true,
+          "Description": "Bit offset stride between generated Vars.",
+          "Example": null
+        },
+        {
+          "Name": "ExternalAddressStride",
+          "Type": "int",
+          "Required": true,
+          "Description": "ExternalAddress increment per generated Var after the first.",
+          "Example": null
+        },
+        {
+          "Name": "FirstExternalAddress",
+          "Type": "int",
+          "Required": false,
+          "Description": "Optional explicit first ExternalAddress value.",
+          "Example": null
+        },
+        {
+          "Name": "StartIndex",
+          "Type": "int",
+          "Required": false,
+          "Description": "Starting suffix index for generated Var names.",
+          "Example": "1"
+        },
+        {
+          "Name": "ReplaceExistingGroup",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to replace existing Vars groups with the same Name.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the target Task has the expected Vars group name, variable count, and field values."
+      ]
+    },
+    {
+      "Kind": "tsproj.merge-fragment",
+      "MethodName": "TwinCatTsprojMutationService.MergeNamedElementFragment",
+      "Category": "tsproj",
+      "Summary": "Merges a captured XML fragment into a named container, acting as the escape hatch only for remaining TwinCAT XML gaps without a dedicated primitive.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "Use a dedicated tsproj primitive instead when one exists for the same intent.",
+        "The fragment must come from a known-good .tsproj source, with documented target parent path, field meanings, source evidence, and test or real-machine evidence.",
+        "The target parent local name must be unambiguous in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "ParentElementName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Container local name inside the .tsproj.",
+          "Example": null
+        },
+        {
+          "Name": "FragmentXml",
+          "Type": "string",
+          "Required": true,
+          "Description": "XML fragment to merge.",
+          "Example": null
+        },
+        {
+          "Name": "MatchElementName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Local element name used to find and replace an existing sibling.",
+          "Example": null
+        },
+        {
+          "Name": "MatchNameValue",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional \u003CName\u003E value used to find the existing sibling.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceExisting",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether a matched sibling should be replaced.",
+          "Example": "true"
+        },
+        {
+          "Name": "FragmentSource",
+          "Type": "string",
+          "Required": true,
+          "Description": "Known-good .tsproj/evidence source for the fragment.",
+          "Example": null
+        },
+        {
+          "Name": "TargetParentPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Human-readable target parent path/layer in the .tsproj.",
+          "Example": null
+        },
+        {
+          "Name": "FieldMeaning",
+          "Type": "string",
+          "Required": true,
+          "Description": "Short explanation of the fragment fields and why they are required.",
+          "Example": null
+        },
+        {
+          "Name": "VerificationEvidence",
+          "Type": "string",
+          "Required": true,
+          "Description": "Test, XAE reopen/build/activation, or dated evidence proving this fragment is safe enough to use.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and compare the target container before/after the merge.",
+        "For engineering behavior, follow with XAE reopen/build/activation or a dated evidence note explaining why runtime proof is not available."
+      ]
+    },
+    {
+      "Kind": "tsproj.replace-data-types-section",
+      "MethodName": "TwinCatTsprojMutationService.ReplaceDataTypesSection",
+      "Category": "tsproj",
+      "Summary": "Replaces the root DataTypes section with a caller-provided fragment.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "The fragment must be a valid DataTypes element."
+      ],
+      "Inputs": [
+        {
+          "Name": "DataTypesXml",
+          "Type": "string",
+          "Required": true,
+          "Description": "DataTypes XML fragment to write, rooted at \u003CDataTypes\u003E.",
+          "Example": null
+        },
+        {
+          "Name": "InsertBeforeProject",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to place DataTypes before the root Project element when present.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify DataTypes appears in the expected root position with requested content."
+      ]
+    },
+    {
+      "Kind": "tsproj.replace-mappings-section",
+      "MethodName": "TwinCatTsprojMutationService.ReplaceMappingsSection",
+      "Category": "tsproj",
+      "Summary": "Replaces the root-level Mappings section with a caller-provided fragment.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "The fragment must be a valid Mappings element."
+      ],
+      "Inputs": [
+        {
+          "Name": "MappingsXml",
+          "Type": "string",
+          "Required": true,
+          "Description": "Mappings XML fragment to write, rooted at \u003CMappings\u003E.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and compare the Mappings section against the requested fragment."
+      ]
+    },
+    {
+      "Kind": "tsproj.replace-project-io-section",
+      "MethodName": "TwinCatTsprojMutationService.ReplaceProjectIoSection",
+      "Category": "tsproj",
+      "Summary": "Replaces the root Project/Io section with a caller-provided Io fragment.",
+      "Preconditions": [
+        "A root-level Project node must exist in the .tsproj.",
+        "The fragment must be a valid Io element."
+      ],
+      "Inputs": [
+        {
+          "Name": "IoXml",
+          "Type": "string",
+          "Required": true,
+          "Description": "Io XML fragment to write, rooted at \u003CIo\u003E.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the root Project contains the requested Io section."
+      ]
+    },
+    {
+      "Kind": "tsproj.replace-system-settings-section",
+      "MethodName": "TwinCatTsprojMutationService.ReplaceSystemSettingsSection",
+      "Category": "tsproj",
+      "Summary": "Replaces System/Settings with a caller-provided Settings fragment while preserving other System children.",
+      "Preconditions": [
+        "A System node must exist in the .tsproj.",
+        "The fragment must be a valid Settings element."
+      ],
+      "Inputs": [
+        {
+          "Name": "SettingsXml",
+          "Type": "string",
+          "Required": true,
+          "Description": "Settings XML fragment to write, rooted at \u003CSettings\u003E.",
+          "Example": null
+        },
+        {
+          "Name": "InsertBeforeTasks",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to insert Settings before System/Tasks when Tasks exists.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify System/Settings content and insertion position."
+      ]
+    },
+    {
+      "Kind": "tsproj.set-plc-instance-metadata",
+      "MethodName": "TwinCatTsprojMutationService.SetPlcInstanceMetadata",
+      "Category": "tsproj",
+      "Summary": "Updates Plc Instance metadata attributes and optional CLSID/ClassFactory fields without replacing unrelated nodes.",
+      "Preconditions": [
+        "The target PLC Project and PLC Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "PlcInstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "TcSmClass",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional TcSmClass attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "TmcPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional TmcPath attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "KeepUnrestoredLinks",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional KeepUnrestoredLinks attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "Clsid",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional CLSID element value.",
+          "Example": null
+        },
+        {
+          "Name": "ClassFactory",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional ClassFactory attribute on CLSID.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify PLC instance attributes and CLSID metadata values."
+      ]
+    },
+    {
+      "Kind": "tsproj.set-plc-project-properties",
+      "MethodName": "TwinCatTsprojMutationService.SetPlcProjectProperties",
+      "Category": "tsproj",
+      "Summary": "Updates Plc/Project attribute-level properties such as project paths, reload behavior, AMS port, and archive settings.",
+      "Preconditions": [
+        "The target PLC Project must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "PlcProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "PLC project node name under Plc.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectFilePath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Value for the PrjFilePath attribute.",
+          "Example": null
+        },
+        {
+          "Name": "TmcFilePath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Value for the TmcFilePath attribute.",
+          "Example": null
+        },
+        {
+          "Name": "ReloadTmc",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Optional ReloadTmc attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "AmsPort",
+          "Type": "int",
+          "Required": false,
+          "Description": "Optional PLC project AmsPort attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "FileArchiveSettings",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional FileArchiveSettings attribute value, for example #x0002.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the PLC Project attribute values were applied as requested."
+      ]
+    },
+    {
+      "Kind": "tsproj.set-task-affinity",
+      "MethodName": "TwinCatTsprojMutationService.SetTaskAffinity",
+      "Category": "tsproj",
+      "Summary": "Sets Task Affinity and AdtTasks attributes for scheduler placement-sensitive workloads.",
+      "Preconditions": [
+        "The target Task node must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "TaskName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Task node name.",
+          "Example": null
+        },
+        {
+          "Name": "Affinity",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT affinity mask or list, for example 1 or 0,2.",
+          "Example": null
+        },
+        {
+          "Name": "EnableAdtTasks",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to force AdtTasks=true on the task.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm the Task node includes Affinity and AdtTasks attributes."
+      ]
+    },
+    {
+      "Kind": "tsproj.upsert-element",
+      "MethodName": "TwinCatTsprojMutationService.UpsertElement",
+      "Category": "tsproj",
+      "Summary": "Upserts a generic XML element under a path-based .tsproj parent using a declared conflict policy.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "Prefer dedicated tsproj primitives when one exists for the same intent."
+      ],
+      "Inputs": [
+        {
+          "Name": "ParentPath",
+          "Type": "IReadOnlyList\u003CTsprojPathSegment\u003E",
+          "Required": true,
+          "Description": "Path from root to the parent element, optionally matching \u003CName\u003E values.",
+          "Example": null
+        },
+        {
+          "Name": "ElementName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Element local name to insert or update.",
+          "Example": null
+        },
+        {
+          "Name": "MatchNameValue",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional \u003CName\u003E child value used to match an existing element.",
+          "Example": null
+        },
+        {
+          "Name": "Attributes",
+          "Type": "IReadOnlyList\u003CTsprojXmlAttribute\u003E",
+          "Required": false,
+          "Description": "Attributes to write on the target element.",
+          "Example": null
+        },
+        {
+          "Name": "ChildValues",
+          "Type": "IReadOnlyList\u003CTsprojXmlChildValue\u003E",
+          "Required": false,
+          "Description": "Simple child element values to write under the target element.",
+          "Example": null
+        },
+        {
+          "Name": "ConflictPolicy",
+          "Type": "TsprojMutationConflictPolicy",
+          "Required": false,
+          "Description": "ReplaceExisting, KeepExisting, or FailOnConflict.",
+          "Example": "ReplaceExisting"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the resolved parent contains exactly the intended element shape."
+      ]
+    },
+    {
+      "Kind": "tsproj.upsert-fragment",
+      "MethodName": "TwinCatTsprojMutationService.UpsertFragment",
+      "Category": "tsproj",
+      "Summary": "Upserts a generic XML fragment under a path-based .tsproj parent using a declared conflict policy.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "The fragment must already be shaped like Beckhoff expects."
+      ],
+      "Inputs": [
+        {
+          "Name": "ParentPath",
+          "Type": "IReadOnlyList\u003CTsprojPathSegment\u003E",
+          "Required": true,
+          "Description": "Path from root to the parent element, optionally matching \u003CName\u003E values.",
+          "Example": null
+        },
+        {
+          "Name": "FragmentXml",
+          "Type": "string",
+          "Required": true,
+          "Description": "XML fragment to insert or update.",
+          "Example": null
+        },
+        {
+          "Name": "MatchElementName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Local element name used to match an existing sibling.",
+          "Example": null
+        },
+        {
+          "Name": "MatchNameValue",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional \u003CName\u003E value used to match an existing sibling.",
+          "Example": null
+        },
+        {
+          "Name": "ConflictPolicy",
+          "Type": "TsprojMutationConflictPolicy",
+          "Required": false,
+          "Description": "ReplaceExisting, KeepExisting, or FailOnConflict.",
+          "Example": "ReplaceExisting"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and compare the resolved parent before/after the fragment upsert."
+      ]
+    },
+    {
+      "Kind": "validation.ads-read",
+      "MethodName": "AdsValidationService.Read",
+      "Category": "validation",
+      "Summary": "Reads a PLC or TcCOM symbol over ADS so the engineering pipeline can close the loop with a runtime assertion.",
+      "Preconditions": [
+        "The target runtime must be reachable over ADS.",
+        "The symbol path and AMS endpoint must already be known."
+      ],
+      "Inputs": [
+        {
+          "Name": "NetId",
+          "Type": "string",
+          "Required": true,
+          "Description": "AMS NetId, for example 127.0.0.1.1.1.",
+          "Example": null
+        },
+        {
+          "Name": "Port",
+          "Type": "int",
+          "Required": true,
+          "Description": "ADS port, for example 851.",
+          "Example": null
+        },
+        {
+          "Name": "SymbolPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Fully qualified PLC or TcCOM symbol name.",
+          "Example": null
+        },
+        {
+          "Name": "DataType",
+          "Type": "AdsReadDataType",
+          "Required": true,
+          "Description": "Expected runtime data type.",
+          "Example": null
+        },
+        {
+          "Name": "AutoReconnect",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to force a TwinCAT reconnect attempt before reading.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "value",
+          "Type": "string",
+          "Description": "Stringified ADS value."
+        }
+      ],
+      "VerificationNotes": [
+        "Treat a successful read plus a domain assertion on the returned value as the runtime acceptance check."
+      ]
+    },
+    {
+      "Kind": "validation.ads-read-symbols",
+      "MethodName": "AdsValidationService.ReadSymbols",
+      "Category": "validation",
+      "Summary": "Reads multiple PLC or TcCOM symbols over ADS and prints their values as a runtime validation checkpoint.",
+      "Preconditions": [
+        "The target runtime must be reachable over ADS.",
+        "The symbol paths, data types, and AMS endpoint must already be known."
+      ],
+      "Inputs": [
+        {
+          "Name": "NetId",
+          "Type": "string",
+          "Required": true,
+          "Description": "AMS NetId, for example 127.0.0.1.1.1.",
+          "Example": null
+        },
+        {
+          "Name": "Port",
+          "Type": "int",
+          "Required": true,
+          "Description": "ADS port, for example 851.",
+          "Example": null
+        },
+        {
+          "Name": "Symbols",
+          "Type": "IReadOnlyList\u003CAdsReadSymbolRequest\u003E",
+          "Required": true,
+          "Description": "Symbols to read; direct CLI accepts --symbols=MAIN.nSeed:UInt32;MAIN.bPipelineOk:Boolean or --json-file.",
+          "Example": null
+        },
+        {
+          "Name": "AutoReconnect",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to force a TwinCAT reconnect attempt before reading.",
+          "Example": "false"
+        },
+        {
+          "Name": "ContinueOnError",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether the step should succeed when one or more symbols fail.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeededCount",
+          "Type": "int",
+          "Description": "Number of symbols read successfully."
+        },
+        {
+          "Name": "failedCount",
+          "Type": "int",
+          "Description": "Number of symbols that failed to read."
+        },
+        {
+          "Name": "valuesText",
+          "Type": "string",
+          "Description": "Human-readable symbol=value list printed in the step result."
+        },
+        {
+          "Name": "valuesJson",
+          "Type": "json",
+          "Description": "Per-symbol ADS read results including data types and errors."
+        }
+      ],
+      "VerificationNotes": [
+        "Use after activation and ADS port scan; treat the printed values plus expected domain assertions as runtime proof."
+      ]
+    },
+    {
+      "Kind": "validation.ads-scan",
+      "MethodName": "AdsValidationService.ScanPorts",
+      "Category": "validation",
+      "Summary": "Scans ADS target ports and reports whether the runtime endpoint is reachable before symbol-level ADS reads are attempted.",
+      "Preconditions": [
+        "TwinCAT runtime or router must be installed on the target machine.",
+        "Use this before symbol reads when activation or ADS routing is uncertain."
+      ],
+      "Inputs": [
+        {
+          "Name": "NetId",
+          "Type": "string",
+          "Required": false,
+          "Description": "AMS NetId, or local for the local router.",
+          "Example": "local"
+        },
+        {
+          "Name": "Ports",
+          "Type": "int[]",
+          "Required": false,
+          "Description": "Comma-separated ADS ports to probe.",
+          "Example": "100,200,300,800,851,852,10000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "openPortCount",
+          "Type": "int",
+          "Description": "Number of ports with readable ADS state."
+        },
+        {
+          "Name": "failedPortCount",
+          "Type": "int",
+          "Description": "Number of ports that failed to connect or read state."
+        },
+        {
+          "Name": "portsJson",
+          "Type": "json",
+          "Description": "Per-port ADS state or error message."
+        }
+      ],
+      "VerificationNotes": [
+        "If 100 or 10000 are not reachable, treat later PLC symbol read failures as runtime/router/permission failures rather than symbol-path failures."
+      ]
+    }
+  ]
+}

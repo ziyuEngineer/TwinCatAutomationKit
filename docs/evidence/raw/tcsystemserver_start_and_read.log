@@ -1,0 +1,41 @@
+=== TcSystemServer start and read 2026-04-27 17:23:40 +08:00 ===
+AmsNetId: 10.136.124.106.1.1
+SystemStateBefore: 15
+
+--- StartSystem ---
+StartSystem returned
+SystemStateAfterStart: 15
+
+--- RestartSystem ---
+RestartSystem returned
+SystemStateAfterRestart: 15
+
+--- ADS scan after TcSystemServer ---
+port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Config, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Config, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion
+
+--- ADS read 851 after TcSystemServer ---
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?[[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj]
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+Kind: validation.ads-read
+Interface: AdsValidationService.Read
+Summary: Reads a PLC or TcCOM symbol over ADS so the engineering pipeline can close the loop with a runtime assertion.
+Inputs: {
+  "netId": "local",
+  "port": "851",
+  "symbolPath": "MAIN.nValue",
+  "type": "Int32",
+  "autoReconnect": "true"
+}
+Status: Failed
+Result: ADS read failed: Target port could not be found. (AdsErrorCode: 6, 0x6)
+Outputs: {}
+
+=== done 2026-04-27 17:24:34 +08:00 ===

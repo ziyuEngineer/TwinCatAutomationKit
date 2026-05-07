@@ -1,0 +1,71 @@
+namespace TwinCatAutomationKit.Cli;
+
+public static class StepInvocationCatalog
+{
+    private static readonly IReadOnlyList<string> SupportedKindsInternal =
+    [
+        "engineering.launch-visual-studio",
+        "engineering.create-xae-solution",
+        "engineering.open-xae-solution",
+        "engineering.create-cpp-project",
+        "engineering.create-plc-project",
+        "engineering.create-module",
+        "engineering.add-module-instance",
+        "engineering.ensure-task",
+        "engineering.export-tree-item-xml",
+        "engineering.save-all",
+        "engineering.close-visual-studio",
+        "engineering.build-solution",
+        "signing.grant-certificate",
+        "signing.set-license",
+        "signing.sign-twincat-binary",
+        "signing.verify-twincat-binary",
+        "engineering.activate-configuration",
+        "tsproj.ensure-task",
+        "tsproj.clear-task-layout",
+        "tsproj.ensure-task-vars-group",
+        "tsproj.ensure-task-image",
+        "tsproj.ensure-cpp-instance",
+        "tsproj.ensure-plc-instance",
+        "tsproj.bind-instance-context",
+        "tsproj.bind-instance-task",
+        "tsproj.bind-plc-instance-task",
+        "tsproj.set-task-affinity",
+        "tsproj.set-plc-project-properties",
+        "tsproj.set-plc-instance-metadata",
+        "tsproj.clear-plc-instance-vars",
+        "tsproj.ensure-plc-instance-vars-group",
+        "tsproj.clear-plc-init-symbols",
+        "tsproj.clear-plc-task-pou-oids",
+        "tsproj.clear-mappings",
+        "tsproj.clear-unrestored-var-links",
+        "tsproj.replace-mappings-section",
+        "tsproj.replace-project-io-section",
+        "tsproj.replace-data-types-section",
+        "tsproj.replace-system-settings-section",
+        "tsproj.clear-instance-parameter-values",
+        "tsproj.clear-instance-data-pointer-values",
+        "tsproj.apply-instance-parameter-plan",
+        "tsproj.apply-instance-interface-pointer-plan",
+        "tsproj.apply-instance-data-pointer-plan",
+        "tsproj.ensure-io-task-image",
+        "tsproj.ensure-task-pou-oid",
+        "tsproj.ensure-init-symbol",
+        "tsproj.ensure-parameter",
+        "tsproj.ensure-interface-pointer",
+        "tsproj.ensure-data-pointer",
+        "tsproj.ensure-mapping-link",
+        "tsproj.upsert-element",
+        "tsproj.upsert-fragment",
+        "tsproj.apply-mutation-plan",
+        "tsproj.merge-fragment",
+        "validation.ads-scan",
+        "validation.ads-read",
+        "validation.ads-read-symbols",
+    ];
+
+    public static IReadOnlyList<string> SupportedKinds => SupportedKindsInternal;
+
+    public static bool Supports(string kind) =>
+        SupportedKindsInternal.Any(item => string.Equals(item, kind, StringComparison.OrdinalIgnoreCase));
+}

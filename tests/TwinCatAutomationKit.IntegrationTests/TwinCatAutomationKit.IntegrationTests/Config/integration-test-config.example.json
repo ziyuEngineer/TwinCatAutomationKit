@@ -1,0 +1,38 @@
+{
+  "VisualStudioProgId": "VisualStudio.DTE.17.0",
+  "AmsNetId": "127.0.0.1.1.1",
+  "AdsPort": 851,
+  "StartupDelayMs": 8000,
+  "WorkRootBase": "D:\\t",
+  "PreserveArtifacts": false,
+
+  "_comment_runtime_gates": "Default integration coverage requires real activation and ADS on a configured TwinCAT machine. OEM signing certificate grant/sign/verify are explicit exclusions unless enabled locally.",
+  "EnableActivation": true,
+  "EnableAdsRead": true,
+  "EnableSigning": false,
+  "EnableCertificateGrant": false,
+  "RuntimeSettleDelayMs": 5000,
+  "AdsScanPorts": [100, 200, 300, 800, 851, 852, 10000],
+  "AdsReadSymbols": [
+    "MAIN.nCycle:UInt32",
+    "MAIN.bHeartbeat:Boolean",
+    "MAIN.bPipelineOk:Boolean",
+    "MAIN.nConfiguredParameter:UInt32",
+    "MAIN.nConvertedParameter:UInt32",
+    "MAIN.RuntimeTaskOidProbe:UInt32",
+    "MAIN.AuxTaskOidProbe:UInt32",
+    "MAIN.nParameterChecksum:UInt32",
+    "MAIN.bParameterTransformOk:Boolean",
+    "MAIN.nMismatchCount:UInt32"
+  ],
+
+  "_comment_signing": "Only fill and enable these when this machine has a real TwinCAT OEM signing certificate/private key. signing.set-license is still verified without these values.",
+  "SigningCertificatePath": "",
+  "SigningCertificatePassword": "",
+  "SigningLicenseName": "integration-test",
+  "SigningToolPath": "",
+  "AllowTestModeSigningWarning": true,
+
+  "_comment_CppModuleWizardId": "Reserved. Not used by current tests — default CreateCppProject (TcVersionedDriverWizard) auto-creates the module via TriggerAddModule=true.",
+  "CppModuleWizardId": "TcModuleCyclicCallerWizard"
+}

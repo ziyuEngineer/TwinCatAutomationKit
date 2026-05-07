@@ -1,0 +1,102 @@
+=== ADS admin repair 2026-04-27 16:07:34 +08:00 ===
+PWD: [legacy-workspace-redacted]
+
+--- whoami /user ---
+
+用户信息
+----------------
+
+用户名            SID                                          
+================= =============================================
+zy_engineer\david S-1-5-21-3624070498-3016007962-478189450-1001
+
+--- whoami /groups ---
+
+组信息
+-----------------
+
+组名                                 类型   SID                                                                                                         属性                                      
+==================================== ====== =========================================================================================================== ==========================================
+Mandatory Label\High Mandatory Level 标签   S-1-16-12288                                                                                                                                          
+Everyone                             已知组 S-1-1-0                                                                                                     必需的组, 启用于默认, 启用的组            
+NT AUTHORITY\本地帐户和管理员组成员  已知组 S-1-5-114                                                                                                   必需的组, 启用于默认, 启用的组            
+zy_engineer\docker-users             别名   S-1-5-21-3624070498-3016007962-478189450-1002                                                               必需的组, 启用于默认, 启用的组            
+BUILTIN\Administrators               别名   S-1-5-32-544                                                                                                必需的组, 启用于默认, 启用的组, 组的所有者
+BUILTIN\Users                        别名   S-1-5-32-545                                                                                                必需的组, 启用于默认, 启用的组            
+BUILTIN\Performance Log Users        别名   S-1-5-32-559                                                                                                必需的组, 启用于默认, 启用的组            
+NT AUTHORITY\INTERACTIVE             已知组 S-1-5-4                                                                                                     必需的组, 启用于默认, 启用的组            
+CONSOLE LOGON                        已知组 S-1-2-1                                                                                                     必需的组, 启用于默认, 启用的组            
+NT AUTHORITY\Authenticated Users     已知组 S-1-5-11                                                                                                    必需的组, 启用于默认, 启用的组            
+NT AUTHORITY\This Organization       已知组 S-1-5-15                                                                                                    必需的组, 启用于默认, 启用的组            
+MicrosoftAccount\david.zy@qq.com     用户   S-1-11-96-3623454863-58364-18864-2661722203-1597581903-841651082-2016745766-1112484164-1622162336-971002384 必需的组, 启用于默认, 启用的组            
+NT AUTHORITY\本地帐户                已知组 S-1-5-113                                                                                                   必需的组, 启用于默认, 启用的组            
+LOCAL                                已知组 S-1-2-0                                                                                                     必需的组, 启用于默认, 启用的组            
+NT AUTHORITY\云帐户身份验证          已知组 S-1-5-64-36                                                                                                 必需的组, 启用于默认, 启用的组            
+
+--- TcAmsUsers before ---
+别名     TcAmsUsers
+注释     Group of user that can access AMS
+
+成员
+
+-------------------------------------------------------------------------------
+david
+命令成功完成。
+
+
+--- add zy_engineer\david to TcAmsUsers ---
+net : 发生系统错误 1378。
+所在位置 [legacy-workspace-redacted]\tools\ads_admin_repair.ps1:22 字符: 1
++ net localgroup TcAmsUsers zy_engineer\david /add 2>&1 | Out-File -Fil ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (发生系统错误 1378。:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+指定的账户名已是此组的成员。
+
+
+--- TcAmsUsers after ---
+别名     TcAmsUsers
+注释     Group of user that can access AMS
+
+成员
+
+-------------------------------------------------------------------------------
+david
+命令成功完成。
+
+
+--- restart TcSysSrv ---
+
+SERVICE_NAME: TcSysSrv 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 4  RUNNING 
+                                (STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x0
+        WAIT_HINT          : 0x0
+        PID                : 45300
+        FLAGS              : 
+
+--- ADS read elevated ---
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?[[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj]
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+Kind: validation.ads-read
+Interface: AdsValidationService.Read
+Summary: Reads a PLC or TcCOM symbol over ADS so the engineering pipeline can close the loop with a runtime assertion.
+Inputs: {
+  "netId": "local",
+  "port": "851",
+  "symbolPath": "MAIN.nValue",
+  "type": "Int32",
+  "autoReconnect": "true"
+}
+Status: Failed
+Result: ADS read failed: Target port could not be found. (AdsErrorCode: 6, 0x6)
+Outputs: {}
+
+=== done 2026-04-27 16:07:45 +08:00 ===

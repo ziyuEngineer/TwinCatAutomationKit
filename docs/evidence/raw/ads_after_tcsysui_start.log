@@ -1,0 +1,7 @@
+﻿port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Config, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Config, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion

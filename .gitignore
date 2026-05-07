@@ -1,0 +1,24 @@
+# Build outputs
+**/bin/
+**/obj/
+
+# IDE and local tool state
+.vs/
+.vscode/
+.git/
+.gitrepo/
+.claude/
+.artifacts/
+guided_runs/
+t/
+
+# Local run logs. Durable examples belong under docs/evidence/.
+*.log
+!docs/evidence/raw/*.log
+
+# Local integration test settings (machine-specific)
+tests/TwinCatAutomationKit.IntegrationTests/TwinCatAutomationKit.IntegrationTests/Config/integration-test-config.json
+
+# User-specific files
+*.user
+*.suo

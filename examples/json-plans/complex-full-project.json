@@ -1,0 +1,438 @@
+{
+  "schemaVersion": 1,
+  "name": "complex-full-project",
+  "variables": {
+    "root": "${plan.dir}\\..\\..\\.artifacts\\json-plans\\complex-full-project",
+    "solutionName": "Demo",
+    "projectName": "Demo",
+    "cppProjectName": "DemoCpp",
+    "plcProjectName": "PlcA",
+    "plcInstanceName": "PlcA Instance",
+    "cppInstanceBaseName": "Demo_Obj1",
+    "cppInstanceName": "Demo_Obj1 (DemoCpp)",
+    "solutionPath": "${root}\\${solutionName}.sln",
+    "projectPath": "${root}\\${projectName}\\${projectName}.tsproj",
+    "payloadDir": "${root}\\_json_plan_payloads",
+    "evidenceDir": "${root}\\_json_plan_evidence",
+    "taskName": "Task1",
+    "taskPriority": 15,
+    "taskCycleTimeNs": 10000000,
+    "taskCycleTimeUs": 10000,
+    "taskAmsPort": 360,
+    "includeSigningSettings": true,
+    "includeSigningVerification": true,
+    "signingLicenseName": "optcnc",
+    "signingLicensePassword": "123",
+    "includeDataPointerValues": false,
+    "includeActivation": false,
+    "includeAdsRead": false
+  },
+  "defaults": {
+    "solution-path": "${solutionPath}",
+    "project-path": "${projectPath}",
+    "visible": false,
+    "startup-delay-ms": 8000
+  },
+  "files": [
+    {
+      "path": "${payloadDir}\\datatypes.xml",
+      "content": "<DataTypes>\n  <DataType>\n    <Name>ST_ProcessData</Name>\n  </DataType>\n  <DataType>\n    <Name>ST_RuntimeCounters</Name>\n  </DataType>\n</DataTypes>\n"
+    },
+    {
+      "path": "${payloadDir}\\parameter-plan.json",
+      "content": [
+        {
+          "instanceName": "${cppInstanceName}",
+          "parameterName": "Parameter.data1",
+          "valueText": "123"
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\interface-pointer-plan.json",
+      "content": [
+        {
+          "instanceName": "${cppInstanceName}",
+          "pointerName": "CyclicCaller",
+          "objectId": "${steps.ensureTask.outputs.objectId}"
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\data-pointer-plan.json",
+      "content": [
+        {
+          "instanceName": "${cppInstanceName}",
+          "pointerName": "DataIn",
+          "objectId": "${steps.addModuleInstance.outputs.objectId}",
+          "areaNo": 2,
+          "byteOffset": 0,
+          "byteSize": 4
+        },
+        {
+          "instanceName": "${cppInstanceName}",
+          "pointerName": "DataOut",
+          "objectId": "${steps.addModuleInstance.outputs.objectId}",
+          "areaNo": 2,
+          "byteOffset": 4,
+          "byteSize": 4
+        }
+      ]
+    },
+    {
+      "path": "${payloadDir}\\ads-read-symbols.json",
+      "content": [
+        {
+          "symbolPath": "MAIN.nSeed",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.nStage1",
+          "dataType": "UInt32"
+        },
+        {
+          "symbolPath": "MAIN.bPipelineOk",
+          "dataType": "Boolean"
+        },
+        {
+          "symbolPath": "MAIN.nMismatchCount",
+          "dataType": "UInt32"
+        }
+      ]
+    },
+    {
+      "path": "${root}\\${projectName}\\${plcProjectName}\\POUs\\MAIN.TcPOU",
+      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<TcPlcObject>\n  <POU Name=\"MAIN\">\n    <Declaration><![CDATA[\nPROGRAM MAIN\nVAR\n    nSeed AT %Q* : UDINT := 5;\n    nStage1 AT %I* : UDINT;\n    nExpectedStage1 : UDINT;\n    bPipelineOk : BOOL;\n    nMismatchCount : UDINT;\n    bHeartbeat : BOOL;\n    bMonitoringEnabled : BOOL;\n    bMismatchActive : BOOL;\nEND_VAR\n    ]]></Declaration>\n    <Implementation>\n      <ST><![CDATA[\n(* generated after ${steps.createPlcProject.outputs.projectFilePath} *)\nbHeartbeat := NOT bHeartbeat;\n\nnExpectedStage1 := nSeed + 123;\nbPipelineOk := (nStage1 = nExpectedStage1);\n\nIF bPipelineOk THEN\n    bMonitoringEnabled := TRUE;\n    bMismatchActive := FALSE;\nELSIF bMonitoringEnabled THEN\n    IF NOT bMismatchActive THEN\n        nMismatchCount := nMismatchCount + 1;\n        bMismatchActive := TRUE;\n    END_IF\nEND_IF;\n      ]]></ST>\n    </Implementation>\n  </POU>\n</TcPlcObject>\n"
+    }
+  ],
+  "steps": [
+    {
+      "id": "createSolution",
+      "kind": "engineering.create-xae-solution",
+      "options": {
+        "solution-directory": "${root}",
+        "solution-name": "${solutionName}",
+        "project-name": "${projectName}"
+      }
+    },
+    {
+      "id": "createCppProject",
+      "kind": "engineering.create-cpp-project",
+      "options": {
+        "cpp-project-name": "${cppProjectName}"
+      }
+    },
+    {
+      "id": "createPlcProject",
+      "kind": "engineering.create-plc-project",
+      "options": {
+        "plc-project-name": "${plcProjectName}"
+      }
+    },
+    {
+      "id": "setTwinCatSigningLicense",
+      "kind": "signing.set-license",
+      "enabled": "${includeSigningSettings}",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "license-name": "${signingLicenseName}",
+        "password": "${signingLicensePassword}",
+        "enable-signing": true
+      }
+    },
+    {
+      "id": "createAuxModule",
+      "kind": "engineering.create-module",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "module-name": "AuxModule",
+        "allow-offline-fallback": true
+      }
+    },
+    {
+      "id": "addModuleInstance",
+      "kind": "engineering.add-module-instance",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "instance-base-name": "${cppInstanceBaseName}",
+        "module-class-name": "${cppProjectName}"
+      }
+    },
+    {
+      "id": "ensureTask",
+      "kind": "engineering.ensure-task",
+      "options": {
+        "task-name": "${taskName}",
+        "task-subtype": 0,
+        "priority": "${taskPriority}",
+        "cycle-time-us": "${taskCycleTimeUs}",
+        "ams-port": "${taskAmsPort}",
+        "io-at-begin": true
+      }
+    },
+    {
+      "id": "exportCppXml",
+      "kind": "engineering.export-tree-item-xml",
+      "options": {
+        "tree-item-path": "TIXC^${cppProjectName}",
+        "destination-path": "${evidenceDir}\\cpp.project.xml",
+        "recursive": true
+      }
+    },
+    {
+      "id": "bindRealCppInstance",
+      "kind": "tsproj.bind-instance-task",
+      "options": {
+        "instance-name": "${cppInstanceName}",
+        "task-object-id": "${steps.ensureTask.outputs.objectId}",
+        "priority": "${taskPriority}",
+        "cycle-time-ns": "${taskCycleTimeNs}",
+        "include-cyclic-caller": true
+      }
+    },
+    {
+      "id": "ensurePlcInstance",
+      "kind": "tsproj.ensure-plc-instance",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}"
+      }
+    },
+    {
+      "id": "bindPlcTask",
+      "kind": "tsproj.bind-plc-instance-task",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "plc-task-name": "${taskName}",
+        "task-object-id": "${steps.ensureTask.outputs.objectId}",
+        "priority": "${taskPriority}",
+        "cycle-time-ns": "${taskCycleTimeNs}",
+        "context-id": 0
+      }
+    },
+    {
+      "id": "setTaskAffinity",
+      "kind": "tsproj.set-task-affinity",
+      "options": {
+        "task-name": "${taskName}",
+        "affinity": "#x1",
+        "enable-adt-tasks": true
+      }
+    },
+    {
+      "id": "setPlcProjectProperties",
+      "kind": "tsproj.set-plc-project-properties",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "ams-port": 851,
+        "reload-tmc": true
+      }
+    },
+    {
+      "id": "setPlcMetadata",
+      "kind": "tsproj.set-plc-instance-metadata",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "tc-sm-class": "PlcTask",
+        "keep-unrestored-links": "2",
+        "class-factory": "${plcProjectName}"
+      }
+    },
+    {
+      "id": "clearPlcVars",
+      "kind": "tsproj.clear-plc-instance-vars",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}"
+      }
+    },
+    {
+      "id": "ensurePlcOutputVars",
+      "kind": "tsproj.ensure-plc-instance-vars-group",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "group-name": "PlcTask Outputs",
+        "var-grp-type": 2,
+        "area-no": 1,
+        "variables": "MAIN.nSeed:UDINT:0:0"
+      }
+    },
+    {
+      "id": "ensurePlcInputVars",
+      "kind": "tsproj.ensure-plc-instance-vars-group",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "group-name": "PlcTask Inputs",
+        "var-grp-type": 1,
+        "area-no": 0,
+        "variables": "MAIN.nStage1:UDINT:0:0"
+      }
+    },
+    {
+      "id": "clearInitSymbols",
+      "kind": "tsproj.clear-plc-init-symbols",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "remove-container-when-empty": true
+      }
+    },
+    {
+      "id": "clearTaskPouOids",
+      "kind": "tsproj.clear-plc-task-pou-oids",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "ensureTaskPouOid",
+      "kind": "tsproj.ensure-task-pou-oid",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "priority": "${taskPriority}",
+        "object-id": "${steps.ensureTask.outputs.objectId}"
+      }
+    },
+    {
+      "id": "ensureInitSymbol",
+      "kind": "tsproj.ensure-init-symbol",
+      "options": {
+        "plc-project-name": "${plcProjectName}",
+        "plc-instance-name": "${plcInstanceName}",
+        "symbol-name": "MAIN.__TaskOid",
+        "object-id": "${steps.ensureTask.outputs.objectId}"
+      }
+    },
+    {
+      "id": "replaceDataTypes",
+      "kind": "tsproj.replace-data-types-section",
+      "options": {
+        "xml-file": "${payloadDir}\\datatypes.xml",
+        "insert-before-project": true
+      }
+    },
+    {
+      "id": "clearCppParameterValues",
+      "kind": "tsproj.clear-instance-parameter-values",
+      "options": {
+        "instance-name": "${cppInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "applyParameterPlan",
+      "kind": "tsproj.apply-instance-parameter-plan",
+      "options": {
+        "json-file": "${payloadDir}\\parameter-plan.json"
+      }
+    },
+    {
+      "id": "applyInterfacePointerPlan",
+      "kind": "tsproj.apply-instance-interface-pointer-plan",
+      "options": {
+        "json-file": "${payloadDir}\\interface-pointer-plan.json"
+      }
+    },
+    {
+      "id": "clearDataPointerValues",
+      "kind": "tsproj.clear-instance-data-pointer-values",
+      "options": {
+        "instance-name": "${cppInstanceName}",
+        "remove-container-when-empty": false
+      }
+    },
+    {
+      "id": "applyDataPointerPlan",
+      "kind": "tsproj.apply-instance-data-pointer-plan",
+      "enabled": "${includeDataPointerValues}",
+      "options": {
+        "json-file": "${payloadDir}\\data-pointer-plan.json"
+      }
+    },
+    {
+      "id": "clearMappings",
+      "kind": "tsproj.clear-mappings",
+      "options": {}
+    },
+    {
+      "id": "clearUnrestoredVarLinks",
+      "kind": "tsproj.clear-unrestored-var-links",
+      "options": {}
+    },
+    {
+      "id": "mapPlcToCppDataIn",
+      "kind": "tsproj.ensure-mapping-link",
+      "options": {
+        "owner-a-name": "TIPC^${plcProjectName}^${plcInstanceName}",
+        "owner-b-name": "TIXC^${cppProjectName}^${cppInstanceName}",
+        "var-a": "PlcTask Outputs^MAIN.nSeed",
+        "var-b": "Input^DataIn"
+      }
+    },
+    {
+      "id": "mapCppDataOutToPlc",
+      "kind": "tsproj.ensure-mapping-link",
+      "options": {
+        "owner-a-name": "TIXC^${cppProjectName}^${cppInstanceName}",
+        "owner-b-name": "TIPC^${plcProjectName}^${plcInstanceName}",
+        "var-a": "Output^DataOut",
+        "var-b": "PlcTask Inputs^MAIN.nStage1"
+      }
+    },
+    {
+      "id": "buildBaseRuntime",
+      "kind": "engineering.build-solution",
+      "options": {
+        "timeout-ms": 1800000
+      }
+    },
+    {
+      "id": "verifyBuildTimeSignedBinary",
+      "kind": "signing.verify-twincat-binary",
+      "enabled": "${includeSigningVerification}",
+      "options": {
+        "cpp-project-name": "${cppProjectName}",
+        "configuration": "Release",
+        "platform": "TwinCAT OS (x64)",
+        "allow-test-mode-warning": true,
+        "quiet": true
+      }
+    },
+    {
+      "id": "activate",
+      "kind": "engineering.activate-configuration",
+      "enabled": "${includeActivation}",
+      "options": {
+        "save-configuration-archive": true,
+        "configuration-archive-path": "${evidenceDir}\\activated.tszip"
+      }
+    },
+    {
+      "id": "adsScan",
+      "kind": "validation.ads-scan",
+      "enabled": "${includeAdsRead}",
+      "options": {
+        "net-id": "local",
+        "ports": "100,200,300,800,851,10000"
+      }
+    },
+    {
+      "id": "adsReadSymbols",
+      "kind": "validation.ads-read-symbols",
+      "enabled": "${includeAdsRead}",
+      "options": {
+        "net-id": "local",
+        "port": 851,
+        "json-file": "${payloadDir}\\ads-read-symbols.json",
+        "auto-reconnect": true
+      }
+    }
+  ]
+}

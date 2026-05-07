@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\TwinCatAutomationKit.Abstractions\TwinCatAutomationKit.Abstractions\TwinCatAutomationKit.Abstractions.csproj" SkipGetTargetFrameworkProperties="true" />
+    <ProjectReference Include="..\..\TwinCatAutomationKit.Core\TwinCatAutomationKit.Core\TwinCatAutomationKit.Core.csproj" SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="envdte" Version="17.14.40260" />
+  </ItemGroup>
+  <PropertyGroup>
+    <TwinCatSysManagerInteropPath>C:\Program Files (x86)\Beckhoff\TwinCAT\Functions\TF3500-Analytics-Logger\SystemManagerExtension\TCatSysManagerLib.dll</TwinCatSysManagerInteropPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="TCatSysManagerLib">
+      <HintPath>$(TwinCatSysManagerInteropPath)</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="TwinCAT.Ads">
+      <HintPath>C:\Program Files (x86)\Beckhoff\TwinCAT\3.1\Components\Base\v170\TwinCAT.Ads.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,100 @@
+=== ADS probe elevated 2026-04-27 16:38:20 +08:00 ===
+PWD: [legacy-workspace-redacted]
+
+--- scan before write-run ---
+port 1: connected=True, router=Start, adsState=Config, deviceState=0, device=TCROUTER, version=TwinCAT.Ads.AdsVersion
+port 10: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 11: connected=True, router=Start, adsState=Invalid, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 12: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Run, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Run, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 350: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 360: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 801: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion
+
+--- write-run on 10000 then scan ---
+write-run target port 10000: connected=True, router=Start
+before: adsState=Config, deviceState=1
+TryWriteControl(Run,1): DeviceServiceNotSupported
+after: adsState=Config, deviceState=1
+port 1: connected=True, router=Start, adsState=Config, deviceState=0, device=TCROUTER, version=TwinCAT.Ads.AdsVersion
+port 10: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 11: connected=True, router=Start, adsState=Invalid, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 12: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Run, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Run, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 350: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 360: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 801: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion
+
+--- write-run on 200 then scan ---
+write-run target port 200: connected=True, router=Start
+before: adsState=Run, deviceState=0
+TryWriteControl(Run,0): Succeeded
+after: adsState=Run, deviceState=0
+port 1: connected=True, router=Start, adsState=Config, deviceState=0, device=TCROUTER, version=TwinCAT.Ads.AdsVersion
+port 10: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 11: connected=True, router=Start, adsState=Invalid, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 12: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Run, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Run, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 350: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 360: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 801: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion
+
+--- write-run on 300 then scan ---
+write-run target port 300: connected=True, router=Start
+before: adsState=Run, deviceState=3
+TryWriteControl(Run,3): Succeeded
+after: adsState=Run, deviceState=3
+port 1: connected=True, router=Start, adsState=Config, deviceState=0, device=TCROUTER, version=TwinCAT.Ads.AdsVersion
+port 10: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 11: connected=True, router=Start, adsState=Invalid, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 12: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Run, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Run, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 350: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 360: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 801: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion
+
+--- write-run on 100 then scan ---
+write-run target port 100: connected=True, router=Start
+before: adsState=Run, deviceState=0
+TryWriteControl(Run,0): Succeeded
+after: adsState=Run, deviceState=0
+port 1: connected=True, router=Start, adsState=Config, deviceState=0, device=TCROUTER, version=TwinCAT.Ads.AdsVersion
+port 10: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 11: connected=True, router=Start, adsState=Invalid, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 12: connected=True, router=Start, adsState=Config, deviceState=0, deviceInfo=AdsErrorException: Service is not supported by server. (AdsErrorCode: 1793, 0x701)
+port 100: connected=True, router=Start, adsState=Run, deviceState=0, device=TCatSysSrv, version=TwinCAT.Ads.AdsVersion
+port 200: connected=True, router=Start, adsState=Run, deviceState=0, device=RTime(Um), version=TwinCAT.Ads.AdsVersion
+port 300: connected=True, router=Start, adsState=Run, deviceState=3, device=I/O Server, version=TwinCAT.Ads.AdsVersion
+port 350: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 360: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 800: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 801: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 851: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 852: connected=True, router=Start, readState=AdsErrorException: Ads-Error 0x6 : Target port could not be found. (Target port could not be found. (AdsErrorCode: 6, 0x6)), deviceInfo=AdsErrorException: Target port could not be found. (AdsErrorCode: 6, 0x6)
+port 10000: connected=True, router=Start, adsState=Config, deviceState=1, device=TwinCAT System, version=TwinCAT.Ads.AdsVersion
+
+=== done 2026-04-27 16:38:59 +08:00 ===

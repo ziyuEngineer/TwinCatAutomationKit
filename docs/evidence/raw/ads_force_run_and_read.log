@@ -1,0 +1,43 @@
+=== ADS force RUN and read 2026-04-27 16:13:17 +08:00 ===
+PWD: [legacy-workspace-redacted]
+
+--- load TCatSysManagerLib ---
+Loaded: [legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\bin\Debug\net8.0-windows\TCatSysManagerLib.dll
+
+--- TcSmCommands status before ---
+TcSmCommands failed: System.Management.Automation.MethodInvocationException: 使用“0”个参数调用“.ctor”时发生异常:“检索 COM 类工厂中 CLSID 为 {003F81A0-77B4-4662-BD14-13684897AA04} 的组件失败，原因是出现以下错误: 80040154 没有注册类 (异常来自 HRESULT:0x80040154 (REGDB_E_CLASSNOTREG))。”
+Inner: System.Runtime.InteropServices.COMException: 检索 COM 类工厂中 CLSID 为 {003F81A0-77B4-4662-BD14-13684897AA04} 的组件失败，原因是出现以下错误: 80040154 没有注册类 (异常来自 HRESULT:0x80040154 (REGDB_E_CLASSNOTREG))。
+
+--- service status ---
+
+SERVICE_NAME: TcSysSrv 
+        TYPE               : 10  WIN32_OWN_PROCESS  
+        STATE              : 4  RUNNING 
+                                (STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN)
+        WIN32_EXIT_CODE    : 0  (0x0)
+        SERVICE_EXIT_CODE  : 0  (0x0)
+        CHECKPOINT         : 0x0
+        WAIT_HINT          : 0x0
+        PID                : 45300
+        FLAGS              : 
+
+--- ADS read 851 after RUN request ---
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?[[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj]
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+[legacy-workspace-redacted]\src\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat\TwinCatAutomationKit.TwinCat.csproj : warning NU1900: 鑾峰彇鍖呮紡娲炴暟鎹椂鍑洪敊: 鏃犳硶鍔犺浇婧?https://api.nuget.org/v3/index.json 鐨勬湇鍔＄储寮曘€?
+Kind: validation.ads-read
+Interface: AdsValidationService.Read
+Summary: Reads a PLC or TcCOM symbol over ADS so the engineering pipeline can close the loop with a runtime assertion.
+Inputs: {
+  "netId": "local",
+  "port": "851",
+  "symbolPath": "MAIN.nValue",
+  "type": "Int32",
+  "autoReconnect": "true"
+}
+Status: Failed
+Result: ADS read failed: Target port could not be found. (AdsErrorCode: 6, 0x6)
+Outputs: {}
+
+=== done 2026-04-27 16:13:20 +08:00 ===

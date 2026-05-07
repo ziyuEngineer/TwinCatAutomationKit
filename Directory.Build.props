@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Work around intermittent MSBuild project-reference failures under SDK 9.0.311. -->
+    <BuildInParallel>false</BuildInParallel>
+  </PropertyGroup>
+</Project>
