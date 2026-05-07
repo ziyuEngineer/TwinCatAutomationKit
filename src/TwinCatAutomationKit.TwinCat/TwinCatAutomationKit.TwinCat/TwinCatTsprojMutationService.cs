@@ -45,6 +45,8 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureTaskDefinition(string tsprojPath, EnsureTaskDefinitionRequest request)
     {
+        ValidateRequiredText(request.TaskName, nameof(request.TaskName));
+
         XDocument document = Load(tsprojPath);
         XElement container = FindOrCreateCanonicalTasksContainer(document);
         XElement? task = document.Descendants().FirstOrDefault(element =>
@@ -76,6 +78,8 @@ public sealed class TwinCatTsprojMutationService
 
     public void ClearTaskLayout(string tsprojPath, ClearTaskLayoutRequest request)
     {
+        ValidateRequiredText(request.TaskName, nameof(request.TaskName));
+
         XDocument document = Load(tsprojPath);
         XElement task = FindTaskByName(document, request.TaskName);
 
@@ -92,6 +96,11 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureTaskVarsGroup(string tsprojPath, EnsureTaskVarsGroupRequest request)
     {
+        ValidateRequiredText(request.TaskName, nameof(request.TaskName));
+        ValidateRequiredText(request.GroupName, nameof(request.GroupName));
+        ValidateRequiredText(request.BaseVarName, nameof(request.BaseVarName));
+        ValidateRequiredText(request.TypeName, nameof(request.TypeName));
+
         if (request.Count <= 0)
         {
             throw new InvalidOperationException("Task Vars Count must be greater than zero.");
@@ -100,6 +109,16 @@ public sealed class TwinCatTsprojMutationService
         if (request.StartIndex <= 0)
         {
             throw new InvalidOperationException("Task Vars StartIndex must be greater than zero.");
+        }
+
+        if (request.BitStride <= 0)
+        {
+            throw new InvalidOperationException("Task Vars BitStride must be greater than zero.");
+        }
+
+        if (request.ExternalAddressStride < 0)
+        {
+            throw new InvalidOperationException("Task Vars ExternalAddressStride must be greater than or equal to zero.");
         }
 
         XDocument document = Load(tsprojPath);
@@ -151,9 +170,17 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureTaskImage(string tsprojPath, EnsureTaskImageRequest request)
     {
+        ValidateRequiredText(request.TaskName, nameof(request.TaskName));
+        ValidateRequiredText(request.ImageName, nameof(request.ImageName));
+
         if (request.ImageId <= 0)
         {
             throw new InvalidOperationException("Task Image Id must be greater than zero.");
+        }
+
+        if (request.SizeIn < 0 || request.SizeOut < 0)
+        {
+            throw new InvalidOperationException("Task Image SizeIn and SizeOut must be greater than or equal to zero.");
         }
 
         XDocument document = Load(tsprojPath);
@@ -190,6 +217,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void BindInstanceContext(string tsprojPath, BindInstanceContextRequest request)
     {
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        ValidateObjectIdText(request.TaskObjectId, nameof(request.TaskObjectId));
+
         XDocument document = Load(tsprojPath);
         XElement instance = FindInstance(document, request.InstanceName);
         XElement tmcDesc = GetOrCreateTmcDesc(instance);
@@ -254,6 +284,10 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureCppInstance(string tsprojPath, EnsureCppInstanceRequest request)
     {
+        ValidateRequiredText(request.CppProjectName, nameof(request.CppProjectName));
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        ValidateObjectIdText(request.ObjectId, nameof(request.ObjectId));
+
         XDocument document = Load(tsprojPath);
         XElement cppProject = FindCppProject(document, request.CppProjectName);
         XElement instance = cppProject.Elements().FirstOrDefault(element =>
@@ -300,6 +334,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsurePlcInstance(string tsprojPath, EnsurePlcInstanceRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement plcProject = FindOrCreatePlcProject(document, request.PlcProjectName);
         XElement instance = plcProject.Elements().FirstOrDefault(element =>
@@ -313,6 +350,11 @@ public sealed class TwinCatTsprojMutationService
 
     public void BindPlcInstanceToTask(string tsprojPath, BindPlcInstanceToTaskRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+        ValidateRequiredText(request.PlcTaskName, nameof(request.PlcTaskName));
+        ValidateObjectIdText(request.TaskObjectId, nameof(request.TaskObjectId));
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         XElement contexts = GetOrCreateChildElement(plcInstance, "Contexts");
@@ -330,6 +372,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void SetTaskAffinity(string tsprojPath, SetTaskAffinityRequest request)
     {
+        ValidateRequiredText(request.TaskName, nameof(request.TaskName));
+        ValidateRequiredText(request.Affinity, nameof(request.Affinity));
+
         XDocument document = Load(tsprojPath);
         XElement task = FindTaskByName(document, request.TaskName);
         task.SetAttributeValue("Affinity", request.Affinity);
@@ -339,6 +384,12 @@ public sealed class TwinCatTsprojMutationService
 
     public void SetPlcProjectProperties(string tsprojPath, SetPlcProjectPropertiesRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        if (request.AmsPort.HasValue && request.AmsPort.Value < 0)
+        {
+            throw new InvalidOperationException("PLC project AmsPort must be greater than or equal to zero.");
+        }
+
         XDocument document = Load(tsprojPath);
         XElement plcProject = FindPlcProject(document, request.PlcProjectName);
 
@@ -372,6 +423,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void SetPlcInstanceMetadata(string tsprojPath, SetPlcInstanceMetadataRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
 
@@ -409,6 +463,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void ClearPlcInstanceVars(string tsprojPath, ClearPlcInstanceVarsRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         foreach (XElement vars in plcInstance.Elements().Where(element => element.Name.LocalName == "Vars").ToList())
@@ -421,6 +478,24 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsurePlcInstanceVarsGroup(string tsprojPath, EnsurePlcInstanceVarsGroupRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+        ValidateRequiredText(request.GroupName, nameof(request.GroupName));
+        foreach (PlcInstanceVarItem item in request.Variables ?? Array.Empty<PlcInstanceVarItem>())
+        {
+            ValidateRequiredText(item.Name, nameof(item.Name));
+            ValidateRequiredText(item.Type, nameof(item.Type));
+            if (item.BitOffset.HasValue && item.BitOffset.Value < 0)
+            {
+                throw new InvalidOperationException("PLC variable BitOffset must be greater than or equal to zero.");
+            }
+
+            if (item.ExternalAddress.HasValue && item.ExternalAddress.Value < 0)
+            {
+                throw new InvalidOperationException("PLC variable ExternalAddress must be greater than or equal to zero.");
+            }
+        }
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         List<XElement> existingGroups = plcInstance.Elements().Where(element =>
@@ -482,6 +557,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void ClearPlcInitSymbols(string tsprojPath, ClearPlcInitSymbolsRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         XElement? initSymbols = plcInstance.Elements().FirstOrDefault(element => element.Name.LocalName == "InitSymbols");
@@ -506,6 +584,9 @@ public sealed class TwinCatTsprojMutationService
 
     public void ClearPlcTaskPouOids(string tsprojPath, ClearPlcTaskPouOidsRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         XElement? taskPouOids = plcInstance.Elements().FirstOrDefault(element => element.Name.LocalName == "TaskPouOids");
@@ -639,6 +720,12 @@ public sealed class TwinCatTsprojMutationService
             throw new ArgumentNullException(nameof(request));
         }
 
+        foreach (InstanceParameterMutation item in request.Items ?? Array.Empty<InstanceParameterMutation>())
+        {
+            ValidateRequiredText(item.InstanceName, nameof(item.InstanceName));
+            ValidateRequiredText(item.ParameterName, nameof(item.ParameterName));
+        }
+
         XDocument document = Load(tsprojPath);
         foreach (InstanceParameterMutation item in request.Items ?? Array.Empty<InstanceParameterMutation>())
         {
@@ -657,6 +744,8 @@ public sealed class TwinCatTsprojMutationService
 
     public void ClearInstanceParameterValues(string tsprojPath, ClearInstanceParameterValuesRequest request)
     {
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement instance = FindInstance(document, request.InstanceName);
         XElement tmcDesc = GetOrCreateTmcDesc(instance);
@@ -683,6 +772,8 @@ public sealed class TwinCatTsprojMutationService
 
     public void ClearInstanceDataPointerValues(string tsprojPath, ClearInstanceDataPointerValuesRequest request)
     {
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+
         XDocument document = Load(tsprojPath);
         XElement instance = FindInstance(document, request.InstanceName);
         XElement tmcDesc = GetOrCreateTmcDesc(instance);
@@ -714,6 +805,13 @@ public sealed class TwinCatTsprojMutationService
             throw new ArgumentNullException(nameof(request));
         }
 
+        foreach (InstanceInterfacePointerMutation item in request.Items ?? Array.Empty<InstanceInterfacePointerMutation>())
+        {
+            ValidateRequiredText(item.InstanceName, nameof(item.InstanceName));
+            ValidateRequiredText(item.PointerName, nameof(item.PointerName));
+            ValidateObjectIdText(item.ObjectId, nameof(item.ObjectId));
+        }
+
         XDocument document = Load(tsprojPath);
         foreach (InstanceInterfacePointerMutation item in request.Items ?? Array.Empty<InstanceInterfacePointerMutation>())
         {
@@ -735,6 +833,17 @@ public sealed class TwinCatTsprojMutationService
             throw new ArgumentNullException(nameof(request));
         }
 
+        foreach (InstanceDataPointerMutation item in request.Items ?? Array.Empty<InstanceDataPointerMutation>())
+        {
+            ValidateDataPointerRequest(new EnsureDataPointerValueRequest(
+                item.InstanceName,
+                item.PointerName,
+                item.ObjectId,
+                item.AreaNo,
+                item.ByteOffset,
+                item.ByteSize));
+        }
+
         XDocument document = Load(tsprojPath);
         foreach (InstanceDataPointerMutation item in request.Items ?? Array.Empty<InstanceDataPointerMutation>())
         {
@@ -754,6 +863,18 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureTaskPouOid(string tsprojPath, EnsureTaskPouOidRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+        if (request.Priority < 0)
+        {
+            throw new InvalidOperationException("TaskPouOid Priority must be greater than or equal to zero.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.ObjectId))
+        {
+            ValidateObjectIdText(request.ObjectId, nameof(request.ObjectId));
+        }
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         XElement taskPouOids = GetOrCreateChildElement(plcInstance, "TaskPouOids");
@@ -779,6 +900,13 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureInitSymbol(string tsprojPath, EnsureInitSymbolRequest request)
     {
+        ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
+        ValidateRequiredText(request.PlcInstanceName, nameof(request.PlcInstanceName));
+        ValidateRequiredText(request.SymbolName, nameof(request.SymbolName));
+        ValidateRequiredText(request.TypeName, nameof(request.TypeName));
+        ValidateRequiredText(request.AreaNo, nameof(request.AreaNo));
+        ValidateObjectIdText(request.ObjectId, nameof(request.ObjectId));
+
         XDocument document = Load(tsprojPath);
         XElement plcInstance = FindPlcInstance(document, request.PlcProjectName, request.PlcInstanceName);
         XElement initSymbols = GetOrCreateChildElement(plcInstance, "InitSymbols");
@@ -855,6 +983,34 @@ public sealed class TwinCatTsprojMutationService
 
     public void EnsureIoTaskImage(string tsprojPath, EnsureIoTaskImageRequest request)
     {
+        ValidateRequiredText(request.TaskName, nameof(request.TaskName));
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        ValidateRequiredText(request.PointerName, nameof(request.PointerName));
+        if (request.ImageId <= 0)
+        {
+            throw new InvalidOperationException("Image Id must be greater than zero.");
+        }
+
+        if (request.SizeIn < 0 || request.SizeOut < 0)
+        {
+            throw new InvalidOperationException("Image SizeIn and SizeOut must be greater than or equal to zero.");
+        }
+
+        if (request.InputRealCount <= 0)
+        {
+            throw new InvalidOperationException("InputRealCount must be greater than zero.");
+        }
+
+        if (request.OutputByteCount <= 0)
+        {
+            throw new InvalidOperationException("OutputByteCount must be greater than zero.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.ImageObjectId))
+        {
+            ValidateObjectIdText(request.ImageObjectId, nameof(request.ImageObjectId));
+        }
+
         XDocument document = Load(tsprojPath);
         XElement task = FindTaskByName(document, request.TaskName);
         task.SetAttributeValue("IoAtBegin", request.IoAtBegin.HasValue ? (request.IoAtBegin.Value ? "true" : "false") : null);
@@ -1206,6 +1362,9 @@ public sealed class TwinCatTsprojMutationService
 
     private static void EnsureParameterValueInDocument(XDocument document, EnsureParameterValueRequest request)
     {
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        ValidateRequiredText(request.ParameterName, nameof(request.ParameterName));
+
         XElement instance = FindInstance(document, request.InstanceName);
         XElement parameters = GetOrCreateChildElement(GetOrCreateTmcDesc(instance), "ParameterValues");
         XElement value = FindNamedValue(parameters, request.ParameterName) ?? CreateNamedValue(parameters, request.ParameterName);
@@ -1228,6 +1387,10 @@ public sealed class TwinCatTsprojMutationService
 
     private static void EnsureInterfacePointerValueInDocument(XDocument document, EnsureInterfacePointerValueRequest request)
     {
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        ValidateRequiredText(request.PointerName, nameof(request.PointerName));
+        ValidateObjectIdText(request.ObjectId, nameof(request.ObjectId));
+
         XElement instance = FindInstance(document, request.InstanceName);
         XElement pointers = GetOrCreateChildElement(GetOrCreateTmcDesc(instance), "InterfacePointerValues");
         XElement value = FindNamedValue(pointers, request.PointerName) ?? CreateNamedValue(pointers, request.PointerName);
@@ -1376,6 +1539,8 @@ public sealed class TwinCatTsprojMutationService
 
     private static void ValidateMergeFragmentDocumentation(MergeNamedElementFragmentRequest request)
     {
+        ValidateRequiredText(request.ParentElementName, nameof(request.ParentElementName));
+        ValidateRequiredText(request.FragmentXml, nameof(request.FragmentXml));
         if (string.IsNullOrWhiteSpace(request.FragmentSource) ||
             string.IsNullOrWhiteSpace(request.TargetParentPath) ||
             string.IsNullOrWhiteSpace(request.FieldMeaning) ||
@@ -1384,6 +1549,20 @@ public sealed class TwinCatTsprojMutationService
             throw new InvalidOperationException(
                 "tsproj.merge-fragment requires FragmentSource, TargetParentPath, FieldMeaning, and VerificationEvidence. Use a dedicated .tsproj API when one exists.");
         }
+    }
+
+    private static void ValidateRequiredText(string? value, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"{fieldName} must not be empty.");
+        }
+    }
+
+    private static void ValidateObjectIdText(string? value, string fieldName)
+    {
+        ValidateRequiredText(value, fieldName);
+        _ = ParseObjectId(value!);
     }
 
     private static XElement? ResolveExistingElement(

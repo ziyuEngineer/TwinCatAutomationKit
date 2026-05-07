@@ -137,7 +137,7 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 
 - 至少一个配置 ADS port 可读 state。
 - batch read 所有 symbols 成功。
-- single read 成功。
+- single read 固定读取 `MAIN.nConfiguredParameter`，必须精确返回 `12345`；不能依赖配置文件里“第一个 symbol”碰巧可读。
 - ADS 精确读回这些 runtime proof：
 
 | Symbol | 期望 |
@@ -167,7 +167,9 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 通过判定：
 
 - 每个非法调用必须抛出预期异常。
-- 异常类型和消息能定位到错误输入。
+- 异常类型和消息能定位到错误字段或错误值，例如 `GroupName`、`Image Id`、`ObjectId`、`ByteOffset`、`VarA`。
+- 每个 `.tsproj` mutation 失败用例都会比较调用前后文件内容；失败时 `.tsproj` 必须 byte-for-byte unchanged。
+- batch plan 失败必须证明没有 partial write，例如第一项合法、第二项非法时，第一项也不能落盘。
 - 不能出现“错误输入被接受但后面 build 才炸”的情况。
 
 ### 6. `atomic step wrappers execute against real TwinCAT project`
@@ -182,8 +184,11 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 通过判定：
 
 - wrapper 调用返回 success outcome。
+- `AutomationRunSummary` 必须包含每个 wrapper step，顺序、`StepExecutionStatus`、step kind、关键 outputs 都要匹配。
+- `ExportTreeItemXml` wrapper 必须带 XML evidence artifact，并且 artifact 可按 `TreeItem` 解析。
 - 对 `.tsproj` wrapper，不能只看 wrapper 返回 success；测试会重新读取 `.tsproj`，确认 wrapper 写入的 parameter、data pointer、generic element/fragment 是独有精确值，并确认 wrapper clear 掉的 stale data pointer / `UnrestoredVarLinks` 不再存在。
-- 对 runtime wrapper，仍然依赖 activation/ADS 真实读回，并复用严格 runtime symbol 判定。
+- 对 runtime wrapper，`ADS scan` 必须包含配置 runtime port，`ADS read` 必须返回 `MAIN.nConfiguredParameter=12345`，`ADS read symbols` 必须反序列化 `valuesJson` 并复用严格 runtime symbol 判定。
+- pipeline evidence 必须写出 `run-summary.json` 和 `step-results.csv`，CSV 中必须包含每个 wrapper step id。
 - 覆盖集合中登记 `TwinCatAtomicSteps.*` interface，防止只测 service method 不测 wrapper path。
 
 ### 7. `real scenario covers every open service interface`
@@ -194,6 +199,8 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 
 - `StepCoverageMatrix.MissingCatalogKinds()` 为空。
 - `StepCoverageMatrix.UnknownMatrixKinds()` 为空。
+- 每个 `StepCoverageSpec` 的 `Scenario`、`Dependencies`、`PassCriteria` 非空。
+- 每条 `PassCriteria` 必须足够具体，并包含 artifact、XML、ADS、ObjectId、exact value、stale cleanup、exception 或 evidence 这类可执行判据。
 - 实际 covered step kinds 包含所有默认要求的 step。
 - README 提到每个 step kind。
 - 只有 3 个 signing certificate step 在 excluded set。
@@ -207,9 +214,11 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 - 创建类接口：文件、目录、project node、module metadata 必须存在。
 - 创建类接口还要检查返回值：tree path、display name、file path、ObjectId 必须和请求/工程结构对应。
 - reopen 类接口：XAE 必须能重新打开 mutated solution。
-- export 类接口：`ProduceXml` evidence 必须写出，并解析为 `TreeItem` XML，检查 `ItemName`、`PathName`、subtype 和非空内容。
+- export 类接口：正常路径不允许 `UsedFallback=true`；`ProduceXml` evidence 必须写出，并解析为 `TreeItem` XML，检查 `ItemName`、`PathName`、subtype 和非空内容。
+- 只有 missing-node boundary case 允许 fallback；fallback artifact 必须包含失败 tree path 和 TwinCAT lookup failure，而不能伪装成成功 export。
 - build 类接口：`BuildCurrentSolution` 必须成功，`LastBuildInfo=0`，并产生 PLC `.tmc` / `.compileinfo`。
-- activation 类接口：activation result 成功，记录实际 command，执行 restart，并有非空 archive；archive 内必须有 solution/config 或 fallback summary。
+- build 产物不能只是存在；PLC `.tmc` / `.compileinfo` 必须是非空生成文件。
+- activation 类接口：activation result 成功，记录实际 command，执行 restart，并有非空 archive；archive entry 不能是空占位，archive 内必须有可解释的 solution/config XML 或 fallback activation summary。
 
 ### `.tsproj` mutation step
 
@@ -233,6 +242,13 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 
 XAE reopen/export 是第二层 proof：证明 XML 不只是“写得像”，还被真实 TwinCAT 接受。
 
+对于失败路径，测试采用 fail-before-write 策略：
+
+- 非法空名、非法 ObjectId、非法 count/size/offset、generic XML conflict policy 等都必须在真实 `.tsproj` 上失败。
+- 失败消息必须点名错误字段或错误值。
+- 失败前后 `.tsproj` 文件内容必须完全一致。
+- batch API 不能部分成功；任何一项非法时，本批次前面合法项也不能落盘。
+
 ### Validation / runtime step
 
 runtime step 必须有闭环：
@@ -245,6 +261,8 @@ runtime step 必须有闭环：
 只读一个 heartbeat 或 counter 不够，因为那只能证明 runtime 存活，不能证明工程内容符合我们设置。
 
 ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime port 成功返回 ADS state；另外 boundary test 会读取一个确定不存在的 symbol，必须失败并带错误信息。
+
+`validation.ads-read` 也不能只读“配置里的第一个 symbol”。测试固定读取 `MAIN.nConfiguredParameter` 并要求精确等于 `12345`，这样 single read path 和 batch runtime proof 共享同一确定语义。
 
 ### Signing step
 
@@ -317,12 +335,14 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.merge-fragment` | `ordered-step-surface` | 在唯一 `DataTypes` parent 下执行带 evidence 字段的 named fragment merge，最终 `DataTypes` 集合必须精确。 |
 | `validation.ads-scan` | `activation-ads-runtime` | `EnableAdsRead=true` 时配置的 runtime port 必须可读 ADS state，不接受仅其他 port 成功。 |
 | `validation.ads-read-symbols` | `activation-ads-runtime` | batch ADS read 必须精确读回配置参数、转换结果、task ObjectId probes、checksum、transform-ok flag 和 mismatch count。 |
-| `validation.ads-read` | `activation-ads-runtime` | 对同一 symbol surface 执行单点读取并成功，证明 batch 与 single read 两条 ADS path 都可用。 |
+| `validation.ads-read` | `activation-ads-runtime` | 固定读取 `MAIN.nConfiguredParameter` 并精确返回 `12345`，证明 batch 与 single read 两条 ADS path 都读到同一确定 runtime 语义。 |
 
 ## 维护规则
 
 - 新增 public step kind 时，必须同时更新 `StepCoverageMatrix.cs` 和本文档；`real scenario covers every open service interface` 会检查遗漏。
+- `StepCoverageMatrix` 的通过条件必须写成可执行证据，不接受“调用成功”“不抛异常”这类宽泛口径。
 - 新增 `.tsproj` mutation 时，要优先写专用 API 和精确 XML 断言；不要只用 generic XML 操作掩盖能力缺口。
+- 新增 `.tsproj` mutation 的负例时，必须证明失败不改文件；batch API 还要证明没有 partial write。
 - 新增 runtime 行为时，要有 build、activation、ADS readback 或等价真实 evidence；只检查文件存在不够。
 - 真实失败时优先保留短路径 workdir 或把关键 XML/build/ADS 结果沉淀到 `docs/evidence`，不要只留下 root `*.log`。
 - 3 个 OEM signing certificate step 只有在本机提供真实 credential 并补充 evidence 后，才应从默认排除项移出。

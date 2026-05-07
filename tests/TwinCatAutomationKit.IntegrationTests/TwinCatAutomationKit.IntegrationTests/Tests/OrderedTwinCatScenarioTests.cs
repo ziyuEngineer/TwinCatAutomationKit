@@ -236,7 +236,7 @@ internal static class OrderedTwinCatScenarioTests
         state.CoverStep("validation.ads-read-symbols");
         IntegrationAssertEx.True(batch.Succeeded, "validation.ads-read-symbols failed: " + FormatAdsFailures(batch));
 
-        AdsReadSymbolRequest first = symbols[0];
+        AdsReadSymbolRequest first = DeterministicSingleAdsReadSymbol();
         AdsReadResult single = ads.Read(new AdsReadRequest(
             config.AmsNetId,
             config.AdsPort,
@@ -246,6 +246,7 @@ internal static class OrderedTwinCatScenarioTests
         state.Cover("AdsValidationService.Read");
         state.CoverStep("validation.ads-read");
         IntegrationAssertEx.True(single.Succeeded, $"validation.ads-read failed for {first.SymbolPath}: {single.ErrorMessage}");
+        IntegrationAssertEx.Equal(RuntimeConfiguredParameter.ToString(CultureInfo.InvariantCulture), single.Value, "validation.ads-read should return the exact deterministic configured parameter.");
 
         AssertRuntimeSemanticSymbols(batch, state);
         _ = state;
@@ -258,26 +259,133 @@ internal static class OrderedTwinCatScenarioTests
         ScenarioState state = GetOrCreateBuiltScenario(config);
         TwinCatTsprojMutationService mutation = new();
 
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.EnsureTaskVarsGroup(state.ProjectInfo.ProjectPath, new EnsureTaskVarsGroupRequest(RuntimeTaskName, "BadCount", 1, 1, "X", "UDINT", 0, 32, 4)),
+            "Count",
             "tsproj.ensure-task-vars-group should reject Count=0 on a real TwinCAT project.");
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureTaskVarsGroup(state.ProjectInfo.ProjectPath, new EnsureTaskVarsGroupRequest(RuntimeTaskName, string.Empty, 1, 1, "X", "UDINT", 1, 32, 4)),
+            "GroupName",
+            "tsproj.ensure-task-vars-group should reject an empty group name before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureTaskImage(state.ProjectInfo.ProjectPath, new EnsureTaskImageRequest(RuntimeTaskName, ImageId: 0)),
+            "Image Id",
+            "tsproj.ensure-task-image should reject ImageId=0 before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureIoTaskImage(state.ProjectInfo.ProjectPath, new EnsureIoTaskImageRequest(RuntimeTaskName, state.PrimaryInstanceName, ImageId: 0)),
+            "Image Id",
+            "tsproj.ensure-io-task-image should reject ImageId=0 before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.SetTaskAffinity(state.ProjectInfo.ProjectPath, new SetTaskAffinityRequest("MissingTask", "#x1")),
+            "MissingTask",
             "tsproj.set-task-affinity should reject a missing task on a real TwinCAT project.");
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.SetTaskAffinity(state.ProjectInfo.ProjectPath, new SetTaskAffinityRequest(RuntimeTaskName, string.Empty)),
+            "Affinity",
+            "tsproj.set-task-affinity should reject an empty affinity before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.BindInstanceToTask(state.ProjectInfo.ProjectPath, new BindInstanceToTaskRequest("MissingInstance", "#x02010010", 1, 1_000_000)),
+            "MissingInstance",
             "tsproj.bind-instance-task should reject a missing instance on a real TwinCAT project.");
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.BindInstanceToTask(state.ProjectInfo.ProjectPath, new BindInstanceToTaskRequest(state.PrimaryInstanceName, "not-a-hex-object-id", 1, 1_000_000)),
+            "not-a-hex-object-id",
+            "tsproj.bind-instance-task should reject malformed ObjectId before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.EnsureParameterValue(state.ProjectInfo.ProjectPath, new EnsureParameterValueRequest("MissingInstance", "Parameter.bad", ValueText: "1")),
+            "MissingInstance",
             "tsproj.ensure-parameter should reject a missing instance on a real TwinCAT project.");
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureParameterValue(state.ProjectInfo.ProjectPath, new EnsureParameterValueRequest(state.PrimaryInstanceName, string.Empty, ValueText: "1")),
+            "ParameterName",
+            "tsproj.ensure-parameter should reject an empty parameter name before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.ApplyInstanceParameterPlan(state.ProjectInfo.ProjectPath, new ApplyInstanceParameterPlanRequest(
+            [
+                new InstanceParameterMutation(state.PrimaryInstanceName, "Parameter.shouldNotPersist", ValueText: "1"),
+                new InstanceParameterMutation("MissingInstance", "Parameter.bad", ValueText: "2"),
+            ])),
+            "MissingInstance",
+            "tsproj.apply-instance-parameter-plan should be atomic on validation failure and not persist earlier batch items.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.EnsureDataPointerValue(state.ProjectInfo.ProjectPath, new EnsureDataPointerValueRequest(state.PrimaryInstanceName, "BadPointer", "#x01010020", AreaNo: -1, ByteOffset: 0, ByteSize: 4)),
+            "AreaNo",
             "tsproj.ensure-data-pointer should reject an invalid AreaNo on a real TwinCAT project.");
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureDataPointerValue(state.ProjectInfo.ProjectPath, new EnsureDataPointerValueRequest(state.PrimaryInstanceName, "BadPointer", "#x01010020", AreaNo: 0, ByteOffset: 0, ByteSize: 0)),
+            "ByteSize",
+            "tsproj.ensure-data-pointer should reject ByteSize=0 before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.ApplyInstanceDataPointerPlan(state.ProjectInfo.ProjectPath, new ApplyInstanceDataPointerPlanRequest(
+            [
+                new InstanceDataPointerMutation(state.PrimaryInstanceName, "ShouldNotPersist", state.AuxInstanceObjectId, AreaNo: 1, ByteOffset: 0, ByteSize: 4),
+                new InstanceDataPointerMutation(state.PrimaryInstanceName, "BadPointer", state.AuxInstanceObjectId, AreaNo: 1, ByteOffset: -1, ByteSize: 4),
+            ])),
+            "ByteOffset",
+            "tsproj.apply-instance-data-pointer-plan should validate the whole batch before persisting any item.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.ApplyInstanceInterfacePointerPlan(state.ProjectInfo.ProjectPath, new ApplyInstanceInterfacePointerPlanRequest(
+            [
+                new InstanceInterfacePointerMutation(state.PrimaryInstanceName, "ShouldNotPersist", state.RuntimeTaskObjectId),
+                new InstanceInterfacePointerMutation(state.PrimaryInstanceName, "BadPointer", string.Empty),
+            ])),
+            "ObjectId",
+            "tsproj.apply-instance-interface-pointer-plan should validate the whole batch before persisting any item.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.EnsureMappingLink(state.ProjectInfo.ProjectPath, new EnsureMappingLinkRequest(string.Empty, "TIPC^Missing", "A", "B")),
+            "OwnerAName",
             "tsproj.ensure-mapping-link should reject an empty mapping owner on a real TwinCAT project.");
-        ExpectThrows<InvalidOperationException>(
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureMappingLink(state.ProjectInfo.ProjectPath, new EnsureMappingLinkRequest("TIXC^Missing", "TIPC^Missing", string.Empty, "B")),
+            "VarA",
+            "tsproj.ensure-mapping-link should reject an empty VarA before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.UpsertElement(state.ProjectInfo.ProjectPath, new TsprojElementUpsertRequest(
+                [new TsprojPathSegment("Project"), new TsprojPathSegment(string.Empty)],
+                "ShouldNotPersist")),
+            "ElementName",
+            "tsproj.upsert-element should reject an empty parent path segment before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.UpsertElement(state.ProjectInfo.ProjectPath, new TsprojElementUpsertRequest(
+                [new TsprojPathSegment("Project"), new TsprojPathSegment("System")],
+                "IntegrationMetadata",
+                ChildValues: [new TsprojXmlChildValue("RuntimeTask", "ConflictingValue")],
+                ConflictPolicy: TsprojMutationConflictPolicy.FailOnConflict)),
+            "conflict",
+            "tsproj.upsert-element should fail on configured conflict policy without changing existing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.UpsertFragment(state.ProjectInfo.ProjectPath, new TsprojFragmentUpsertRequest(
+                [new TsprojPathSegment("Project"), new TsprojPathSegment("System")],
+                "<IntegrationFragment><Name>RuntimeAdsProbe</Name><Symbols>ConflictingValue</Symbols></IntegrationFragment>",
+                MatchElementName: "IntegrationFragment",
+                MatchNameValue: "RuntimeAdsProbe",
+                ConflictPolicy: TsprojMutationConflictPolicy.FailOnConflict)),
+            "Fragment conflict",
+            "tsproj.upsert-fragment should fail on configured conflict policy without changing existing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.MergeNamedElementFragment(state.ProjectInfo.ProjectPath, new MergeNamedElementFragmentRequest("DataTypes", "<DataType><Name>MissingEvidence</Name></DataType>")),
+            "FragmentSource",
             "tsproj.merge-fragment should require evidence metadata on a real TwinCAT project.");
 
         TwinCatNodeInfo fallbackExport = state.Engineering.ExportTreeItemXml(
@@ -321,6 +429,7 @@ internal static class OrderedTwinCatScenarioTests
         TwinCatTsprojMutationService mutation = new();
         AdsValidationService ads = new();
         IReadOnlyList<AdsReadSymbolRequest> symbols = BuildRequiredAdsSymbols(config);
+        AdsReadSymbolRequest deterministicSingleRead = DeterministicSingleAdsReadSymbol();
 
         mutation.EnsureDataPointerValue(
             state.ProjectInfo.ProjectPath,
@@ -386,7 +495,7 @@ internal static class OrderedTwinCatScenarioTests
             TwinCatAtomicSteps.AdsRead(
                 "atomic-ads-read",
                 ads,
-                new AdsReadRequest(config.AmsNetId, config.AdsPort, symbols[0].SymbolPath, symbols[0].DataType, AutoReconnect: true)),
+                new AdsReadRequest(config.AmsNetId, config.AdsPort, deterministicSingleRead.SymbolPath, deterministicSingleRead.DataType, AutoReconnect: true)),
             TwinCatAtomicSteps.AdsReadSymbols(
                 "atomic-ads-read-symbols",
                 ads,
@@ -396,6 +505,7 @@ internal static class OrderedTwinCatScenarioTests
         AutomationRunSummary summary = new AutomationPipelineRunner().RunAsync(context, steps).GetAwaiter().GetResult();
         IntegrationAssertEx.True(summary.Succeeded, "Atomic wrappers should execute against the real TwinCAT scenario project.");
         IntegrationAssertEx.True(File.Exists(Path.Combine(state.EvidenceDir, "atomic-runtime-task.xml")), "Atomic export should write a real ProduceXml artifact.");
+        AssertAtomicRunSummary(summary, context.EvidenceRoot, config.AdsPort, state);
         AssertAtomicWrapperMutationSemantics(state);
 
         state.Cover("TwinCatAtomicSteps.SaveAll");
@@ -513,6 +623,13 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.True(
             unknown.Count == 0,
             "Coverage matrix contains unknown kind(s): " + string.Join(", ", unknown));
+        foreach (StepCoverageSpec spec in StepCoverageMatrix.All)
+        {
+            IntegrationAssertEx.True(!string.IsNullOrWhiteSpace(spec.Scenario), $"Coverage matrix scenario must be non-empty for {spec.Kind}.");
+            IntegrationAssertEx.True(!string.IsNullOrWhiteSpace(spec.Dependencies), $"Coverage matrix dependencies must be non-empty for {spec.Kind}.");
+            IntegrationAssertEx.True(spec.PassCriteria.Length >= 40, $"Coverage matrix pass criteria should be specific for {spec.Kind}.");
+            AssertPassCriteriaIsEvidenceBased(spec);
+        }
 
         string readmePath = FindIntegrationReadme();
         string text = File.ReadAllText(readmePath);
@@ -520,6 +637,35 @@ internal static class OrderedTwinCatScenarioTests
         {
             IntegrationAssertEx.Contains("`" + kind + "`", text, $"README should document step kind {kind}.");
         }
+    }
+
+    private static void AssertPassCriteriaIsEvidenceBased(StepCoverageSpec spec)
+    {
+        string[] evidenceTerms =
+        [
+            ".tsproj",
+            ".vcxproj",
+            ".tmc",
+            ".compileinfo",
+            "ADS",
+            "archive",
+            "ObjectId",
+            "reopen",
+            "export",
+            "XML",
+            "exact",
+            "stale",
+            "metadata",
+            "output",
+            "state",
+            "exception",
+            "evidence",
+        ];
+
+        bool hasEvidenceTerm = evidenceTerms.Any(term => spec.PassCriteria.Contains(term, StringComparison.OrdinalIgnoreCase));
+        IntegrationAssertEx.True(
+            hasEvidenceTerm,
+            $"Coverage matrix pass criteria for {spec.Kind} should name a concrete artifact, runtime proof, stale cleanup check, exact value, or failure evidence.");
     }
 
     private static string FindIntegrationReadme()
@@ -744,12 +890,12 @@ internal static class OrderedTwinCatScenarioTests
             coveredInterfaces.Add("TwinCatTsprojMutationService.DeriveNextObjectId");
             WriteRuntimePou(info.SolutionDirectory, plcProjectName, ParseObjectIdForAds(runtimeTaskObjectId), ParseObjectIdForAds(auxTaskObjectId));
 
-            engineering.ExportTreeItemXml(
+            AssertNonFallbackExport(engineering.ExportTreeItemXml(
                 session,
-                new ExportTreeItemXmlRequest("TIXC^" + CppProjectName, Path.Combine(evidenceDir, "cpp.before-file-mutation.xml"), Recursive: true));
-            engineering.ExportTreeItemXml(
+                new ExportTreeItemXmlRequest("TIXC^" + CppProjectName, Path.Combine(evidenceDir, "cpp.before-file-mutation.xml"), Recursive: true)));
+            AssertNonFallbackExport(engineering.ExportTreeItemXml(
                 session,
-                new ExportTreeItemXmlRequest("TIRT", Path.Combine(evidenceDir, "tasks.before-file-mutation.xml"), Recursive: true));
+                new ExportTreeItemXmlRequest("TIRT", Path.Combine(evidenceDir, "tasks.before-file-mutation.xml"), Recursive: true)));
             AssertTreeExport(Path.Combine(evidenceDir, "cpp.before-file-mutation.xml"), "ItCpp", "TIXC^ItCpp", "C++ Project");
             AssertTreeExport(Path.Combine(evidenceDir, "tasks.before-file-mutation.xml"), "任务", "TIRT", null);
             coveredInterfaces.Add("TwinCatEngineeringService.ExportTreeItemXml");
@@ -796,12 +942,12 @@ internal static class OrderedTwinCatScenarioTests
             engineering.OpenTwinCatSolution(session, new OpenTwinCatSolutionRequest(info.SolutionPath, info.ProjectPath));
             coveredInterfaces.Add("TwinCatEngineeringService.OpenTwinCatSolution");
             coveredStepKinds.Add("engineering.open-xae-solution");
-            engineering.ExportTreeItemXml(
+            AssertNonFallbackExport(engineering.ExportTreeItemXml(
                 session,
-                new ExportTreeItemXmlRequest("TIXC^" + CppProjectName, Path.Combine(evidenceDir, "cpp.after-file-mutation.xml"), Recursive: true));
-            engineering.ExportTreeItemXml(
+                new ExportTreeItemXmlRequest("TIXC^" + CppProjectName, Path.Combine(evidenceDir, "cpp.after-file-mutation.xml"), Recursive: true)));
+            AssertNonFallbackExport(engineering.ExportTreeItemXml(
                 session,
-                new ExportTreeItemXmlRequest("TIRT", Path.Combine(evidenceDir, "tasks.after-file-mutation.xml"), Recursive: true));
+                new ExportTreeItemXmlRequest("TIRT", Path.Combine(evidenceDir, "tasks.after-file-mutation.xml"), Recursive: true)));
             AssertTreeExport(Path.Combine(evidenceDir, "cpp.after-file-mutation.xml"), "ItCpp", "TIXC^ItCpp", "C++ Project");
             AssertTreeExport(Path.Combine(evidenceDir, "tasks.after-file-mutation.xml"), "任务", "TIRT", null);
 
@@ -1318,6 +1464,86 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.False(document.Descendants().Any(element => element.Name.LocalName == "UnrestoredVarLinks"), "Atomic ClearUnrestoredVarLinks wrapper should leave no UnrestoredVarLinks blocks.");
     }
 
+    private static void AssertAtomicRunSummary(AutomationRunSummary summary, string evidenceRoot, int expectedAdsPort, ScenarioState state)
+    {
+        string[] expectedStepIds =
+        [
+            "atomic-save",
+            "atomic-export-task",
+            "atomic-ensure-parameter",
+            "atomic-clear-unrestored-var-links",
+            "atomic-clear-aux-data-pointers",
+            "atomic-restore-aux-data-pointers",
+            "atomic-upsert-element",
+            "atomic-upsert-fragment",
+            "atomic-apply-mutation-plan",
+            "atomic-ads-scan",
+            "atomic-ads-read",
+            "atomic-ads-read-symbols",
+        ];
+
+        IntegrationAssertEx.Equal(expectedStepIds.Length, summary.Steps.Count, "Atomic run should execute every declared wrapper step exactly once.");
+        for (int index = 0; index < expectedStepIds.Length; index++)
+        {
+            StepExecutionRecord record = summary.Steps[index];
+            IntegrationAssertEx.Equal(expectedStepIds[index], record.StepId, "Atomic step order should be deterministic.");
+            IntegrationAssertEx.True(
+                record.Status is StepExecutionStatus.Succeeded or StepExecutionStatus.Indirect,
+                $"Atomic step {record.StepId} should not fail or skip. Status={record.Status}.");
+        }
+
+        StepExecutionRecord export = RequireStepRecord(summary, "atomic-export-task");
+        IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, export.Status, "Atomic export should report Succeeded.");
+        IntegrationAssertEx.Equal("engineering.export-tree-item-xml", export.Contract.Kind, "Atomic export should use the public export step contract.");
+        IntegrationAssertEx.True(export.Evidence.Any(item => item.Kind == "xml" && File.Exists(item.Path)), "Atomic export should attach a real XML evidence artifact.");
+        AssertTreeExport(Path.Combine(state.EvidenceDir, "atomic-runtime-task.xml"), RuntimeTaskName, "TIRT^" + RuntimeTaskName, null);
+
+        StepExecutionRecord clearPointers = RequireStepRecord(summary, "atomic-clear-aux-data-pointers");
+        IntegrationAssertEx.Equal(StepExecutionStatus.Indirect, clearPointers.Status, "Atomic tsproj clear wrapper should report Indirect.");
+        IntegrationAssertEx.Contains(state.AuxInstanceName, clearPointers.Summary, "Atomic clear pointer summary should name the instance it changed.");
+
+        StepExecutionRecord adsScan = RequireStepRecord(summary, "atomic-ads-scan");
+        IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, adsScan.Status, "Atomic ADS scan should report Succeeded.");
+        string succeededPorts = RequireOutput(adsScan, "succeededPorts");
+        IntegrationAssertEx.True(
+            succeededPorts.Split(';', StringSplitOptions.RemoveEmptyEntries).Contains(expectedAdsPort.ToString(CultureInfo.InvariantCulture)),
+            $"Atomic ADS scan should include configured runtime port {expectedAdsPort} in succeededPorts.");
+
+        StepExecutionRecord adsRead = RequireStepRecord(summary, "atomic-ads-read");
+        IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, adsRead.Status, "Atomic ADS read should report Succeeded.");
+        uint atomicSingleValue = uint.Parse(RequireOutput(adsRead, "value"), CultureInfo.InvariantCulture);
+        IntegrationAssertEx.Equal(RuntimeConfiguredParameter, atomicSingleValue, "Atomic ADS single read should return the deterministic configured parameter.");
+
+        StepExecutionRecord adsReadSymbols = RequireStepRecord(summary, "atomic-ads-read-symbols");
+        IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, adsReadSymbols.Status, "Atomic ADS batch read should report Succeeded.");
+        IntegrationAssertEx.Equal("0", RequireOutput(adsReadSymbols, "failedCount"), "Atomic ADS batch read should have no failed symbols.");
+        AdsReadSymbolResult[] atomicSymbols = System.Text.Json.JsonSerializer.Deserialize<AdsReadSymbolResult[]>(RequireOutput(adsReadSymbols, "valuesJson"))
+            ?? throw new InvalidOperationException("Atomic ADS batch valuesJson should deserialize.");
+        AssertRuntimeSemanticSymbols(new AdsReadSymbolsResult(state.Config.AmsNetId, expectedAdsPort, atomicSymbols), state);
+
+        IntegrationAssertEx.True(File.Exists(Path.Combine(evidenceRoot, "run-summary.json")), "Atomic pipeline should write run-summary.json evidence.");
+        IntegrationAssertEx.True(File.Exists(Path.Combine(evidenceRoot, "step-results.csv")), "Atomic pipeline should write step-results.csv evidence.");
+        string csv = File.ReadAllText(Path.Combine(evidenceRoot, "step-results.csv"));
+        foreach (string stepId in expectedStepIds)
+        {
+            IntegrationAssertEx.Contains(stepId, csv, $"Atomic step-results.csv should include {stepId}.");
+        }
+    }
+
+    private static StepExecutionRecord RequireStepRecord(AutomationRunSummary summary, string stepId) =>
+        summary.Steps.FirstOrDefault(step => string.Equals(step.StepId, stepId, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException($"Atomic run summary did not contain step '{stepId}'.");
+
+    private static string RequireOutput(StepExecutionRecord record, string name)
+    {
+        if (!record.Outputs.TryGetValue(name, out string? value) || string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"Step '{record.StepId}' should expose non-empty output '{name}'.");
+        }
+
+        return value;
+    }
+
     private static void AssertCreatedCppProject(TwinCatNodeInfo cppProject, string solutionDirectory)
     {
         string expectedProjectPath = Path.Combine(solutionDirectory, CppProjectName, CppProjectName + ".vcxproj");
@@ -1420,6 +1646,11 @@ internal static class OrderedTwinCatScenarioTests
         }
     }
 
+    private static void AssertNonFallbackExport(TwinCatNodeInfo export)
+    {
+        IntegrationAssertEx.False(export.UsedFallback, $"Tree export for {export.TreeItemPath} returned fallback content. See {export.FilePath}.");
+    }
+
     private static void AssertFallbackExport(string exportPath, string expectedTreePath)
     {
         IntegrationAssertEx.True(File.Exists(exportPath), $"Fallback export artifact is missing: {exportPath}");
@@ -1440,11 +1671,27 @@ internal static class OrderedTwinCatScenarioTests
 
         using ZipArchive archive = ZipFile.OpenRead(archivePath);
         IntegrationAssertEx.True(archive.Entries.Count > 0, "Activation archive should contain entries.");
+        IntegrationAssertEx.False(archive.Entries.Any(entry => entry.Length == 0), "Activation archive entries should not be empty placeholders.");
         bool hasConfigOrSummary = archive.Entries.Any(entry =>
             entry.FullName.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
             entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
             entry.FullName.Contains("activation-summary", StringComparison.OrdinalIgnoreCase));
         IntegrationAssertEx.True(hasConfigOrSummary, "Activation archive should contain a solution/configuration entry or fallback activation summary.");
+        ZipArchiveEntry? interpretableEntry = archive.Entries.FirstOrDefault(entry =>
+                entry.FullName.Contains("activation-summary", StringComparison.OrdinalIgnoreCase)) ??
+            archive.Entries.FirstOrDefault(entry =>
+                entry.FullName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+                entry.FullName.EndsWith(".sln", StringComparison.OrdinalIgnoreCase));
+        IntegrationAssertEx.True(interpretableEntry is not null, "Activation archive should contain an interpretable summary, XML, or solution entry.");
+        using Stream stream = interpretableEntry!.Open();
+        using StreamReader reader = new(stream);
+        string entryText = reader.ReadToEnd();
+        IntegrationAssertEx.True(
+            entryText.Contains("activation", StringComparison.OrdinalIgnoreCase) ||
+            entryText.Contains("TwinCAT", StringComparison.OrdinalIgnoreCase) ||
+            entryText.Contains("<Tc", StringComparison.OrdinalIgnoreCase) ||
+            entryText.Contains("Microsoft Visual Studio Solution File", StringComparison.OrdinalIgnoreCase),
+            "Activation archive should contain interpretable configuration or activation-summary content.");
     }
 
     private static void AssertRuntimeProjectBuildOutputs(ScenarioState state)
@@ -1453,8 +1700,12 @@ internal static class OrderedTwinCatScenarioTests
         string plcProjectDirectory = Path.Combine(Path.GetDirectoryName(runtimeProjectPath)!, state.PlcProjectName);
         IntegrationAssertEx.True(File.Exists(runtimeProjectPath), $"Runtime .tsproj should exist: {runtimeProjectPath}");
         IntegrationAssertEx.True(Directory.Exists(plcProjectDirectory), $"Runtime PLC project directory should exist: {plcProjectDirectory}");
-        IntegrationAssertEx.True(Directory.GetFiles(plcProjectDirectory, "*.tmc", SearchOption.AllDirectories).Length > 0, "Runtime build should produce a PLC .tmc.");
-        IntegrationAssertEx.True(Directory.GetFiles(plcProjectDirectory, "*.compileinfo", SearchOption.AllDirectories).Length > 0, "Runtime build should produce PLC compile info.");
+        string[] tmcFiles = Directory.GetFiles(plcProjectDirectory, "*.tmc", SearchOption.AllDirectories);
+        string[] compileInfoFiles = Directory.GetFiles(plcProjectDirectory, "*.compileinfo", SearchOption.AllDirectories);
+        IntegrationAssertEx.True(tmcFiles.Length > 0, "Runtime build should produce a PLC .tmc.");
+        IntegrationAssertEx.True(compileInfoFiles.Length > 0, "Runtime build should produce PLC compile info.");
+        IntegrationAssertEx.True(tmcFiles.All(path => new FileInfo(path).Length > 100), "Runtime PLC .tmc files should be non-empty generated outputs.");
+        IntegrationAssertEx.True(compileInfoFiles.All(path => new FileInfo(path).Length > 100), "Runtime PLC compileinfo files should be non-empty generated outputs.");
     }
 
     private static void AssertAdsScanHitRuntimePort(AdsPortScanResult scan, int expectedPort)
@@ -1631,6 +1882,34 @@ END_IF;
         throw new InvalidOperationException(message + " Expected exception was not thrown.");
     }
 
+    private static void ExpectTsprojUnchangedOnFailure(
+        string tsprojPath,
+        Action action,
+        string expectedErrorFragment,
+        string message)
+    {
+        string before = File.ReadAllText(tsprojPath);
+        try
+        {
+            action();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            string after = File.ReadAllText(tsprojPath);
+            IntegrationAssertEx.Equal(before, after, message + " The .tsproj must not be modified on failure.");
+            IntegrationAssertEx.True(
+                ex.Message.Contains(expectedErrorFragment, StringComparison.OrdinalIgnoreCase),
+                message + $" Error message should include '{expectedErrorFragment}', got '{ex.Message}'.");
+            return;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{message} Expected InvalidOperationException/FormatException, got {ex.GetType().Name}: {ex.Message}", ex);
+        }
+
+        throw new InvalidOperationException(message + " Expected exception was not thrown.");
+    }
+
     private static IReadOnlyList<AdsReadSymbolRequest> ParseAdsSymbols(IEnumerable<string> rawSymbols)
     {
         List<AdsReadSymbolRequest> parsed = [];
@@ -1682,6 +1961,9 @@ END_IF;
         new("MAIN.bParameterTransformOk", AdsReadDataType.Boolean),
         new("MAIN.nMismatchCount", AdsReadDataType.UInt32),
     ];
+
+    private static AdsReadSymbolRequest DeterministicSingleAdsReadSymbol() =>
+        new("MAIN.nConfiguredParameter", AdsReadDataType.UInt32);
 
     private static void AssertRuntimeSemanticSymbols(AdsReadSymbolsResult batch, ScenarioState state)
     {
