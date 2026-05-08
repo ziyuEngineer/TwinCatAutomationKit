@@ -131,7 +131,7 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 - 确保 activation 已执行。
 - `validation.ads-scan` 扫描配置 ADS ports。
 - `validation.ads-read-symbols` batch 读取配置 symbols 加测试强制 symbols。
-- `validation.ads-read` 再对同一 symbol surface 的第一个 symbol 做 single read。
+- `validation.ads-read` 再对固定 deterministic symbol 做 single read。
 
 严格通过判定：
 
@@ -147,6 +147,7 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 | `MAIN.nConvertedParameter` | `37052`，即 `(12345 * 3) + 17`，证明 PLC 运行时执行了确定转换。 |
 | `MAIN.RuntimeTaskOidProbe` | 等于真实 TwinCAT `RuntimeTask` ObjectId 的数值形式。 |
 | `MAIN.AuxTaskOidProbe` | 等于真实 TwinCAT `AuxTask` ObjectId 的数值形式。 |
+| `MAIN.RuntimeOnlyInitSymbolProbe` | 等于真实 TwinCAT `AuxTask` ObjectId 的数值形式；PLC 源码里默认是 `0`，只能由 `.tsproj` `InitSymbol` 注入。 |
 | `MAIN.nParameterChecksum` | `nConvertedParameter + RuntimeTaskOidProbe + AuxTaskOidProbe + 99`。 |
 | `MAIN.bParameterTransformOk` | `true`，PLC 内部总判定成立。 |
 | `MAIN.nMismatchCount` | `0`，runtime settle 后没有检测到 mismatch。 |
@@ -191,6 +192,8 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 - pipeline evidence 必须写出 `run-summary.json` 和 `step-results.csv`，CSV 中必须包含每个 wrapper step id。
 - 覆盖集合中登记 `TwinCatAtomicSteps.*` interface，防止只测 service method 不测 wrapper path。
 
+当前 atomic wrapper scenario 只执行 `SaveAll`、`ExportTreeItemXml`、若干 `.tsproj` wrapper 和 ADS wrapper。`LaunchVisualStudio`、`CreateXaeSolution`、`BuildSolution`、`ActivateConfiguration` 等 wrapper 仍由 service-level 场景证明底层行为，尚未作为 wrapper path 单独执行；后续如果要求 wrapper 全量闭环，应补一个独立 wrapper scenario。
+
 ### 7. `real scenario covers every open service interface`
 
 目的：这是 coverage contract，不验证业务行为本身，而是防止新增 public step 后忘记补测试和文档。
@@ -213,6 +216,7 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 
 - 创建类接口：文件、目录、project node、module metadata 必须存在。
 - 创建类接口还要检查返回值：tree path、display name、file path、ObjectId 必须和请求/工程结构对应。
+- `engineering.create-module` / `engineering.add-module-instance` 当前默认允许 offline fallback；测试必须明确断言 fallback artifact 能被 full-project reopen/export 接受。严格 COM wizard/CreateChild 路径需要 `AllowOfflineFallback=false` 的单独 evidence，不能由 fallback 结果替代。
 - reopen 类接口：XAE 必须能重新打开 mutated solution。
 - export 类接口：正常路径不允许 `UsedFallback=true`；`ProduceXml` evidence 必须写出，并解析为 `TreeItem` XML，检查 `ItemName`、`PathName`、subtype 和非空内容。
 - 只有 missing-node boundary case 允许 fallback；fallback artifact 必须包含失败 tree path 和 TwinCAT lookup failure，而不能伪装成成功 export。
@@ -226,9 +230,9 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 
 - task：priority、cycle、AMS port、affinity、image、vars group。
 - instance：ObjectId、context、manual config、task binding。
-- PLC：project path、AmsPort、ReloadTmc、instance metadata、vars、TaskPouOid、InitSymbols。
+- PLC：project path、AmsPort、ReloadTmc、instance metadata、`CLSID/ClassFactory`、vars、TaskPouOid、InitSymbols。
 - C++ pointer/parameter/data pointer：container 和具体 value 都要对。
-- mapping：四条 deterministic link 存在，link 数量也要匹配。
+- mapping：四条 deterministic link 存在，`OwnerA` / `OwnerB` / `VarA` / `VarB` 都要匹配，link 数量也要匹配。
 - generic mutation：目标 parent、fragment marker、evidence 字段要存在。
 - task/PLC vars：不仅检查 symbol 名，还检查 group type、area、type、bit offset、external address 和数量。
 - generic mutation：不仅检查 element 名，还检查 child value 和 attributes；`DataTypes` 必须是精确集合。
@@ -240,11 +244,11 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 - 再用专用 API 重建目标结构。
 - 最后在 XAE reopen 之后重新读取 `.tsproj`，同时断言 stale 值不存在、目标值精确存在、关键集合数量正确。
 
-XAE reopen/export 是第二层 proof：证明 XML 不只是“写得像”，还被真实 TwinCAT 接受。
+XAE reopen/export 是第二层 proof：证明 XML 不只是“写得像”，还被真实 TwinCAT 接受。`InitSymbols` 还必须有 runtime-only ADS symbol proof：PLC 源码默认值为 `0`，只有 `.tsproj` `InitSymbol` 生效时才会读回目标 ObjectId。
 
 对于失败路径，测试采用 fail-before-write 策略：
 
-- 非法空名、非法 ObjectId、非法 count/size/offset、generic XML conflict policy 等都必须在真实 `.tsproj` 上失败。
+- 非法空名、非法 ObjectId、非法 count/size/offset、错误 section fragment、generic XML conflict policy 等都必须在真实 `.tsproj` 上失败。
 - 失败消息必须点名错误字段或错误值。
 - 失败前后 `.tsproj` 文件内容必须完全一致。
 - batch API 不能部分成功；任何一项非法时，本批次前面合法项也不能落盘。
@@ -282,16 +286,16 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `engineering.create-xae-solution` | `ordered-step-surface` | `.sln` 和 `.tsproj` 由 Beckhoff XAE template 创建。 |
 | `engineering.create-cpp-project` | `ordered-step-surface` | 返回的 tree path/display name/file path 精确匹配；`.vcxproj` 有 `ProjectGuid`，`.tmc` 存在。 |
 | `engineering.create-plc-project` | `ordered-step-surface` | `.tsproj` 可解析 PLC project/instance，测试写入 `MAIN.TcPOU` payload，并由 build/ADS 证明 payload 加载。 |
-| `engineering.create-module` | `ordered-step-surface` | 辅助 module 写入 header/source/TMC metadata，返回名包含请求名，reopen/export 后被真实 TwinCAT 接受。 |
-| `engineering.add-module-instance` | `ordered-step-surface` | primary/aux instance 返回可解析 ObjectId，DisplayName 包含请求名，并在 `.tsproj` 中按精确 ObjectId 存在。 |
+| `engineering.create-module` | `ordered-step-surface` | 辅助 module 写入 header/source/TMC metadata，返回名包含请求名；允许 fallback 时必须被 full-project reopen/export 接受，不冒充严格 wizard proof。 |
+| `engineering.add-module-instance` | `ordered-step-surface` | primary/aux instance 返回可解析 ObjectId，DisplayName 包含请求名，并在 `.tsproj` 中按精确 ObjectId 存在；允许 fallback 时必须被 full-project reopen/export 接受。 |
 | `engineering.ensure-task` | `ordered-step-surface` | 两个 task 返回可解析 ObjectId，并在 reopen 后精确匹配 priority、cycle、AMS port、affinity、layout。 |
 | `engineering.export-tree-item-xml` | `ordered-step-surface` | `TIXC` 和 `TIRT` 导出 XML evidence，并解析校验 `TreeItem`、`ItemName`、`PathName`、subtype。 |
 | `engineering.save-all` | `ordered-step-surface` | close/reopen 后 `.tsproj` mutation 仍存在，build 可继续。 |
 | `engineering.close-visual-studio` | `ordered-step-surface` | 关闭 VS 后执行 `.tsproj` file mutation；runner 结束统一清理 session。 |
 | `engineering.open-xae-solution` | `ordered-step-surface` | file mutation 后 XAE reopen 不抛异常，且 export XML 成功。 |
-| `engineering.build-solution` | `ordered-step-surface` | PLC-only runtime clone 上 `BuildCurrentSolution` 返回成功和 `LastBuildInfo=0`，并生成 PLC `.tmc` / `.compileinfo`。 |
+| `engineering.build-solution` | `ordered-step-surface` | PLC-only runtime clone 上 `BuildCurrentSolution` 返回成功和 `LastBuildInfo=0`，并生成或更新非空 PLC `.tmc` / `.compileinfo`。 |
 | `engineering.activate-configuration` | `activation-ads-runtime` | `EnableActivation=true` 时 activation 成功，记录 command/restart，并写出非空 `activated.tszip`。 |
-| `signing.set-license` | `signing-metadata` | 写入唯一 `TcSign` PropertyGroup，`TcSignTwinCat=false`、license name 精确匹配、无 password、无重复节点。 |
+| `signing.set-license` | `signing-metadata` | 先污染 stale signing password/duplicate metadata，再写入唯一 `TcSign` PropertyGroup，`TcSignTwinCat=false`、license name 精确匹配、无 password、无重复节点。 |
 | `signing.grant-certificate` | `excluded-signing-certificate` | 默认排除；需要本机真实 TwinCAT OEM signing certificate/private key。 |
 | `signing.sign-twincat-binary` | `excluded-signing-certificate` | 默认排除；没有真实 OEM signing credential 时不伪造通过。 |
 | `signing.verify-twincat-binary` | `excluded-signing-certificate` | 默认排除；`sign` 被排除时没有可验证的真实签名产物。 |
@@ -312,7 +316,7 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.clear-plc-init-symbols` | `ordered-step-surface` | 先写入 stale `InitSymbol`，clear 后重建 ObjectId-derived symbols，reopen 后 stale symbol 不存在。 |
 | `tsproj.clear-plc-task-pou-oids` | `ordered-step-surface` | 先写入 priority 99 stale `TaskPouOid`，clear 后重建 runtime `TaskPouOid`，reopen 后 stale entry 不存在。 |
 | `tsproj.ensure-task-pou-oid` | `ordered-step-surface` | PLC `TaskPouOid` 写入 runtime task priority/ObjectId。 |
-| `tsproj.ensure-init-symbol` | `ordered-step-surface` | `MAIN.RuntimeTaskOidProbe` 和 `MAIN.AuxTaskOidProbe` 写入 ObjectId-derived data，并由 XML 断言验证。 |
+| `tsproj.ensure-init-symbol` | `ordered-step-surface` | `MAIN.RuntimeTaskOidProbe`、`MAIN.AuxTaskOidProbe` 和 runtime-only probe 写入 ObjectId-derived data；XML 断言 `Type/GUID/AreaNo/Data`，ADS 证明 runtime-only value 由 `InitSymbol` 注入。 |
 | `tsproj.replace-data-types-section` | `ordered-step-surface` | 先替换成 stale `ST_StaleReplacedType`，再替换为 deterministic test types，reopen 后 stale type 不存在。 |
 | `tsproj.replace-system-settings-section` | `ordered-step-surface` | 先替换成带 `StaleFragment` 的 settings，再替换为目标 settings，reopen 后 stale marker 不存在且 `Tasks` 保留。 |
 | `tsproj.replace-project-io-section` | `ordered-step-surface` | 先替换成 stale `Io`，再替换为 JSON-owned 非关键 runtime section，reopen 后 stale Io 不存在。 |
@@ -331,10 +335,10 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.ensure-mapping-link` | `ordered-step-surface` | 四条 PLC/C++ process-image mapping links 写入，完整工程 XAE reopen/export 接受。 |
 | `tsproj.upsert-element` | `ordered-step-surface` | generic element upsert 在 `Project/System` 下写入 metadata，并精确校验 attributes/child values。 |
 | `tsproj.upsert-fragment` | `ordered-step-surface` | generic fragment upsert 在 `Project/System` 下写入 named fragment，并精确校验 child values。 |
-| `tsproj.apply-mutation-plan` | `ordered-step-surface` | batch generic mutation 写入 element 和 fragment，并精确校验 batch child values。 |
+| `tsproj.apply-mutation-plan` | `ordered-step-surface` | batch generic mutation 写入 element 和 fragment，并精确校验 batch child values；负例证明 valid+invalid batch 不 partial write。 |
 | `tsproj.merge-fragment` | `ordered-step-surface` | 在唯一 `DataTypes` parent 下执行带 evidence 字段的 named fragment merge，最终 `DataTypes` 集合必须精确。 |
 | `validation.ads-scan` | `activation-ads-runtime` | `EnableAdsRead=true` 时配置的 runtime port 必须可读 ADS state，不接受仅其他 port 成功。 |
-| `validation.ads-read-symbols` | `activation-ads-runtime` | batch ADS read 必须精确读回配置参数、转换结果、task ObjectId probes、checksum、transform-ok flag 和 mismatch count。 |
+| `validation.ads-read-symbols` | `activation-ads-runtime` | batch ADS read 必须精确读回配置参数、转换结果、task ObjectId probes、runtime-only InitSymbol probe、checksum、transform-ok flag 和 mismatch count。 |
 | `validation.ads-read` | `activation-ads-runtime` | 固定读取 `MAIN.nConfiguredParameter` 并精确返回 `12345`，证明 batch 与 single read 两条 ADS path 都读到同一确定 runtime 语义。 |
 
 ## 维护规则

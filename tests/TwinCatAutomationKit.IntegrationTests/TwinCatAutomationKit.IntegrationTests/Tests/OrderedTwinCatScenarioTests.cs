@@ -42,6 +42,7 @@ internal static class OrderedTwinCatScenarioTests
     private const string AtomicPointerName = "AtomicWrapperPointer";
     private const string AtomicMetadataName = "AtomicStepWrappersExecuteAgainstRealProject";
     private const string AtomicFragmentName = "DirectWrapperProbe";
+    private const string InitSymbolRuntimeOnlyName = "MAIN.RuntimeOnlyInitSymbolProbe";
 
     private static ScenarioState? cachedState;
     private static Exception? cachedScenarioFailure;
@@ -116,6 +117,7 @@ internal static class OrderedTwinCatScenarioTests
         state.Cover("TwinCatSigningService.ResolveToolPath");
         IntegrationAssertEx.True(File.Exists(toolPath), $"TcSignTool should resolve to an existing file: {toolPath}");
 
+        PolluteSigningMetadata(state.CppProjectFilePath);
         TwinCatSigningLicenseResult result = signing.SetLicense(new SetTwinCatSigningLicenseRequest(
             state.CppProjectFilePath,
             config.SigningLicenseName,
@@ -330,6 +332,11 @@ internal static class OrderedTwinCatScenarioTests
             "tsproj.ensure-data-pointer should reject ByteSize=0 before writing XML.");
         ExpectTsprojUnchangedOnFailure(
             state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureDataPointerValue(state.ProjectInfo.ProjectPath, new EnsureDataPointerValueRequest(state.PrimaryInstanceName, "BadPointer", "not-a-hex-object-id", AreaNo: 0, ByteOffset: 0, ByteSize: 4)),
+            "not-a-hex-object-id",
+            "tsproj.ensure-data-pointer should reject malformed ObjectId before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
             () => mutation.ApplyInstanceDataPointerPlan(state.ProjectInfo.ProjectPath, new ApplyInstanceDataPointerPlanRequest(
             [
                 new InstanceDataPointerMutation(state.PrimaryInstanceName, "ShouldNotPersist", state.AuxInstanceObjectId, AreaNo: 1, ByteOffset: 0, ByteSize: 4),
@@ -382,6 +389,31 @@ internal static class OrderedTwinCatScenarioTests
                 ConflictPolicy: TsprojMutationConflictPolicy.FailOnConflict)),
             "Fragment conflict",
             "tsproj.upsert-fragment should fail on configured conflict policy without changing existing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.ApplyMutationPlan(state.ProjectInfo.ProjectPath, new ApplyTsprojMutationPlanRequest(
+                ElementUpserts:
+                [
+                    new TsprojElementUpsertRequest(
+                        [new TsprojPathSegment("Project"), new TsprojPathSegment("System")],
+                        "ShouldNotPersistBatchMetadata",
+                        ChildValues: [new TsprojXmlChildValue("Result", "first-item")]),
+                    new TsprojElementUpsertRequest(
+                        [new TsprojPathSegment("Project"), new TsprojPathSegment(string.Empty)],
+                        "BadBatchMetadata")
+                ])),
+            "ElementName",
+            "tsproj.apply-mutation-plan should not partially persist earlier generic batch items.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.ReplaceDataTypesSection(state.ProjectInfo.ProjectPath, new ReplaceDataTypesSectionRequest("<WrongSection></WrongSection>")),
+            "DataTypes",
+            "tsproj.replace-data-types-section should reject a non-DataTypes fragment before writing XML.");
+        ExpectTsprojUnchangedOnFailure(
+            state.ProjectInfo.ProjectPath,
+            () => mutation.EnsureInitSymbol(state.ProjectInfo.ProjectPath, new EnsureInitSymbolRequest(state.PlcProjectName, state.PlcInstanceName, "MAIN.BadInitSymbol", state.RuntimeTaskObjectId, AreaNo: string.Empty)),
+            "AreaNo",
+            "tsproj.ensure-init-symbol should reject an empty AreaNo before writing XML.");
         ExpectTsprojUnchangedOnFailure(
             state.ProjectInfo.ProjectPath,
             () => mutation.MergeNamedElementFragment(state.ProjectInfo.ProjectPath, new MergeNamedElementFragmentRequest("DataTypes", "<DataType><Name>MissingEvidence</Name></DataType>")),
@@ -976,6 +1008,7 @@ internal static class OrderedTwinCatScenarioTests
             EnsurePlcOnlyRuntimeSession(state);
 
             TraceScenarioStage("build PLC-only runtime solution");
+            state.BuildStartedUtc = DateTime.UtcNow;
             BuildResult build = engineering.BuildCurrentSolution(state.RequireSession(), new BuildSolutionRequest(TimeoutMs: 600_000));
             coveredInterfaces.Add("TwinCatEngineeringService.BuildCurrentSolution");
             coveredStepKinds.Add("engineering.build-solution");
@@ -1087,6 +1120,7 @@ internal static class OrderedTwinCatScenarioTests
         mutation.EnsureTaskPouOid(projectPath, new EnsureTaskPouOidRequest(plcProjectName, plcInstanceName, RuntimeTaskPriority, runtimeTaskObjectId));
         mutation.EnsureInitSymbol(projectPath, new EnsureInitSymbolRequest(plcProjectName, plcInstanceName, "MAIN.RuntimeTaskOidProbe", runtimeTaskObjectId));
         mutation.EnsureInitSymbol(projectPath, new EnsureInitSymbolRequest(plcProjectName, plcInstanceName, "MAIN.AuxTaskOidProbe", auxTaskObjectId));
+        mutation.EnsureInitSymbol(projectPath, new EnsureInitSymbolRequest(plcProjectName, plcInstanceName, InitSymbolRuntimeOnlyName, auxTaskObjectId));
 
         mutation.ReplaceDataTypesSection(projectPath, new ReplaceDataTypesSectionRequest(
             "<DataTypes><DataType><Name>" + StaleDataTypeName + "</Name></DataType></DataTypes>"));
@@ -1346,6 +1380,14 @@ internal static class OrderedTwinCatScenarioTests
             element.Name.LocalName == "Image" &&
             string.Equals(GetChildValue(element, "Name"), StaleTaskImageName, StringComparison.OrdinalIgnoreCase)),
             "ClearTaskLayout should remove stale task Image before rebuild.");
+        XElement runtimeImage = runtimeTask.Elements().FirstOrDefault(element => element.Name.LocalName == "Image")
+            ?? throw new InvalidOperationException("RuntimeTask image is missing.");
+        AssertAttribute(runtimeImage, "Id", "1", "RuntimeTask image Id should be deterministic.");
+        AssertAttribute(runtimeImage, "AddrType", "1", "RuntimeTask image address type should be deterministic.");
+        AssertAttribute(runtimeImage, "ImageType", "1", "RuntimeTask image type should be deterministic.");
+        AssertAttribute(runtimeImage, "SizeIn", "40", "RuntimeTask image input size should be deterministic.");
+        AssertAttribute(runtimeImage, "SizeOut", "10", "RuntimeTask image output size should be deterministic.");
+        IntegrationAssertEx.Equal("Image", GetChildValue(runtimeImage, "Name"), "RuntimeTask image name should be deterministic.");
 
         XElement primaryInstance = RequireNamedElement(document, "Instance", state.PrimaryInstanceName);
         XElement auxInstance = RequireNamedElement(document, "Instance", state.AuxInstanceName);
@@ -1369,6 +1411,8 @@ internal static class OrderedTwinCatScenarioTests
         AssertNamedValue(primaryInstance, "DataPointerValues", "DataIn", "ByteSize", "4");
         AssertNamedValue(primaryInstance, "DataPointerValues", "DataOut", "OTCID", state.AuxInstanceObjectId);
         AssertNamedValue(primaryInstance, "DataPointerValues", "DataOut", "AreaNo", "1");
+        AssertNamedValue(primaryInstance, "DataPointerValues", "DataOut", "ByteOffs", "0");
+        AssertNamedValue(primaryInstance, "DataPointerValues", "DataOut", "ByteSize", "4");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataIn", "OTCID", state.PrimaryInstanceObjectId);
         AssertNamedValue(auxInstance, "DataPointerValues", "DataIn", "AreaNo", "2");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataIn", "ByteOffs", "0");
@@ -1389,6 +1433,9 @@ internal static class OrderedTwinCatScenarioTests
         AssertAttribute(plcInstance, "TcSmClass", "PlcTask", "PLC instance class should be deterministic.");
         AssertAttribute(plcInstance, "TmcPath", state.PlcProjectName + "\\" + state.PlcProjectName + ".tmc", "PLC instance TMC path should be deterministic.");
         AssertAttribute(plcInstance, "KeepUnrestoredLinks", "2", "PLC instance unrestored link policy should be explicit.");
+        XElement clsid = plcInstance.Elements().FirstOrDefault(element => element.Name.LocalName == "CLSID")
+            ?? throw new InvalidOperationException("PLC instance CLSID metadata is missing.");
+        AssertAttribute(clsid, "ClassFactory", state.PlcProjectName, "PLC instance CLSID ClassFactory should be deterministic.");
         AssertPlcVarsGroupCount(plcInstance, "PlcTask Outputs", 1);
         AssertPlcVarsGroupCount(plcInstance, "PlcTask Inputs", 1);
         AssertPlcVarsGroup(plcInstance, "PlcTask Outputs", "2", "1", "1", expectedVarCount: 2);
@@ -1413,6 +1460,7 @@ internal static class OrderedTwinCatScenarioTests
         state.Cover("TwinCatTsprojMutationService.ConvertObjectIdToInitSymbolData");
         AssertInitSymbol(plcInstance, "MAIN.RuntimeTaskOidProbe", runtimeInitData);
         AssertInitSymbol(plcInstance, "MAIN.AuxTaskOidProbe", auxInitData);
+        AssertInitSymbol(plcInstance, InitSymbolRuntimeOnlyName, auxInitData);
         AssertInitSymbolAbsent(plcInstance, StaleInitSymbolName);
 
         AssertDataTypes(document, "ST_IntegrationProcessData", "ST_IntegrationAdsProbe", "ST_IntegrationMergedAudit");
@@ -1427,10 +1475,30 @@ internal static class OrderedTwinCatScenarioTests
         AssertElementNameAbsent(document, "Io", StaleIoName);
         AssertElementNameAbsent(document, StaleFragmentName, null);
 
-        AssertMapping(document, "PlcTask Outputs^MAIN.nSeed", "Input^DataIn");
-        AssertMapping(document, "Output^DataOut", "PlcTask Inputs^MAIN.nStage1");
-        AssertMapping(document, "PlcTask Outputs^MAIN.nStage2Seed", "Input^DataIn");
-        AssertMapping(document, "Output^DataOut", "PlcTask Inputs^MAIN.nStage2");
+        AssertMapping(
+            document,
+            "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+            "TIXC^" + CppProjectName + "^" + state.PrimaryInstanceName,
+            "PlcTask Outputs^MAIN.nSeed",
+            "Input^DataIn");
+        AssertMapping(
+            document,
+            "TIXC^" + CppProjectName + "^" + state.PrimaryInstanceName,
+            "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+            "Output^DataOut",
+            "PlcTask Inputs^MAIN.nStage1");
+        AssertMapping(
+            document,
+            "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+            "TIXC^" + CppProjectName + "^" + state.AuxInstanceName,
+            "PlcTask Outputs^MAIN.nStage2Seed",
+            "Input^DataIn");
+        AssertMapping(
+            document,
+            "TIXC^" + CppProjectName + "^" + state.AuxInstanceName,
+            "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+            "Output^DataOut",
+            "PlcTask Inputs^MAIN.nStage2");
         IntegrationAssertEx.Equal(4, document.Descendants().Count(element => element.Name.LocalName == "Link"), "Expected exactly four deterministic mapping links.");
         IntegrationAssertEx.False(document.Descendants().Any(element =>
             element.Name.LocalName == "Link" &&
@@ -1706,6 +1774,12 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.True(compileInfoFiles.Length > 0, "Runtime build should produce PLC compile info.");
         IntegrationAssertEx.True(tmcFiles.All(path => new FileInfo(path).Length > 100), "Runtime PLC .tmc files should be non-empty generated outputs.");
         IntegrationAssertEx.True(compileInfoFiles.All(path => new FileInfo(path).Length > 100), "Runtime PLC compileinfo files should be non-empty generated outputs.");
+        if (state.BuildStartedUtc != default)
+        {
+            IntegrationAssertEx.True(
+                tmcFiles.Concat(compileInfoFiles).Any(path => File.GetLastWriteTimeUtc(path) >= state.BuildStartedUtc.AddSeconds(-2)),
+                "Runtime build should produce or update at least one PLC artifact during this test run.");
+        }
     }
 
     private static void AssertAdsScanHitRuntimePort(AdsPortScanResult scan, int expectedPort)
@@ -1731,8 +1805,26 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.Equal("false", GetChildValue(group, "TcSignTwinCat"), "Signing metadata should explicitly disable signing.");
         IntegrationAssertEx.Equal(expectedLicenseName, GetChildValue(group, "TcSignTwinCatCertName"), "Signing metadata should contain the configured license name.");
         IntegrationAssertEx.False(group.Elements().Any(element => element.Name.LocalName == "TcSignTwinCatCertPW"), "Signing metadata should not write a password in the non-certificate test.");
+        IntegrationAssertEx.False(document.Descendants().Any(element =>
+            element.Name.LocalName == "TcSignTwinCatCertPW" ||
+            string.Equals(element.Value, "stale-secret-password", StringComparison.Ordinal)),
+            "Signing metadata should remove stale password values from all TcSign nodes.");
         IntegrationAssertEx.Equal(1, document.Descendants().Count(element => element.Name.LocalName == "TcSignTwinCat"), "Signing metadata should not leave duplicate TcSignTwinCat nodes.");
         IntegrationAssertEx.Equal(1, document.Descendants().Count(element => element.Name.LocalName == "TcSignTwinCatCertName"), "Signing metadata should not leave duplicate certificate-name nodes.");
+    }
+
+    private static void PolluteSigningMetadata(string projectFilePath)
+    {
+        XDocument document = XDocument.Load(projectFilePath);
+        XElement root = document.Root
+            ?? throw new InvalidOperationException("C++ project XML root is missing before signing metadata pollution.");
+        XNamespace ns = root.GetDefaultNamespace();
+        root.Add(
+            new XElement(ns + "PropertyGroup",
+                new XElement(ns + "TcSignTwinCat", "true"),
+                new XElement(ns + "TcSignTwinCatCertName", "stale-license"),
+                new XElement(ns + "TcSignTwinCatCertPW", "stale-secret-password")));
+        document.Save(projectFilePath);
     }
 
     private static void WriteRuntimePou(string solutionDirectory, string plcProjectName) =>
@@ -1775,6 +1867,7 @@ VAR
     bMismatchActive : BOOL;
     RuntimeTaskOidProbe : UDINT := __RUNTIME_TASK_OBJECT_ID__;
     AuxTaskOidProbe : UDINT := __AUX_TASK_OBJECT_ID__;
+    RuntimeOnlyInitSymbolProbe : UDINT;
     nConfiguredParameter : UDINT := 12345;
     nConvertedParameter : UDINT;
     nParameterChecksum : UDINT;
@@ -1957,6 +2050,7 @@ END_IF;
         new("MAIN.nConvertedParameter", AdsReadDataType.UInt32),
         new("MAIN.RuntimeTaskOidProbe", AdsReadDataType.UInt32),
         new("MAIN.AuxTaskOidProbe", AdsReadDataType.UInt32),
+        new(InitSymbolRuntimeOnlyName, AdsReadDataType.UInt32),
         new("MAIN.nParameterChecksum", AdsReadDataType.UInt32),
         new("MAIN.bParameterTransformOk", AdsReadDataType.Boolean),
         new("MAIN.nMismatchCount", AdsReadDataType.UInt32),
@@ -1974,6 +2068,7 @@ END_IF;
         uint convertedParameter = RequireUInt32(values, "MAIN.nConvertedParameter");
         uint runtimeTaskOid = RequireUInt32(values, "MAIN.RuntimeTaskOidProbe");
         uint auxTaskOid = RequireUInt32(values, "MAIN.AuxTaskOidProbe");
+        uint runtimeOnlyInitSymbol = RequireUInt32(values, InitSymbolRuntimeOnlyName);
         uint checksum = RequireUInt32(values, "MAIN.nParameterChecksum");
         bool transformOk = RequireBoolean(values, "MAIN.bParameterTransformOk");
         uint mismatchCount = RequireUInt32(values, "MAIN.nMismatchCount");
@@ -1988,6 +2083,7 @@ END_IF;
         IntegrationAssertEx.Equal(expectedConvertedParameter, convertedParameter, "ADS should read back the deterministic runtime parameter conversion.");
         IntegrationAssertEx.Equal(expectedRuntimeTaskOid, runtimeTaskOid, "ADS should read back the RuntimeTask ObjectId injected through InitSymbols.");
         IntegrationAssertEx.Equal(expectedAuxTaskOid, auxTaskOid, "ADS should read back the AuxTask ObjectId injected through InitSymbols.");
+        IntegrationAssertEx.Equal(expectedAuxTaskOid, runtimeOnlyInitSymbol, "ADS should read back a symbol whose runtime value can only come from .tsproj InitSymbols.");
         IntegrationAssertEx.Equal(expectedChecksum, checksum, "ADS should read back the checksum combining configured parameter and injected task ObjectIds.");
         IntegrationAssertEx.True(transformOk, "MAIN.bParameterTransformOk should prove the runtime conversion and InitSymbol values matched.");
         IntegrationAssertEx.Equal(0u, mismatchCount, "MAIN.nMismatchCount should stay 0 after runtime settles.");
@@ -2271,6 +2367,11 @@ END_IF;
             element.Name.LocalName == "InitSymbol" &&
             string.Equals(GetChildValue(element, "Name"), symbolName, StringComparison.OrdinalIgnoreCase))
             ?? throw new InvalidOperationException($"InitSymbol '{symbolName}' is missing.");
+        XElement type = symbol.Elements().FirstOrDefault(element => element.Name.LocalName == "Type")
+            ?? throw new InvalidOperationException($"InitSymbol '{symbolName}' Type is missing.");
+        IntegrationAssertEx.Equal("OTCID", type.Value, $"InitSymbol '{symbolName}' Type should be OTCID.");
+        IntegrationAssertEx.Equal("{18071995-0000-0000-0000-00000000000F}", GetAttributeValue(type, "GUID"), $"InitSymbol '{symbolName}' Type GUID should match the TwinCAT OTCID type.");
+        IntegrationAssertEx.Equal("#x00000003", GetChildValue(symbol, "AreaNo"), $"InitSymbol '{symbolName}' AreaNo should match.");
         IntegrationAssertEx.Equal(expectedData, GetChildValue(symbol, "Data"), $"InitSymbol '{symbolName}' Data should use the ObjectId byte encoding.");
     }
 
@@ -2320,13 +2421,17 @@ END_IF;
         IntegrationAssertEx.False(found, $"XML element '{elementName}' with Name='{nameValue ?? "<any>"}' should have been removed.");
     }
 
-    private static void AssertMapping(XDocument document, string varA, string varB)
+    private static void AssertMapping(XDocument document, string ownerAName, string ownerBName, string varA, string varB)
     {
         bool found = document.Descendants().Any(element =>
             element.Name.LocalName == "Link" &&
+            element.Parent?.Name.LocalName == "OwnerB" &&
+            element.Parent.Parent?.Name.LocalName == "OwnerA" &&
+            string.Equals(GetAttributeValue(element.Parent, "Name"), ownerBName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(GetAttributeValue(element.Parent.Parent, "Name"), ownerAName, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(GetAttributeValue(element, "VarA"), varA, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(GetAttributeValue(element, "VarB"), varB, StringComparison.OrdinalIgnoreCase));
-        IntegrationAssertEx.True(found, $"Expected mapping link {varA} -> {varB}.");
+        IntegrationAssertEx.True(found, $"Expected mapping link {ownerAName}:{varA} -> {ownerBName}:{varB}.");
     }
 
     internal sealed class ScenarioState(
@@ -2373,6 +2478,7 @@ END_IF;
         public string? RuntimeSolutionPath { get; set; }
         public string? RuntimeProjectPath { get; set; }
         public string? RuntimeEvidenceDir { get; set; }
+        public DateTime BuildStartedUtc { get; set; }
 
         public void Cover(string id) => coveredInterfaces.Add(id);
 

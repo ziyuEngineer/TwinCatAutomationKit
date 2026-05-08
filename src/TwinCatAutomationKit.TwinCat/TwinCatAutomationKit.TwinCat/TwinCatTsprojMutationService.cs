@@ -1426,6 +1426,8 @@ public sealed class TwinCatTsprojMutationService
             throw new InvalidOperationException("Data pointer ObjectId must not be empty.");
         }
 
+        ValidateObjectIdText(request.ObjectId, nameof(request.ObjectId));
+
         if (request.AreaNo < 0)
         {
             throw new InvalidOperationException("Data pointer AreaNo must be greater than or equal to 0.");
