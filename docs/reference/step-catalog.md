@@ -19,6 +19,12 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 
 | Category | Step kind | Summary |
 |---|---|---|
+| `cpp` | `cpp.create-project-item` | Creates a C++/header/resource/None project item, optionally creating the physical file and registering it in .vcxproj and .filters. |
+| `cpp` | `cpp.remove-project-item` | Removes a C++ project item registration and optional filter entry and physical file. |
+| `cpp` | `cpp.set-item-definition-property` | Sets a C++ ItemDefinitionGroup tool property such as ClCompile include paths or Link dependencies. |
+| `cpp` | `cpp.set-project-item-metadata` | Sets file-level MSBuild metadata for a C++ project item, such as PrecompiledHeader or ExcludedFromBuild. |
+| `cpp` | `cpp.set-project-property` | Sets a project-level or configuration-level MSBuild property in a C++ .vcxproj. |
+| `cpp` | `cpp.write-project-item-content` | Writes source/resource/text payload into an existing C++ project item file and returns its content hash. |
 | `engineering` | `engineering.activate-configuration` | Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback. |
 | `engineering` | `engineering.add-module-instance` | Adds a TcCOM instance from a project TMC by resolving the module GUID and calling CreateChild on the project node. |
 | `engineering` | `engineering.build-solution` | Runs SolutionBuild.Build and waits until the DTE build state reaches done. |
@@ -26,11 +32,14 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `engineering` | `engineering.create-cpp-project` | Creates a TwinCAT C++ project beneath TIXC using a specified Beckhoff wizard id. |
 | `engineering` | `engineering.create-module` | Creates a module class inside a TwinCAT C++ project via the module wizard id. |
 | `engineering` | `engineering.create-plc-project` | Creates a PLC project using the first compatible Beckhoff PLC template available on the machine. |
+| `engineering` | `engineering.create-vs-cpp-project` | Creates a regular Visual Studio C++ project inside the current solution, such as an AdsClient console application. |
 | `engineering` | `engineering.create-xae-solution` | Creates a fresh TwinCAT XAE solution and binds the automation session to its ITcSysManager root. |
+| `engineering` | `engineering.ensure-solution-project-dependency` | Ensures a Visual Studio solution ProjectDependencies entry exists from one project to another. |
 | `engineering` | `engineering.ensure-task` | Creates or reuses a Task under TIRT and normalizes its timing, priority, and AMS port. |
 | `engineering` | `engineering.export-tree-item-xml` | Exports ProduceXml output for any TwinCAT tree node as durable evidence. |
 | `engineering` | `engineering.launch-visual-studio` | Starts a new DTE session that later steps can use for XAE creation, build, and activation. |
 | `engineering` | `engineering.open-xae-solution` | Re-opens an existing TwinCAT solution and re-attaches COM references after .tsproj file mutations. |
+| `engineering` | `engineering.publish-modules` | Invokes the TwinCAT C++ project PublishModules method so updated module source regenerates TMC metadata. |
 | `engineering` | `engineering.save-all` | Flushes pending Visual Studio document and solution changes before build, reopen, or .tsproj file mutation steps. |
 | `signing` | `signing.grant-certificate` | Grants or removes local TcSignTool authorization for a TwinCAT signing certificate. |
 | `signing` | `signing.set-license` | Writes TwinCAT C++ project signing license settings used by MSBuild/TcSignTool. |
@@ -79,6 +88,138 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `validation` | `validation.ads-scan` | Scans ADS target ports and reports whether the runtime endpoint is reachable before symbol-level ADS reads are attempted. |
 
 ## 详细接口 / Step Details
+
+### `cpp.create-project-item`
+
+- 方法 Method: `TwinCatEngineeringService.CreateCppProjectItem`
+- 分类 Category: `cpp`
+- 功能摘要 Summary: Creates a C++/header/resource/None project item, optionally creating the physical file and registering it in .vcxproj and .filters.
+- 前置条件 Preconditions:
+  - The target C++ .vcxproj must already exist.
+  - RelativePath must be inside the project directory.
+- 输入 Inputs:
+  - `ProjectName` (`string`): C++ project name.
+  - `RelativePath` (`string`): Path relative to the C++ project directory.
+  - `ItemType` (`CppProjectItemType`): MSBuild item type, or Infer from extension. Example: `Infer`.
+  - `Filter` (`string`): Optional .vcxproj.filters display filter.
+  - `AddToProject` (`bool`): Whether to register the item in .vcxproj. Example: `true`.
+  - `CreatePhysicalFile` (`bool`): Whether to create an empty physical file. Example: `true`.
+  - `ConflictPolicy` (`ProjectItemConflictPolicy`): FailIfExists, KeepExisting, or ReplaceProjectRegistration. Example: `FailIfExists`.
+  - `AllowMsBuildFallback` (`bool`): Allow typed MSBuild XML update when DTE ProjectItems is not stable. Example: `true`.
+- 输出 Outputs:
+  - `projectFilePath` (`string`): Updated .vcxproj path.
+  - `filePath` (`string`): Physical project item path.
+  - `itemType` (`CppProjectItemType`): Resolved MSBuild item type.
+  - `addedToProject` (`bool`): Whether .vcxproj registration exists after the step.
+- 验证 Verification:
+  - Verify the file exists, .vcxproj contains the requested Include, .filters contains filter mapping when requested, and reopen shows the item.
+
+### `cpp.remove-project-item`
+
+- 方法 Method: `TwinCatEngineeringService.RemoveCppProjectItem`
+- 分类 Category: `cpp`
+- 功能摘要 Summary: Removes a C++ project item registration and optional filter entry and physical file.
+- 前置条件 Preconditions:
+  - The target C++ .vcxproj must already exist.
+- 输入 Inputs:
+  - `ProjectName` (`string`): C++ project name.
+  - `RelativePath` (`string`): Path relative to the C++ project directory.
+  - `ItemType` (`CppProjectItemType`): MSBuild item type, or Infer from extension. Example: `Infer`.
+  - `DeletePhysicalFile` (`bool`): Whether to delete the physical file. Example: `true`.
+  - `RemoveFilterEntry` (`bool`): Whether to remove the .vcxproj.filters item mapping. Example: `true`.
+  - `IgnoreMissing` (`bool`): Treat missing item/file as success. Example: `false`.
+- 输出 Outputs:
+  - `removedFromProject` (`bool`): Whether .vcxproj registration was removed.
+  - `deletedFile` (`bool`): Whether a physical file was deleted.
+- 验证 Verification:
+  - Verify .vcxproj/.filters no longer reference the item and the file is absent when DeletePhysicalFile=true.
+
+### `cpp.set-item-definition-property`
+
+- 方法 Method: `TwinCatEngineeringService.SetCppItemDefinitionProperty`
+- 分类 Category: `cpp`
+- 功能摘要 Summary: Sets a C++ ItemDefinitionGroup tool property such as ClCompile include paths or Link dependencies.
+- 前置条件 Preconditions:
+  - The target C++ .vcxproj must already exist.
+- 输入 Inputs:
+  - `ProjectName` (`string`): C++ project name.
+  - `ToolName` (`string`): Tool element name such as ClCompile, Link, ResourceCompile, or PostBuildEvent.
+  - `PropertyName` (`string`): Tool property element name.
+  - `Value` (`string`): Property value, including inherited macros when required.
+  - `Condition` (`string`): Optional ItemDefinitionGroup Condition.
+- 输出 Outputs:
+  - `projectFilePath` (`string`): Updated .vcxproj path.
+  - `toolName` (`string`): Tool element name.
+  - `propertyName` (`string`): Property element name.
+  - `condition` (`string`): Applied condition, if any.
+- 验证 Verification:
+  - Inspect ItemDefinitionGroup XML and confirm build logs use include paths, library paths, language standard, dependencies, or events.
+
+### `cpp.set-project-item-metadata`
+
+- 方法 Method: `TwinCatEngineeringService.SetCppProjectItemMetadata`
+- 分类 Category: `cpp`
+- 功能摘要 Summary: Sets file-level MSBuild metadata for a C++ project item, such as PrecompiledHeader or ExcludedFromBuild.
+- 前置条件 Preconditions:
+  - The target item must already be registered in .vcxproj.
+- 输入 Inputs:
+  - `ProjectName` (`string`): C++ project name.
+  - `RelativePath` (`string`): Path relative to the C++ project directory.
+  - `ItemType` (`CppProjectItemType`): MSBuild item type containing the item.
+  - `MetadataName` (`string`): Metadata element name.
+  - `Value` (`string`): Metadata value.
+  - `Condition` (`string`): Optional item Condition.
+- 输出 Outputs:
+  - `projectFilePath` (`string`): Updated .vcxproj path.
+  - `relativePath` (`string`): Item Include path.
+  - `metadataName` (`string`): Metadata element name.
+  - `condition` (`string`): Applied condition, if any.
+- 验证 Verification:
+  - Inspect the item XML and confirm build output respects include/exclude or PCH metadata.
+
+### `cpp.set-project-property`
+
+- 方法 Method: `TwinCatEngineeringService.SetCppProjectProperty`
+- 分类 Category: `cpp`
+- 功能摘要 Summary: Sets a project-level or configuration-level MSBuild property in a C++ .vcxproj.
+- 前置条件 Preconditions:
+  - The target C++ .vcxproj must already exist.
+- 输入 Inputs:
+  - `ProjectName` (`string`): C++ project name.
+  - `PropertyName` (`string`): MSBuild property element name.
+  - `Value` (`string`): Property value.
+  - `Condition` (`string`): Optional PropertyGroup Condition.
+  - `PropertyGroupLabel` (`string`): Optional PropertyGroup Label, such as Globals or Configuration.
+- 输出 Outputs:
+  - `projectFilePath` (`string`): Updated .vcxproj path.
+  - `propertyName` (`string`): Property name.
+  - `condition` (`string`): Applied condition, if any.
+- 验证 Verification:
+  - Inspect .vcxproj and confirm the PropertyGroup contains the requested value; build log should reflect build-affecting properties.
+
+### `cpp.write-project-item-content`
+
+- 方法 Method: `TwinCatEngineeringService.WriteCppProjectItemContent`
+- 分类 Category: `cpp`
+- 功能摘要 Summary: Writes source/resource/text payload into an existing C++ project item file and returns its content hash.
+- 前置条件 Preconditions:
+  - The target C++ project must already exist.
+  - ContentText and ContentFile are mutually exclusive.
+- 输入 Inputs:
+  - `ProjectName` (`string`): C++ project name.
+  - `RelativePath` (`string`): Path relative to the C++ project directory.
+  - `ContentText` (`string`): Inline source payload.
+  - `ContentFile` (`string`): Payload file path produced by the JSON plan files[] section or another explicit caller-owned payload.
+  - `Encoding` (`string`): utf-8, utf-8-bom, or ascii. Example: `utf-8`.
+  - `NewLine` (`string`): preserve, crlf, or lf. Example: `preserve`.
+  - `WritePolicy` (`ProjectItemWritePolicy`): FailIfMissing, FailIfNonEmpty, or Overwrite. Example: `Overwrite`.
+  - `RequireProjectRegistration` (`bool`): Fail if .vcxproj does not already register the item. Example: `false`.
+- 输出 Outputs:
+  - `filePath` (`string`): Written file path.
+  - `sha256` (`string`): SHA256 hash of the written bytes.
+  - `bytesWritten` (`long`): Number of bytes written.
+- 验证 Verification:
+  - Compare the output hash with the payload and reopen the item in VS.
 
 ### `engineering.activate-configuration`
 
@@ -192,6 +333,28 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 验证 Verification:
   - Check that the PLC node exists and that the .plcproj file was created.
 
+### `engineering.create-vs-cpp-project`
+
+- 方法 Method: `TwinCatEngineeringService.CreateVisualStudioCppProject`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Creates a regular Visual Studio C++ project inside the current solution, such as an AdsClient console application.
+- 前置条件 Preconditions:
+  - A solution must already be loaded in the DTE session.
+  - An installed Visual Studio C++ template or explicit AllowTemplateFallback=true is required.
+- 输入 Inputs:
+  - `ProjectName` (`string`): Visual Studio C++ project name.
+  - `ProjectDirectory` (`string`): Optional project directory. Defaults to SolutionDirectory/ProjectName.
+  - `TemplateKind` (`string`): Template semantic kind. P0 supports ConsoleApplication. Example: `ConsoleApplication`.
+  - `CandidateTemplatePaths` (`string[]`): Optional explicit template paths for machine-specific VS installs.
+  - `PlatformToolset` (`string`): Optional PlatformToolset value such as v143.
+  - `AllowTemplateFallback` (`bool`): Whether the service may synthesize a minimal MSBuild C++ project if no installed template is found. Example: `false`.
+- 输出 Outputs:
+  - `projectFilePath` (`string`): Absolute .vcxproj path.
+  - `projectGuid` (`string`): Project GUID registered in the .vcxproj/.sln.
+  - `projectDirectory` (`string`): Absolute project directory.
+- 验证 Verification:
+  - Verify the .sln contains the project, .vcxproj exists, DTE can find it by name, and reopen keeps it visible.
+
 ### `engineering.create-xae-solution`
 
 - 方法 Method: `TwinCatEngineeringService.CreateTwinCatSolution`
@@ -209,6 +372,22 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `projectPath` (`string`): Absolute .tsproj path.
 - 验证 Verification:
   - Check that the .sln and .tsproj files exist and that ITcSysManager can be retrieved.
+
+### `engineering.ensure-solution-project-dependency`
+
+- 方法 Method: `TwinCatEngineeringService.EnsureSolutionProjectDependency`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Ensures a Visual Studio solution ProjectDependencies entry exists from one project to another.
+- 前置条件 Preconditions:
+  - Both projects must already exist in the saved .sln.
+- 输入 Inputs:
+  - `ProjectName` (`string`): Dependent project name.
+  - `DependsOnProjectName` (`string`): Project that must build before ProjectName.
+- 输出 Outputs:
+  - `projectGuid` (`string`): Dependent project GUID.
+  - `dependsOnProjectGuid` (`string`): Dependency project GUID.
+- 验证 Verification:
+  - Inspect .sln ProjectSection(ProjectDependencies) and reload the solution to confirm the dependency remains.
 
 ### `engineering.ensure-task`
 
@@ -279,6 +458,24 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `projectPath` (`string`): Absolute .tsproj path.
 - 验证 Verification:
   - Confirm that the project can be found again in the DTE solution model.
+
+### `engineering.publish-modules`
+
+- 方法 Method: `TwinCatEngineeringService.PublishModules`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Invokes the TwinCAT C++ project PublishModules method so updated module source regenerates TMC metadata.
+- 前置条件 Preconditions:
+  - The target TwinCAT C++ project must exist and expose PublishModules in its tree XML.
+- 输入 Inputs:
+  - `ProjectName` (`string`): TwinCAT C++ project name.
+  - `PostPublishDelayMs` (`int`): Delay after triggering PublishModules. Example: `5000`.
+  - `WaitForUpdatedTmcTimeoutMs` (`int`): Maximum wait for the project .tmc timestamp to update. Example: `30000`.
+- 输出 Outputs:
+  - `updatedTmcPath` (`string`): Project .tmc path observed after publish.
+  - `succeeded` (`bool`): Whether publish left a readable project .tmc.
+  - `updated` (`bool`): Whether the .tmc timestamp or content changed during this publish call.
+- 验证 Verification:
+  - Check that the .tmc is readable and contains the expected module classes; updated=true means the timestamp or content changed during this publish call.
 
 ### `engineering.save-all`
 

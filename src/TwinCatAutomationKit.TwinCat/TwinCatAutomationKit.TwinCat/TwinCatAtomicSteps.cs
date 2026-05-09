@@ -113,6 +113,51 @@ public static class TwinCatAtomicSteps
                     });
             });
 
+    public static IAutomationStep CreateVisualStudioCppProject(
+        string stepId,
+        TwinCatEngineeringService service,
+        CreateVisualStudioCppProjectRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Create Visual Studio C++ Project",
+            "engineering.create-vs-cpp-project",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                VisualStudioCppProjectInfo info = service.CreateVisualStudioCppProject(session, request);
+                return StepExecutionOutcome.Success(
+                    "Visual Studio C++ project created.",
+                    new Dictionary<string, string?>
+                    {
+                        ["projectFilePath"] = info.ProjectFilePath,
+                        ["projectGuid"] = info.ProjectGuid,
+                        ["projectDirectory"] = info.ProjectDirectory
+                    });
+            });
+
+    public static IAutomationStep EnsureSolutionProjectDependency(
+        string stepId,
+        TwinCatEngineeringService service,
+        EnsureSolutionProjectDependencyRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Ensure Solution Project Dependency",
+            "engineering.ensure-solution-project-dependency",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                SolutionProjectDependencyResult result = service.EnsureSolutionProjectDependency(session, request);
+                return StepExecutionOutcome.Success(
+                    "Solution project dependency ensured.",
+                    new Dictionary<string, string?>
+                    {
+                        ["projectGuid"] = result.ProjectGuid,
+                        ["dependsOnProjectGuid"] = result.DependsOnProjectGuid
+                    });
+            });
+
     public static IAutomationStep CreatePlcProject(
         string stepId,
         TwinCatEngineeringService service,
@@ -154,6 +199,31 @@ public static class TwinCatAtomicSteps
                     {
                         ["moduleCppPath"] = info.FilePath
                     });
+            });
+
+    public static IAutomationStep PublishModules(
+        string stepId,
+        TwinCatEngineeringService service,
+        PublishModulesRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Publish Modules",
+            "engineering.publish-modules",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                PublishModulesResult result = service.PublishModules(session, request);
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(
+                        "TwinCAT C++ modules published.",
+                        new Dictionary<string, string?>
+                        {
+                            ["updatedTmcPath"] = result.UpdatedTmcPath,
+                            ["succeeded"] = result.Succeeded ? "true" : "false",
+                            ["updated"] = result.Updated ? "true" : "false"
+                        })
+                    : StepExecutionOutcome.Failed("TwinCAT C++ module publish did not produce a readable project TMC.");
             });
 
     public static IAutomationStep AddModuleInstance(
@@ -283,6 +353,147 @@ public static class TwinCatAtomicSteps
                         "Solution build succeeded.",
                         new Dictionary<string, string?> { ["lastBuildInfo"] = result.LastBuildInfo.ToString() })
                     : StepExecutionOutcome.Failed($"Solution build failed. LastBuildInfo={result.LastBuildInfo}.");
+            });
+
+    public static IAutomationStep CreateCppProjectItem(
+        string stepId,
+        TwinCatEngineeringService service,
+        CreateCppProjectItemRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Create C++ Project Item",
+            "cpp.create-project-item",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                CppProjectItemResult result = service.CreateCppProjectItem(session, request);
+                return StepExecutionOutcome.Success(
+                    "C++ project item created.",
+                    new Dictionary<string, string?>
+                    {
+                        ["projectFilePath"] = result.ProjectFilePath,
+                        ["filePath"] = result.FilePath,
+                        ["itemType"] = result.ItemType.ToString(),
+                        ["filter"] = result.Filter,
+                        ["addedToProject"] = result.AddedToProject ? "true" : "false"
+                    });
+            });
+
+    public static IAutomationStep WriteCppProjectItemContent(
+        string stepId,
+        TwinCatEngineeringService service,
+        WriteCppProjectItemContentRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Write C++ Project Item Content",
+            "cpp.write-project-item-content",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                CppProjectItemContentResult result = service.WriteCppProjectItemContent(session, request);
+                return StepExecutionOutcome.Success(
+                    "C++ project item content written.",
+                    new Dictionary<string, string?>
+                    {
+                        ["filePath"] = result.FilePath,
+                        ["sha256"] = result.Sha256,
+                        ["bytesWritten"] = result.BytesWritten.ToString()
+                    });
+            });
+
+    public static IAutomationStep RemoveCppProjectItem(
+        string stepId,
+        TwinCatEngineeringService service,
+        RemoveCppProjectItemRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Remove C++ Project Item",
+            "cpp.remove-project-item",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                RemoveCppProjectItemResult result = service.RemoveCppProjectItem(session, request);
+                return StepExecutionOutcome.Success(
+                    "C++ project item removed.",
+                    new Dictionary<string, string?>
+                    {
+                        ["removedFromProject"] = result.RemovedFromProject ? "true" : "false",
+                        ["deletedFile"] = result.DeletedFile ? "true" : "false"
+                    });
+            });
+
+    public static IAutomationStep SetCppProjectProperty(
+        string stepId,
+        TwinCatEngineeringService service,
+        SetCppProjectPropertyRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Set C++ Project Property",
+            "cpp.set-project-property",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                CppProjectPropertyResult result = service.SetCppProjectProperty(session, request);
+                return StepExecutionOutcome.Success(
+                    "C++ project property set.",
+                    new Dictionary<string, string?>
+                    {
+                        ["projectFilePath"] = result.ProjectFilePath,
+                        ["propertyName"] = result.PropertyName,
+                        ["condition"] = result.Condition
+                    });
+            });
+
+    public static IAutomationStep SetCppItemDefinitionProperty(
+        string stepId,
+        TwinCatEngineeringService service,
+        SetCppItemDefinitionPropertyRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Set C++ Item Definition Property",
+            "cpp.set-item-definition-property",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                CppItemDefinitionPropertyResult result = service.SetCppItemDefinitionProperty(session, request);
+                return StepExecutionOutcome.Success(
+                    "C++ item definition property set.",
+                    new Dictionary<string, string?>
+                    {
+                        ["projectFilePath"] = result.ProjectFilePath,
+                        ["toolName"] = result.ToolName,
+                        ["propertyName"] = result.PropertyName,
+                        ["condition"] = result.Condition
+                    });
+            });
+
+    public static IAutomationStep SetCppProjectItemMetadata(
+        string stepId,
+        TwinCatEngineeringService service,
+        SetCppProjectItemMetadataRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Set C++ Project Item Metadata",
+            "cpp.set-project-item-metadata",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                CppProjectItemMetadataResult result = service.SetCppProjectItemMetadata(session, request);
+                return StepExecutionOutcome.Success(
+                    "C++ project item metadata set.",
+                    new Dictionary<string, string?>
+                    {
+                        ["projectFilePath"] = result.ProjectFilePath,
+                        ["relativePath"] = result.RelativePath,
+                        ["metadataName"] = result.MetadataName,
+                        ["condition"] = result.Condition
+                    });
             });
 
     public static IAutomationStep ActivateConfiguration(

@@ -105,6 +105,57 @@ internal static partial class StepInvokeCommand
             });
     }
 
+    private static StepExecutionOutcome ExecuteEngineeringCreateVsCppProject(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "vs-project-name", "cpp-project-name", "project-name");
+        string? projectDirectory = CliOptionParser.GetOption(options, "project-directory");
+        string templateKind = CliOptionParser.GetOption(options, "template-kind") ?? "ConsoleApplication";
+        IReadOnlyList<string>? candidateTemplatePaths = ParseOptionalList(CliOptionParser.GetOption(options, "candidate-template-paths", "candidate-template-path"));
+        string? platformToolset = CliOptionParser.GetOption(options, "platform-toolset");
+        bool allowTemplateFallback = CliOptionParser.GetBoolOption(options, "allow-template-fallback", false);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                VisualStudioCppProjectInfo result = engineering.CreateVisualStudioCppProject(
+                    session,
+                    new CreateVisualStudioCppProjectRequest(
+                        projectName,
+                        projectDirectory,
+                        templateKind,
+                        candidateTemplatePaths,
+                        platformToolset,
+                        allowTemplateFallback));
+                return StepExecutionOutcome.Success(
+                    $"Visual Studio C++ project {projectName} created.",
+                    CreateOutputs(
+                        ("projectFilePath", result.ProjectFilePath),
+                        ("projectGuid", result.ProjectGuid),
+                        ("projectDirectory", result.ProjectDirectory)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringEnsureSolutionProjectDependency(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "dependency-project-name", "project-name");
+        string dependsOnProjectName = CliOptionParser.RequireOption(options, "depends-on-project-name", "depends-on");
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                SolutionProjectDependencyResult result = engineering.EnsureSolutionProjectDependency(
+                    session,
+                    new EnsureSolutionProjectDependencyRequest(projectName, dependsOnProjectName));
+                return StepExecutionOutcome.Success(
+                    $"Solution dependency {projectName} -> {dependsOnProjectName} ensured.",
+                    CreateOutputs(
+                        ("projectGuid", result.ProjectGuid),
+                        ("dependsOnProjectGuid", result.DependsOnProjectGuid)));
+            });
+    }
+
     private static StepExecutionOutcome ExecuteEngineeringOpenXaeSolution(IReadOnlyDictionary<string, string> options)
     {
         CliWorkspacePaths workspace = ResolveWorkspace(options, requireSolutionPath: true);
@@ -189,6 +240,33 @@ internal static partial class StepInvokeCommand
             });
     }
 
+    private static StepExecutionOutcome ExecuteEngineeringPublishModules(IReadOnlyDictionary<string, string> options)
+    {
+        string cppProjectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        int postPublishDelayMs = CliOptionParser.GetIntOption(options, "post-publish-delay-ms", 5000);
+        int waitForUpdatedTmcTimeoutMs = CliOptionParser.GetIntOption(options, "wait-for-updated-tmc-timeout-ms", 30000);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                PublishModulesResult result = engineering.PublishModules(
+                    session,
+                    new PublishModulesRequest(cppProjectName, postPublishDelayMs, waitForUpdatedTmcTimeoutMs));
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(
+                        $"PublishModules completed for {cppProjectName}.",
+                        CreateOutputs(
+                            ("updatedTmcPath", result.UpdatedTmcPath),
+                            ("succeeded", result.Succeeded ? "true" : "false"),
+                            ("updated", result.Updated ? "true" : "false")),
+                        string.IsNullOrWhiteSpace(result.UpdatedTmcPath)
+                            ? Array.Empty<EvidenceArtifact>()
+                            : [new EvidenceArtifact("updated-tmc", result.UpdatedTmcPath!, "tmc")])
+                    : StepExecutionOutcome.Failed($"PublishModules did not produce a readable TMC for {cppProjectName}.");
+            });
+    }
+
     private static StepExecutionOutcome ExecuteEngineeringAddModuleInstance(IReadOnlyDictionary<string, string> options)
     {
         string cppProjectName = CliOptionParser.RequireOption(options, "cpp-project-name");
@@ -209,6 +287,7 @@ internal static partial class StepInvokeCommand
                     $"Module instance {instanceBaseName} added.",
                     CreateOutputs(
                         ("treeItemPath", result.TreeItemPath),
+                        ("displayName", result.DisplayName),
                         ("objectId", result.ObjectId),
                         ("projectTmcPath", projectTmcPath)));
             });
@@ -408,6 +487,184 @@ internal static partial class StepInvokeCommand
                         ("activationCommand", result.ActivationCommand),
                         ("attemptedCommands", string.Join(" | ", result.AttemptedCommands))),
                     evidence);
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteCppCreateProjectItem(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        string relativePath = CliOptionParser.RequireOption(options, "relative-path", "path");
+        CppProjectItemType itemType = ParseEnumOption(options, "item-type", CppProjectItemType.Infer);
+        string? filter = CliOptionParser.GetOption(options, "filter");
+        bool addToProject = CliOptionParser.GetBoolOption(options, "add-to-project", true);
+        bool createPhysicalFile = CliOptionParser.GetBoolOption(options, "create-physical-file", true);
+        ProjectItemConflictPolicy conflictPolicy = ParseEnumOption(options, "conflict-policy", ProjectItemConflictPolicy.FailIfExists);
+        bool allowMsBuildFallback = CliOptionParser.GetBoolOption(options, "allow-msbuild-fallback", true);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                CppProjectItemResult result = engineering.CreateCppProjectItem(
+                    session,
+                    new CreateCppProjectItemRequest(
+                        projectName,
+                        relativePath,
+                        itemType,
+                        filter,
+                        addToProject,
+                        createPhysicalFile,
+                        conflictPolicy,
+                        allowMsBuildFallback));
+                return StepExecutionOutcome.Success(
+                    $"C++ project item {relativePath} created for {projectName}.",
+                    CreateOutputs(
+                        ("projectFilePath", result.ProjectFilePath),
+                        ("filePath", result.FilePath),
+                        ("itemType", result.ItemType.ToString()),
+                        ("filter", result.Filter),
+                        ("addedToProject", result.AddedToProject ? "true" : "false")),
+                    [new EvidenceArtifact("cpp-project-file", result.ProjectFilePath, "vcxproj")]);
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteCppWriteProjectItemContent(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        string relativePath = CliOptionParser.RequireOption(options, "relative-path", "path");
+        string? contentText = CliOptionParser.GetOption(options, "content-text", "content");
+        string? contentFile = CliOptionParser.GetOption(options, "content-file");
+        string encoding = CliOptionParser.GetOption(options, "encoding") ?? "utf-8";
+        string newLine = CliOptionParser.GetOption(options, "new-line", "newline") ?? "preserve";
+        ProjectItemWritePolicy writePolicy = ParseEnumOption(options, "write-policy", ProjectItemWritePolicy.Overwrite);
+        bool requireProjectRegistration = CliOptionParser.GetBoolOption(options, "require-project-registration", false);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                CppProjectItemContentResult result = engineering.WriteCppProjectItemContent(
+                    session,
+                    new WriteCppProjectItemContentRequest(
+                        projectName,
+                        relativePath,
+                        contentText,
+                        contentFile,
+                        encoding,
+                        newLine,
+                        writePolicy,
+                        requireProjectRegistration));
+                return StepExecutionOutcome.Success(
+                    $"C++ project item content written for {projectName}:{relativePath}.",
+                    CreateOutputs(
+                        ("filePath", result.FilePath),
+                        ("sha256", result.Sha256),
+                        ("bytesWritten", result.BytesWritten.ToString())));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteCppRemoveProjectItem(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        string relativePath = CliOptionParser.RequireOption(options, "relative-path", "path");
+        CppProjectItemType itemType = ParseEnumOption(options, "item-type", CppProjectItemType.Infer);
+        bool deletePhysicalFile = CliOptionParser.GetBoolOption(options, "delete-physical-file", true);
+        bool removeFilterEntry = CliOptionParser.GetBoolOption(options, "remove-filter-entry", true);
+        bool ignoreMissing = CliOptionParser.GetBoolOption(options, "ignore-missing", false);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                RemoveCppProjectItemResult result = engineering.RemoveCppProjectItem(
+                    session,
+                    new RemoveCppProjectItemRequest(
+                        projectName,
+                        relativePath,
+                        itemType,
+                        deletePhysicalFile,
+                        removeFilterEntry,
+                        ignoreMissing));
+                return StepExecutionOutcome.Success(
+                    $"C++ project item {relativePath} removed for {projectName}.",
+                    CreateOutputs(
+                        ("removedFromProject", result.RemovedFromProject ? "true" : "false"),
+                        ("deletedFile", result.DeletedFile ? "true" : "false")));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteCppSetProjectProperty(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        string propertyName = CliOptionParser.RequireOption(options, "property-name");
+        string value = CliOptionParser.RequireOption(options, "value");
+        string? condition = CliOptionParser.GetOption(options, "condition");
+        string? propertyGroupLabel = CliOptionParser.GetOption(options, "property-group-label");
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                CppProjectPropertyResult result = engineering.SetCppProjectProperty(
+                    session,
+                    new SetCppProjectPropertyRequest(projectName, propertyName, value, condition, propertyGroupLabel));
+                return StepExecutionOutcome.Success(
+                    $"C++ project property {propertyName} set for {projectName}.",
+                    CreateOutputs(
+                        ("projectFilePath", result.ProjectFilePath),
+                        ("propertyName", result.PropertyName),
+                        ("condition", result.Condition)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteCppSetItemDefinitionProperty(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        string toolName = CliOptionParser.RequireOption(options, "tool-name");
+        string propertyName = CliOptionParser.RequireOption(options, "property-name");
+        string value = CliOptionParser.RequireOption(options, "value");
+        string? condition = CliOptionParser.GetOption(options, "condition");
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                CppItemDefinitionPropertyResult result = engineering.SetCppItemDefinitionProperty(
+                    session,
+                    new SetCppItemDefinitionPropertyRequest(projectName, toolName, propertyName, value, condition));
+                return StepExecutionOutcome.Success(
+                    $"C++ item definition property {toolName}.{propertyName} set for {projectName}.",
+                    CreateOutputs(
+                        ("projectFilePath", result.ProjectFilePath),
+                        ("toolName", result.ToolName),
+                        ("propertyName", result.PropertyName),
+                        ("condition", result.Condition)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteCppSetProjectItemMetadata(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        string relativePath = CliOptionParser.RequireOption(options, "relative-path", "path");
+        CppProjectItemType itemType = ParseEnumOption(options, "item-type", CppProjectItemType.Infer);
+        string metadataName = CliOptionParser.RequireOption(options, "metadata-name");
+        string value = CliOptionParser.RequireOption(options, "value");
+        string? condition = CliOptionParser.GetOption(options, "condition");
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                CppProjectItemMetadataResult result = engineering.SetCppProjectItemMetadata(
+                    session,
+                    new SetCppProjectItemMetadataRequest(projectName, relativePath, itemType, metadataName, value, condition));
+                return StepExecutionOutcome.Success(
+                    $"C++ project item metadata {metadataName} set for {projectName}:{relativePath}.",
+                    CreateOutputs(
+                        ("projectFilePath", result.ProjectFilePath),
+                        ("relativePath", result.RelativePath),
+                        ("metadataName", result.MetadataName),
+                        ("condition", result.Condition)));
             });
     }
 

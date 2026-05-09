@@ -46,6 +46,7 @@ dotnet run --project .\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\Twi
 ## Roadmap / 路线
 
 - [Template-Based JSON Builds](roadmap/template-based-json-builds.md)：使用 TwinCAT/XAE 官方模板，再用细粒度 step 修改模板生成内容。
+- [Optcnc Public Step Gap Requirements](roadmap/optcnc-public-step-gap-requirements.md)：为诚实复现 Optcnc 样例补齐源码/project item/C++ project settings 等 public step 的接口需求。
 
 ## Evidence / 证据
 

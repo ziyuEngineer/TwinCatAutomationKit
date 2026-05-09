@@ -80,6 +80,47 @@ public static class TwinCatStepCatalog
             new[] { "Verify the TIXC child exists and the .vcxproj file lands on disk." }),
 
         new StepContract(
+            "engineering.create-vs-cpp-project",
+            "TwinCatEngineeringService.CreateVisualStudioCppProject",
+            "engineering",
+            "Creates a regular Visual Studio C++ project inside the current solution, such as an AdsClient console application.",
+            new[] { "A solution must already be loaded in the DTE session.", "An installed Visual Studio C++ template or explicit AllowTemplateFallback=true is required." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "Visual Studio C++ project name."),
+                new StepParameterContract("ProjectDirectory", "string", false, "Optional project directory. Defaults to SolutionDirectory/ProjectName."),
+                new StepParameterContract("TemplateKind", "string", false, "Template semantic kind. P0 supports ConsoleApplication.", "ConsoleApplication"),
+                new StepParameterContract("CandidateTemplatePaths", "string[]", false, "Optional explicit template paths for machine-specific VS installs."),
+                new StepParameterContract("PlatformToolset", "string", false, "Optional PlatformToolset value such as v143."),
+                new StepParameterContract("AllowTemplateFallback", "bool", false, "Whether the service may synthesize a minimal MSBuild C++ project if no installed template is found.", "false")
+            },
+            new[]
+            {
+                new StepOutputContract("projectFilePath", "string", "Absolute .vcxproj path."),
+                new StepOutputContract("projectGuid", "string", "Project GUID registered in the .vcxproj/.sln."),
+                new StepOutputContract("projectDirectory", "string", "Absolute project directory.")
+            },
+            new[] { "Verify the .sln contains the project, .vcxproj exists, DTE can find it by name, and reopen keeps it visible." }),
+
+        new StepContract(
+            "engineering.ensure-solution-project-dependency",
+            "TwinCatEngineeringService.EnsureSolutionProjectDependency",
+            "engineering",
+            "Ensures a Visual Studio solution ProjectDependencies entry exists from one project to another.",
+            new[] { "Both projects must already exist in the saved .sln." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "Dependent project name."),
+                new StepParameterContract("DependsOnProjectName", "string", true, "Project that must build before ProjectName.")
+            },
+            new[]
+            {
+                new StepOutputContract("projectGuid", "string", "Dependent project GUID."),
+                new StepOutputContract("dependsOnProjectGuid", "string", "Dependency project GUID.")
+            },
+            new[] { "Inspect .sln ProjectSection(ProjectDependencies) and reload the solution to confirm the dependency remains." }),
+
+        new StepContract(
             "engineering.create-plc-project",
             "TwinCatEngineeringService.CreatePlcProject",
             "engineering",
@@ -116,6 +157,26 @@ public static class TwinCatStepCatalog
                 new StepOutputContract("moduleCppPath", "string", "Expected .cpp path for the module.")
             },
             new[] { "Confirm that the module files exist and the tree node is visible after save/refresh." }),
+
+        new StepContract(
+            "engineering.publish-modules",
+            "TwinCatEngineeringService.PublishModules",
+            "engineering",
+            "Invokes the TwinCAT C++ project PublishModules method so updated module source regenerates TMC metadata.",
+            new[] { "The target TwinCAT C++ project must exist and expose PublishModules in its tree XML." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "TwinCAT C++ project name."),
+                new StepParameterContract("PostPublishDelayMs", "int", false, "Delay after triggering PublishModules.", "5000"),
+                new StepParameterContract("WaitForUpdatedTmcTimeoutMs", "int", false, "Maximum wait for the project .tmc timestamp to update.", "30000")
+            },
+            new[]
+            {
+                new StepOutputContract("updatedTmcPath", "string", "Project .tmc path observed after publish."),
+                new StepOutputContract("succeeded", "bool", "Whether publish left a readable project .tmc."),
+                new StepOutputContract("updated", "bool", "Whether the .tmc timestamp or content changed during this publish call.")
+            },
+            new[] { "Check that the .tmc is readable and contains the expected module classes; updated=true means the timestamp or content changed during this publish call." }),
 
         new StepContract(
             "engineering.add-module-instance",
@@ -216,6 +277,148 @@ public static class TwinCatStepCatalog
                 new StepOutputContract("lastBuildInfo", "int", "DTE LastBuildInfo value.")
             },
             new[] { "Treat LastBuildInfo == 0 as the engineering success condition." }),
+
+        new StepContract(
+            "cpp.create-project-item",
+            "TwinCatEngineeringService.CreateCppProjectItem",
+            "cpp",
+            "Creates a C++/header/resource/None project item, optionally creating the physical file and registering it in .vcxproj and .filters.",
+            new[] { "The target C++ .vcxproj must already exist.", "RelativePath must be inside the project directory." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "C++ project name."),
+                new StepParameterContract("RelativePath", "string", true, "Path relative to the C++ project directory."),
+                new StepParameterContract("ItemType", "CppProjectItemType", false, "MSBuild item type, or Infer from extension.", "Infer"),
+                new StepParameterContract("Filter", "string", false, "Optional .vcxproj.filters display filter."),
+                new StepParameterContract("AddToProject", "bool", false, "Whether to register the item in .vcxproj.", "true"),
+                new StepParameterContract("CreatePhysicalFile", "bool", false, "Whether to create an empty physical file.", "true"),
+                new StepParameterContract("ConflictPolicy", "ProjectItemConflictPolicy", false, "FailIfExists, KeepExisting, or ReplaceProjectRegistration.", "FailIfExists"),
+                new StepParameterContract("AllowMsBuildFallback", "bool", false, "Allow typed MSBuild XML update when DTE ProjectItems is not stable.", "true")
+            },
+            new[]
+            {
+                new StepOutputContract("projectFilePath", "string", "Updated .vcxproj path."),
+                new StepOutputContract("filePath", "string", "Physical project item path."),
+                new StepOutputContract("itemType", "CppProjectItemType", "Resolved MSBuild item type."),
+                new StepOutputContract("addedToProject", "bool", "Whether .vcxproj registration exists after the step.")
+            },
+            new[] { "Verify the file exists, .vcxproj contains the requested Include, .filters contains filter mapping when requested, and reopen shows the item." }),
+
+        new StepContract(
+            "cpp.write-project-item-content",
+            "TwinCatEngineeringService.WriteCppProjectItemContent",
+            "cpp",
+            "Writes source/resource/text payload into an existing C++ project item file and returns its content hash.",
+            new[] { "The target C++ project must already exist.", "ContentText and ContentFile are mutually exclusive." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "C++ project name."),
+                new StepParameterContract("RelativePath", "string", true, "Path relative to the C++ project directory."),
+                new StepParameterContract("ContentText", "string", false, "Inline source payload."),
+                new StepParameterContract("ContentFile", "string", false, "Payload file path produced by the JSON plan files[] section or another explicit caller-owned payload."),
+                new StepParameterContract("Encoding", "string", false, "utf-8, utf-8-bom, or ascii.", "utf-8"),
+                new StepParameterContract("NewLine", "string", false, "preserve, crlf, or lf.", "preserve"),
+                new StepParameterContract("WritePolicy", "ProjectItemWritePolicy", false, "FailIfMissing, FailIfNonEmpty, or Overwrite.", "Overwrite"),
+                new StepParameterContract("RequireProjectRegistration", "bool", false, "Fail if .vcxproj does not already register the item.", "false")
+            },
+            new[]
+            {
+                new StepOutputContract("filePath", "string", "Written file path."),
+                new StepOutputContract("sha256", "string", "SHA256 hash of the written bytes."),
+                new StepOutputContract("bytesWritten", "long", "Number of bytes written.")
+            },
+            new[] { "Compare the output hash with the payload and reopen the item in VS." }),
+
+        new StepContract(
+            "cpp.remove-project-item",
+            "TwinCatEngineeringService.RemoveCppProjectItem",
+            "cpp",
+            "Removes a C++ project item registration and optional filter entry and physical file.",
+            new[] { "The target C++ .vcxproj must already exist." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "C++ project name."),
+                new StepParameterContract("RelativePath", "string", true, "Path relative to the C++ project directory."),
+                new StepParameterContract("ItemType", "CppProjectItemType", false, "MSBuild item type, or Infer from extension.", "Infer"),
+                new StepParameterContract("DeletePhysicalFile", "bool", false, "Whether to delete the physical file.", "true"),
+                new StepParameterContract("RemoveFilterEntry", "bool", false, "Whether to remove the .vcxproj.filters item mapping.", "true"),
+                new StepParameterContract("IgnoreMissing", "bool", false, "Treat missing item/file as success.", "false")
+            },
+            new[]
+            {
+                new StepOutputContract("removedFromProject", "bool", "Whether .vcxproj registration was removed."),
+                new StepOutputContract("deletedFile", "bool", "Whether a physical file was deleted.")
+            },
+            new[] { "Verify .vcxproj/.filters no longer reference the item and the file is absent when DeletePhysicalFile=true." }),
+
+        new StepContract(
+            "cpp.set-project-property",
+            "TwinCatEngineeringService.SetCppProjectProperty",
+            "cpp",
+            "Sets a project-level or configuration-level MSBuild property in a C++ .vcxproj.",
+            new[] { "The target C++ .vcxproj must already exist." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "C++ project name."),
+                new StepParameterContract("PropertyName", "string", true, "MSBuild property element name."),
+                new StepParameterContract("Value", "string", true, "Property value."),
+                new StepParameterContract("Condition", "string", false, "Optional PropertyGroup Condition."),
+                new StepParameterContract("PropertyGroupLabel", "string", false, "Optional PropertyGroup Label, such as Globals or Configuration.")
+            },
+            new[]
+            {
+                new StepOutputContract("projectFilePath", "string", "Updated .vcxproj path."),
+                new StepOutputContract("propertyName", "string", "Property name."),
+                new StepOutputContract("condition", "string", "Applied condition, if any.")
+            },
+            new[] { "Inspect .vcxproj and confirm the PropertyGroup contains the requested value; build log should reflect build-affecting properties." }),
+
+        new StepContract(
+            "cpp.set-item-definition-property",
+            "TwinCatEngineeringService.SetCppItemDefinitionProperty",
+            "cpp",
+            "Sets a C++ ItemDefinitionGroup tool property such as ClCompile include paths or Link dependencies.",
+            new[] { "The target C++ .vcxproj must already exist." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "C++ project name."),
+                new StepParameterContract("ToolName", "string", true, "Tool element name such as ClCompile, Link, ResourceCompile, or PostBuildEvent."),
+                new StepParameterContract("PropertyName", "string", true, "Tool property element name."),
+                new StepParameterContract("Value", "string", true, "Property value, including inherited macros when required."),
+                new StepParameterContract("Condition", "string", false, "Optional ItemDefinitionGroup Condition.")
+            },
+            new[]
+            {
+                new StepOutputContract("projectFilePath", "string", "Updated .vcxproj path."),
+                new StepOutputContract("toolName", "string", "Tool element name."),
+                new StepOutputContract("propertyName", "string", "Property element name."),
+                new StepOutputContract("condition", "string", "Applied condition, if any.")
+            },
+            new[] { "Inspect ItemDefinitionGroup XML and confirm build logs use include paths, library paths, language standard, dependencies, or events." }),
+
+        new StepContract(
+            "cpp.set-project-item-metadata",
+            "TwinCatEngineeringService.SetCppProjectItemMetadata",
+            "cpp",
+            "Sets file-level MSBuild metadata for a C++ project item, such as PrecompiledHeader or ExcludedFromBuild.",
+            new[] { "The target item must already be registered in .vcxproj." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "C++ project name."),
+                new StepParameterContract("RelativePath", "string", true, "Path relative to the C++ project directory."),
+                new StepParameterContract("ItemType", "CppProjectItemType", true, "MSBuild item type containing the item."),
+                new StepParameterContract("MetadataName", "string", true, "Metadata element name."),
+                new StepParameterContract("Value", "string", true, "Metadata value."),
+                new StepParameterContract("Condition", "string", false, "Optional item Condition.")
+            },
+            new[]
+            {
+                new StepOutputContract("projectFilePath", "string", "Updated .vcxproj path."),
+                new StepOutputContract("relativePath", "string", "Item Include path."),
+                new StepOutputContract("metadataName", "string", "Metadata element name."),
+                new StepOutputContract("condition", "string", "Applied condition, if any.")
+            },
+            new[] { "Inspect the item XML and confirm build output respects include/exclude or PCH metadata." }),
 
         new StepContract(
             "signing.grant-certificate",
@@ -1017,7 +1220,16 @@ public static class TwinCatStepCatalog
         "engineering.launch-visual-studio",
         "engineering.create-xae-solution",
         "engineering.create-cpp-project",
+        "engineering.create-vs-cpp-project",
+        "engineering.ensure-solution-project-dependency",
+        "cpp.remove-project-item",
+        "cpp.create-project-item",
+        "cpp.write-project-item-content",
+        "cpp.set-project-property",
+        "cpp.set-item-definition-property",
+        "cpp.set-project-item-metadata",
         "engineering.create-module",
+        "engineering.publish-modules",
         "engineering.add-module-instance",
         "engineering.ensure-task",
         "engineering.export-tree-item-xml",

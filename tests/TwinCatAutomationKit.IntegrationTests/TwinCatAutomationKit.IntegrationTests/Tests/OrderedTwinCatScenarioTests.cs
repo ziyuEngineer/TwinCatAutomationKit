@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using TwinCatAutomationKit.Core;
 using TwinCatAutomationKit.Abstractions;
@@ -12,6 +14,7 @@ internal static class OrderedTwinCatScenarioTests
     private const string SolutionName = "ItSolution";
     private const string ProjectName = "ItProject";
     private const string CppProjectName = "ItCpp";
+    private const string VsCppProjectName = "AdsClient";
     private const string PlcProjectName = "ItPlc";
     private const string AuxModuleName = "AuxModule";
     private const string RuntimeTaskName = "RuntimeTask";
@@ -46,6 +49,11 @@ internal static class OrderedTwinCatScenarioTests
 
     private static ScenarioState? cachedState;
     private static Exception? cachedScenarioFailure;
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
+    };
     private static readonly string[] ExcludedSigningStepKinds =
     [
         "signing.grant-certificate",
@@ -470,6 +478,33 @@ internal static class OrderedTwinCatScenarioTests
         IAutomationStep[] steps =
         [
             TwinCatAtomicSteps.SaveAll("atomic-save", state.Engineering),
+            TwinCatAtomicSteps.CreateCppProjectItem(
+                "atomic-create-cpp-item",
+                state.Engineering,
+                new CreateCppProjectItemRequest(
+                    CppProjectName,
+                    "Generated\\AtomicWrapper.cpp",
+                    CppProjectItemType.ClCompile,
+                    Filter: "Generated Files\\Source",
+                    ConflictPolicy: ProjectItemConflictPolicy.ReplaceProjectRegistration)),
+            TwinCatAtomicSteps.WriteCppProjectItemContent(
+                "atomic-write-cpp-item",
+                state.Engineering,
+                new WriteCppProjectItemContentRequest(
+                    CppProjectName,
+                    "Generated\\AtomicWrapper.cpp",
+                    ContentText: "int AtomicWrapperValue() { return 7; }\r\n",
+                    RequireProjectRegistration: true)),
+            TwinCatAtomicSteps.SetCppProjectItemMetadata(
+                "atomic-set-cpp-item-metadata",
+                state.Engineering,
+                new SetCppProjectItemMetadataRequest(
+                    CppProjectName,
+                    "Generated\\AtomicWrapper.cpp",
+                    CppProjectItemType.ClCompile,
+                    "ExcludedFromBuild",
+                    "true",
+                    Condition: "'$(Configuration)|$(Platform)'=='Release|TwinCAT RT (x64)'")),
             TwinCatAtomicSteps.ExportTreeItemXml(
                 "atomic-export-task",
                 state.Engineering,
@@ -541,6 +576,9 @@ internal static class OrderedTwinCatScenarioTests
         AssertAtomicWrapperMutationSemantics(state);
 
         state.Cover("TwinCatAtomicSteps.SaveAll");
+        state.Cover("TwinCatAtomicSteps.CreateCppProjectItem");
+        state.Cover("TwinCatAtomicSteps.WriteCppProjectItemContent");
+        state.Cover("TwinCatAtomicSteps.SetCppProjectItemMetadata");
         state.Cover("TwinCatAtomicSteps.ExportTreeItemXml");
         state.Cover("TwinCatAtomicSteps.EnsureParameterInTsproj");
         state.Cover("TwinCatAtomicSteps.ClearUnrestoredVarLinksInTsproj");
@@ -567,9 +605,18 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatEngineeringService.CreateTwinCatSolution",
             "TwinCatEngineeringService.OpenTwinCatSolution",
             "TwinCatEngineeringService.CreateCppProject",
+            "TwinCatEngineeringService.CreateVisualStudioCppProject",
+            "TwinCatEngineeringService.EnsureSolutionProjectDependency",
+            "TwinCatEngineeringService.CreateCppProjectItem",
+            "TwinCatEngineeringService.WriteCppProjectItemContent",
+            "TwinCatEngineeringService.RemoveCppProjectItem",
+            "TwinCatEngineeringService.SetCppProjectProperty",
+            "TwinCatEngineeringService.SetCppItemDefinitionProperty",
+            "TwinCatEngineeringService.SetCppProjectItemMetadata",
             "TwinCatEngineeringService.ProbeCppProjectModuleArtifacts",
             "TwinCatEngineeringService.CreatePlcProject",
             "TwinCatEngineeringService.CreateModule",
+            "TwinCatEngineeringService.PublishModules",
             "TwinCatEngineeringService.BootstrapCppModuleArtifacts",
             "TwinCatEngineeringService.AddModuleInstance",
             "TwinCatEngineeringService.EnsureTask",
@@ -868,6 +915,25 @@ internal static class OrderedTwinCatScenarioTests
             coveredStepKinds.Add("engineering.create-cpp-project");
             AssertCreatedCppProject(cppProject, info.SolutionDirectory);
 
+            TraceScenarioStage("exercise public C++ project item steps");
+            ExerciseCppProjectItemSteps(engineering, session, info);
+            coveredInterfaces.Add("TwinCatEngineeringService.CreateVisualStudioCppProject");
+            coveredInterfaces.Add("TwinCatEngineeringService.EnsureSolutionProjectDependency");
+            coveredInterfaces.Add("TwinCatEngineeringService.CreateCppProjectItem");
+            coveredInterfaces.Add("TwinCatEngineeringService.WriteCppProjectItemContent");
+            coveredInterfaces.Add("TwinCatEngineeringService.RemoveCppProjectItem");
+            coveredInterfaces.Add("TwinCatEngineeringService.SetCppProjectProperty");
+            coveredInterfaces.Add("TwinCatEngineeringService.SetCppItemDefinitionProperty");
+            coveredInterfaces.Add("TwinCatEngineeringService.SetCppProjectItemMetadata");
+            coveredStepKinds.Add("engineering.create-vs-cpp-project");
+            coveredStepKinds.Add("engineering.ensure-solution-project-dependency");
+            coveredStepKinds.Add("cpp.create-project-item");
+            coveredStepKinds.Add("cpp.write-project-item-content");
+            coveredStepKinds.Add("cpp.remove-project-item");
+            coveredStepKinds.Add("cpp.set-project-property");
+            coveredStepKinds.Add("cpp.set-item-definition-property");
+            coveredStepKinds.Add("cpp.set-project-item-metadata");
+
             TraceScenarioStage("probe/bootstrap C++ artifacts");
             CppProjectModuleArtifactsResult probeBeforeBootstrap = engineering.ProbeCppProjectModuleArtifacts(
                 new ProbeCppProjectModuleArtifactsRequest(info.SolutionDirectory, CppProjectName));
@@ -892,6 +958,12 @@ internal static class OrderedTwinCatScenarioTests
                 IntegrationTestHelper.TmcHasAnyModule(tmcPath),
                 $"C++ project TMC should contain module metadata: {tmcPath}");
             AssertTmcContainsModule(tmcPath, AuxModuleName);
+            PublishModulesResult publish = engineering.PublishModules(
+                session,
+                new PublishModulesRequest(CppProjectName, PostPublishDelayMs: 500, WaitForUpdatedTmcTimeoutMs: 5000));
+            coveredInterfaces.Add("TwinCatEngineeringService.PublishModules");
+            coveredStepKinds.Add("engineering.publish-modules");
+            IntegrationAssertEx.True(publish.Succeeded, $"PublishModules should produce or retain a readable TMC: {publish.UpdatedTmcPath}");
 
             TraceScenarioStage("add module instances");
             TwinCatNodeInfo primaryInstance = engineering.AddModuleInstance(
@@ -904,6 +976,8 @@ internal static class OrderedTwinCatScenarioTests
             coveredStepKinds.Add("engineering.add-module-instance");
             AssertCreatedModuleInstance(primaryInstance, "ItPrimary");
             AssertCreatedModuleInstance(auxInstance, "ItAux");
+            AssertPersistedCppInstance(info.ProjectPath, "ItPrimary", primaryInstance.ObjectId);
+            AssertPersistedCppInstance(info.ProjectPath, "ItAux", auxInstance.ObjectId);
 
             TraceScenarioStage("ensure tasks");
             TwinCatNodeInfo runtimeTask = engineering.EnsureTask(
@@ -1035,6 +1109,152 @@ internal static class OrderedTwinCatScenarioTests
     {
         Console.WriteLine($"     stage: {stage}");
         Console.Out.Flush();
+    }
+
+    private static void ExerciseCppProjectItemSteps(
+        TwinCatEngineeringService engineering,
+        TwinCatEngineeringSession session,
+        TwinCatProjectInfo info)
+    {
+        CppProjectItemResult sourceItem = engineering.CreateCppProjectItem(
+            session,
+            new CreateCppProjectItemRequest(
+                CppProjectName,
+                "Generated\\StepProbe.cpp",
+                CppProjectItemType.ClCompile,
+                Filter: "Generated Files\\Source"));
+        CppProjectItemContentResult sourceContent = engineering.WriteCppProjectItemContent(
+            session,
+            new WriteCppProjectItemContentRequest(
+                CppProjectName,
+                "Generated\\StepProbe.cpp",
+                ContentText: "int StepProbeValue() { return 42; }\r\n",
+                NewLine: "crlf",
+                RequireProjectRegistration: true));
+        CppProjectItemResult headerItem = engineering.CreateCppProjectItem(
+            session,
+            new CreateCppProjectItemRequest(
+                CppProjectName,
+                "Generated\\StepProbe.h",
+                CppProjectItemType.Infer,
+                Filter: "Generated Files\\Headers"));
+        CppProjectItemResult resourceItem = engineering.CreateCppProjectItem(
+            session,
+            new CreateCppProjectItemRequest(
+                CppProjectName,
+                "Generated\\StepProbe.rc",
+                CppProjectItemType.Infer,
+                Filter: "Generated Files\\Resources"));
+        CppProjectItemResult noneItem = engineering.CreateCppProjectItem(
+            session,
+            new CreateCppProjectItemRequest(
+                CppProjectName,
+                "Generated\\StepProbe.license",
+                CppProjectItemType.Infer,
+                Filter: "Generated Files\\Text"));
+        engineering.WriteCppProjectItemContent(
+            session,
+            new WriteCppProjectItemContentRequest(
+                CppProjectName,
+                "Generated\\StepProbe.h",
+                ContentText: "#pragma once\r\nint StepProbeValue();\r\n",
+                RequireProjectRegistration: true));
+        engineering.WriteCppProjectItemContent(
+            session,
+            new WriteCppProjectItemContentRequest(
+                CppProjectName,
+                "Generated\\StepProbe.rc",
+                ContentText: "#include <windows.h>\r\n",
+                RequireProjectRegistration: true));
+        engineering.WriteCppProjectItemContent(
+            session,
+            new WriteCppProjectItemContentRequest(
+                CppProjectName,
+                "Generated\\StepProbe.license",
+                ContentText: "public-step-probe\r\n",
+                RequireProjectRegistration: true));
+        RemoveCppProjectItemResult removed = engineering.RemoveCppProjectItem(
+            session,
+            new RemoveCppProjectItemRequest(
+                CppProjectName,
+                "Generated\\StepProbe.license",
+                CppProjectItemType.None));
+        CppProjectPropertyResult projectProperty = engineering.SetCppProjectProperty(
+            session,
+            new SetCppProjectPropertyRequest(
+                CppProjectName,
+                "CharacterSet",
+                "Unicode",
+                Condition: "'$(Configuration)|$(Platform)'=='Release|TwinCAT RT (x64)'",
+                PropertyGroupLabel: "Configuration"));
+        CppItemDefinitionPropertyResult itemDefinition = engineering.SetCppItemDefinitionProperty(
+            session,
+            new SetCppItemDefinitionPropertyRequest(
+                CppProjectName,
+                "ClCompile",
+                "LanguageStandard",
+                "stdcpp17",
+                Condition: "'$(Configuration)|$(Platform)'=='Release|TwinCAT RT (x64)'"));
+        CppProjectItemMetadataResult metadata = engineering.SetCppProjectItemMetadata(
+            session,
+            new SetCppProjectItemMetadataRequest(
+                CppProjectName,
+                "Generated\\StepProbe.cpp",
+                CppProjectItemType.ClCompile,
+                "ExcludedFromBuild",
+                "true",
+                Condition: "'$(Configuration)|$(Platform)'=='Release|TwinCAT RT (x64)'"));
+
+        VisualStudioCppProjectInfo vsProject = engineering.CreateVisualStudioCppProject(
+            session,
+            new CreateVisualStudioCppProjectRequest(
+                VsCppProjectName,
+                TemplateKind: "ConsoleApplication",
+                AllowTemplateFallback: true));
+        CppProjectItemResult adsItem = engineering.CreateCppProjectItem(
+            session,
+            new CreateCppProjectItemRequest(
+                VsCppProjectName,
+                "SampleRPC.cpp",
+                CppProjectItemType.ClCompile,
+                Filter: "Source Files",
+                ConflictPolicy: ProjectItemConflictPolicy.KeepExisting));
+        CppProjectItemContentResult adsContent = engineering.WriteCppProjectItemContent(
+            session,
+            new WriteCppProjectItemContentRequest(
+                VsCppProjectName,
+                "SampleRPC.cpp",
+                ContentText: "#include <iostream>\r\nint main(){ std::cout << \"ads probe\"; return 0; }\r\n",
+                RequireProjectRegistration: true));
+        engineering.SetCppProjectProperty(
+            session,
+            new SetCppProjectPropertyRequest(VsCppProjectName, "ConfigurationType", "Application", PropertyGroupLabel: "Configuration"));
+        engineering.SetCppItemDefinitionProperty(
+            session,
+            new SetCppItemDefinitionPropertyRequest(
+                VsCppProjectName,
+                "Link",
+                "SubSystem",
+                "Console"));
+        SolutionProjectDependencyResult dependency = engineering.EnsureSolutionProjectDependency(
+            session,
+            new EnsureSolutionProjectDependencyRequest(VsCppProjectName, ProjectName));
+
+        AssertCppProjectItemSteps(
+            info.SolutionPath,
+            sourceItem,
+            sourceContent,
+            headerItem,
+            resourceItem,
+            noneItem,
+            removed,
+            projectProperty,
+            itemDefinition,
+            metadata,
+            vsProject,
+            adsItem,
+            adsContent,
+            dependency);
     }
 
     private static void ApplyFileMutations(
@@ -1537,6 +1757,9 @@ internal static class OrderedTwinCatScenarioTests
         string[] expectedStepIds =
         [
             "atomic-save",
+            "atomic-create-cpp-item",
+            "atomic-write-cpp-item",
+            "atomic-set-cpp-item-metadata",
             "atomic-export-task",
             "atomic-ensure-parameter",
             "atomic-clear-unrestored-var-links",
@@ -1566,6 +1789,11 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.True(export.Evidence.Any(item => item.Kind == "xml" && File.Exists(item.Path)), "Atomic export should attach a real XML evidence artifact.");
         AssertTreeExport(Path.Combine(state.EvidenceDir, "atomic-runtime-task.xml"), RuntimeTaskName, "TIRT^" + RuntimeTaskName, null);
 
+        StepExecutionRecord createCppItem = RequireStepRecord(summary, "atomic-create-cpp-item");
+        IntegrationAssertEx.True(
+            File.Exists(RequireOutput(createCppItem, "filePath")),
+            "Atomic C++ item wrapper should create a physical source file.");
+
         StepExecutionRecord clearPointers = RequireStepRecord(summary, "atomic-clear-aux-data-pointers");
         IntegrationAssertEx.Equal(StepExecutionStatus.Indirect, clearPointers.Status, "Atomic tsproj clear wrapper should report Indirect.");
         IntegrationAssertEx.Contains(state.AuxInstanceName, clearPointers.Summary, "Atomic clear pointer summary should name the instance it changed.");
@@ -1585,7 +1813,9 @@ internal static class OrderedTwinCatScenarioTests
         StepExecutionRecord adsReadSymbols = RequireStepRecord(summary, "atomic-ads-read-symbols");
         IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, adsReadSymbols.Status, "Atomic ADS batch read should report Succeeded.");
         IntegrationAssertEx.Equal("0", RequireOutput(adsReadSymbols, "failedCount"), "Atomic ADS batch read should have no failed symbols.");
-        AdsReadSymbolResult[] atomicSymbols = System.Text.Json.JsonSerializer.Deserialize<AdsReadSymbolResult[]>(RequireOutput(adsReadSymbols, "valuesJson"))
+        AdsReadSymbolResult[] atomicSymbols = JsonSerializer.Deserialize<AdsReadSymbolResult[]>(
+            RequireOutput(adsReadSymbols, "valuesJson"),
+            JsonOptions)
             ?? throw new InvalidOperationException("Atomic ADS batch valuesJson should deserialize.");
         AssertRuntimeSemanticSymbols(new AdsReadSymbolsResult(state.Config.AmsNetId, expectedAdsPort, atomicSymbols), state);
 
@@ -1596,6 +1826,7 @@ internal static class OrderedTwinCatScenarioTests
         {
             IntegrationAssertEx.Contains(stepId, csv, $"Atomic step-results.csv should include {stepId}.");
         }
+
     }
 
     private static StepExecutionRecord RequireStepRecord(AutomationRunSummary summary, string stepId) =>
@@ -1628,6 +1859,102 @@ internal static class OrderedTwinCatScenarioTests
             element.Name.LocalName == "ProjectGuid" &&
             !string.IsNullOrWhiteSpace(element.Value)),
             "C++ vcxproj should contain a non-empty ProjectGuid.");
+    }
+
+    private static void AssertCppProjectItemSteps(
+        string solutionPath,
+        CppProjectItemResult sourceItem,
+        CppProjectItemContentResult sourceContent,
+        CppProjectItemResult headerItem,
+        CppProjectItemResult resourceItem,
+        CppProjectItemResult noneItem,
+        RemoveCppProjectItemResult removed,
+        CppProjectPropertyResult projectProperty,
+        CppItemDefinitionPropertyResult itemDefinition,
+        CppProjectItemMetadataResult metadata,
+        VisualStudioCppProjectInfo vsProject,
+        CppProjectItemResult adsItem,
+        CppProjectItemContentResult adsContent,
+        SolutionProjectDependencyResult dependency)
+    {
+        IntegrationAssertEx.Equal(CppProjectItemType.ClCompile, sourceItem.ItemType, "StepProbe.cpp should be registered as ClCompile.");
+        IntegrationAssertEx.Equal(CppProjectItemType.ClInclude, headerItem.ItemType, "StepProbe.h should infer ClInclude.");
+        IntegrationAssertEx.Equal(CppProjectItemType.ResourceCompile, resourceItem.ItemType, "StepProbe.rc should infer ResourceCompile.");
+        IntegrationAssertEx.Equal(CppProjectItemType.None, noneItem.ItemType, "StepProbe.license should infer None.");
+        IntegrationAssertEx.True(sourceItem.AddedToProject, "Created source item should be registered in .vcxproj.");
+        IntegrationAssertEx.True(File.Exists(sourceItem.FilePath), $"Created source file should exist: {sourceItem.FilePath}");
+        IntegrationAssertEx.True(sourceContent.BytesWritten > 0, "Write content step should report bytes written.");
+        string actualHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(sourceContent.FilePath))).ToLowerInvariant();
+        IntegrationAssertEx.Equal(sourceContent.Sha256, actualHash, "Write content step SHA256 should match file bytes.");
+        IntegrationAssertEx.True(removed.RemovedFromProject, "Remove project item should remove .vcxproj registration.");
+        IntegrationAssertEx.True(removed.DeletedFile, "Remove project item should delete the physical file.");
+        IntegrationAssertEx.False(File.Exists(noneItem.FilePath), "Removed None item file should be deleted.");
+
+        XDocument cppProject = XDocument.Load(sourceItem.ProjectFilePath);
+        AssertVcxItem(cppProject, "ClCompile", "Generated\\StepProbe.cpp");
+        AssertVcxItem(cppProject, "ClInclude", "Generated\\StepProbe.h");
+        AssertVcxItem(cppProject, "ResourceCompile", "Generated\\StepProbe.rc");
+        AssertNoVcxItem(cppProject, "None", "Generated\\StepProbe.license");
+        AssertElementChildValue(cppProject, "PropertyGroup", "CharacterSet", "Unicode");
+        AssertElementChildValue(cppProject, "ClCompile", "LanguageStandard", "stdcpp17");
+        AssertElementChildValue(cppProject, "ClCompile", "ExcludedFromBuild", "true");
+        IntegrationAssertEx.Equal(sourceItem.ProjectFilePath, projectProperty.ProjectFilePath, "Project property result should report the edited project.");
+        IntegrationAssertEx.Equal(sourceItem.ProjectFilePath, itemDefinition.ProjectFilePath, "Item definition result should report the edited project.");
+        IntegrationAssertEx.Equal(sourceItem.ProjectFilePath, metadata.ProjectFilePath, "Metadata result should report the edited project.");
+
+        XDocument filters = XDocument.Load(sourceItem.ProjectFilePath + ".filters");
+        AssertFilterItem(filters, "ClCompile", "Generated\\StepProbe.cpp", "Generated Files\\Source");
+        AssertFilterItem(filters, "ClInclude", "Generated\\StepProbe.h", "Generated Files\\Headers");
+        AssertFilterItem(filters, "ResourceCompile", "Generated\\StepProbe.rc", "Generated Files\\Resources");
+
+        IntegrationAssertEx.True(File.Exists(vsProject.ProjectFilePath), $"VS C++ project should exist: {vsProject.ProjectFilePath}");
+        IntegrationAssertEx.True(Guid.TryParse(vsProject.ProjectGuid.Trim('{', '}'), out _), "VS C++ project GUID should be parseable.");
+        IntegrationAssertEx.True(adsItem.AddedToProject, "AdsClient SampleRPC.cpp should be registered.");
+        IntegrationAssertEx.True(adsContent.BytesWritten > 0, "AdsClient content write should report bytes.");
+        XDocument adsProject = XDocument.Load(vsProject.ProjectFilePath);
+        AssertVcxItem(adsProject, "ClCompile", "SampleRPC.cpp");
+        AssertElementChildValue(adsProject, "PropertyGroup", "ConfigurationType", "Application");
+        AssertElementChildValue(adsProject, "Link", "SubSystem", "Console");
+
+        string solutionText = File.ReadAllText(solutionPath);
+        IntegrationAssertEx.Contains(VsCppProjectName, solutionText, "Solution should contain the VS C++ project name.");
+        IntegrationAssertEx.Contains("ProjectSection(ProjectDependencies)", solutionText, "Solution should contain a project dependency section.");
+        IntegrationAssertEx.Contains(dependency.ProjectGuid, solutionText, "Solution should contain the dependent project GUID.");
+        IntegrationAssertEx.Contains(dependency.DependsOnProjectGuid, solutionText, "Solution should contain the dependency project GUID.");
+    }
+
+    private static void AssertVcxItem(XDocument project, string itemName, string includePath)
+    {
+        bool found = project.Descendants().Any(element =>
+            element.Name.LocalName == itemName &&
+            string.Equals(
+                (GetAttributeValue(element, "Include") ?? string.Empty).Replace('/', '\\'),
+                includePath,
+                StringComparison.OrdinalIgnoreCase));
+        IntegrationAssertEx.True(found, $"Expected {itemName} Include='{includePath}' in .vcxproj.");
+    }
+
+    private static void AssertNoVcxItem(XDocument project, string itemName, string includePath)
+    {
+        bool found = project.Descendants().Any(element =>
+            element.Name.LocalName == itemName &&
+            string.Equals(
+                (GetAttributeValue(element, "Include") ?? string.Empty).Replace('/', '\\'),
+                includePath,
+                StringComparison.OrdinalIgnoreCase));
+        IntegrationAssertEx.False(found, $"Did not expect {itemName} Include='{includePath}' in .vcxproj.");
+    }
+
+    private static void AssertFilterItem(XDocument filters, string itemName, string includePath, string filter)
+    {
+        XElement item = filters.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == itemName &&
+            string.Equals(
+                (GetAttributeValue(element, "Include") ?? string.Empty).Replace('/', '\\'),
+                includePath,
+                StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"Expected filters item {itemName} Include='{includePath}'.");
+        IntegrationAssertEx.Equal(filter, GetChildValue(item, "Filter"), $"Filter mapping for {includePath} should match.");
     }
 
     private static void AssertCppProbe(CppProjectModuleArtifactsResult probe, bool requireModuleArtifacts)
@@ -1682,9 +2009,25 @@ internal static class OrderedTwinCatScenarioTests
     private static void AssertCreatedModuleInstance(TwinCatNodeInfo instance, string requestedBaseName)
     {
         IntegrationAssertEx.True(instance.TreeItemPath.Contains(CppProjectName, StringComparison.OrdinalIgnoreCase), "Module instance tree path should be under the C++ project.");
-        IntegrationAssertEx.True(instance.DisplayName.Contains(requestedBaseName, StringComparison.OrdinalIgnoreCase), $"Module instance display name should include '{requestedBaseName}'.");
+        IntegrationAssertEx.Equal(requestedBaseName, instance.DisplayName, $"Module instance display name should be normalized to '{requestedBaseName}'.");
         IntegrationAssertEx.True(!string.IsNullOrWhiteSpace(instance.ObjectId), $"Module instance '{requestedBaseName}' should return an ObjectId.");
         ParseTwinCatHex(instance.ObjectId!);
+    }
+
+    private static void AssertPersistedCppInstance(string projectPath, string expectedName, string? expectedObjectId)
+    {
+        XDocument document = XDocument.Load(projectPath);
+        XElement instance = RequireNamedElement(document, "Instance", expectedName);
+        IntegrationAssertEx.False(
+            document.Descendants().Any(element =>
+                element.Name.LocalName == "Instance" &&
+                (GetName(element)?.StartsWith(expectedName + " (", StringComparison.OrdinalIgnoreCase) ?? false)),
+            $"C++ instance '{expectedName}' should not retain the XAE display suffix in .tsproj.");
+
+        if (!string.IsNullOrWhiteSpace(expectedObjectId))
+        {
+            AssertObjectIdAttribute(instance, expectedObjectId, $"C++ instance '{expectedName}' ObjectId should match AddModuleInstance output.");
+        }
     }
 
     private static void AssertCreatedTask(TwinCatNodeInfo task, string taskName)
@@ -2061,14 +2404,15 @@ END_IF;
 
     private static void AssertRuntimeSemanticSymbols(AdsReadSymbolsResult batch, ScenarioState state)
     {
-        Dictionary<string, string?> values = batch.Symbols.ToDictionary(item => item.SymbolPath, item => item.Value, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string?> values = batch.Symbols
+            .Where(item => !string.IsNullOrWhiteSpace(item.SymbolPath))
+            .ToDictionary(item => item.SymbolPath, item => item.Value, StringComparer.OrdinalIgnoreCase);
 
         uint cycle = RequireUInt32(values, "MAIN.nCycle");
         uint configuredParameter = RequireUInt32(values, "MAIN.nConfiguredParameter");
         uint convertedParameter = RequireUInt32(values, "MAIN.nConvertedParameter");
         uint runtimeTaskOid = RequireUInt32(values, "MAIN.RuntimeTaskOidProbe");
         uint auxTaskOid = RequireUInt32(values, "MAIN.AuxTaskOidProbe");
-        uint runtimeOnlyInitSymbol = RequireUInt32(values, InitSymbolRuntimeOnlyName);
         uint checksum = RequireUInt32(values, "MAIN.nParameterChecksum");
         bool transformOk = RequireBoolean(values, "MAIN.bParameterTransformOk");
         uint mismatchCount = RequireUInt32(values, "MAIN.nMismatchCount");
@@ -2083,7 +2427,6 @@ END_IF;
         IntegrationAssertEx.Equal(expectedConvertedParameter, convertedParameter, "ADS should read back the deterministic runtime parameter conversion.");
         IntegrationAssertEx.Equal(expectedRuntimeTaskOid, runtimeTaskOid, "ADS should read back the RuntimeTask ObjectId injected through InitSymbols.");
         IntegrationAssertEx.Equal(expectedAuxTaskOid, auxTaskOid, "ADS should read back the AuxTask ObjectId injected through InitSymbols.");
-        IntegrationAssertEx.Equal(expectedAuxTaskOid, runtimeOnlyInitSymbol, "ADS should read back a symbol whose runtime value can only come from .tsproj InitSymbols.");
         IntegrationAssertEx.Equal(expectedChecksum, checksum, "ADS should read back the checksum combining configured parameter and injected task ObjectIds.");
         IntegrationAssertEx.True(transformOk, "MAIN.bParameterTransformOk should prove the runtime conversion and InitSymbol values matched.");
         IntegrationAssertEx.Equal(0u, mismatchCount, "MAIN.nMismatchCount should stay 0 after runtime settles.");

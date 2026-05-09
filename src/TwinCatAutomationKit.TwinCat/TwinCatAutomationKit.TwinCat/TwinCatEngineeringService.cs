@@ -2,6 +2,9 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Security;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using EnvDTE;
 using TwinCatAutomationKit.Abstractions;
@@ -119,7 +122,7 @@ public sealed class TwinCatEngineeringService
                 sysManager = RequireSysManager(session);
             }
             ITcSmTreeItem projectItem = GetTreeItem(sysManager, $"TIXC^{request.ProjectName}");
-            string projectFilePath = Path.Combine(session.CurrentSolutionDirectory ?? string.Empty, request.ProjectName, request.ProjectName + ".vcxproj");
+            string projectFilePath = ResolveCppProjectPaths(session, request.ProjectName).ProjectFilePath;
             return new TwinCatNodeInfo(
                 GetTreePath(projectItem, $"TIXC^{request.ProjectName}"),
                 request.ProjectName,
@@ -547,6 +550,287 @@ public sealed class TwinCatEngineeringService
             "Module skeleton was integrated into TMC, class factory, services, and vcxproj.");
     }
 
+    public VisualStudioCppProjectInfo CreateVisualStudioCppProject(
+        TwinCatEngineeringSession session,
+        CreateVisualStudioCppProjectRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        bool preferFallback = request.AllowTemplateFallback &&
+                              (request.CandidateTemplatePaths is null || request.CandidateTemplatePaths.Count == 0);
+        string solutionDirectory = preferFallback && !string.IsNullOrWhiteSpace(session.CurrentSolutionDirectory)
+            ? session.CurrentSolutionDirectory!
+            : ResolveSolutionDirectory(session);
+        string projectDirectory = ResolveRequestedProjectDirectory(solutionDirectory, request.ProjectName, request.ProjectDirectory);
+        string projectFilePath = Path.Combine(projectDirectory, request.ProjectName + ".vcxproj");
+        Directory.CreateDirectory(projectDirectory);
+
+        if (File.Exists(projectFilePath) && (!preferFallback || FindProjectByName(session.Dte, request.ProjectName) is not null))
+        {
+            return new VisualStudioCppProjectInfo(projectFilePath, ReadOrCreateProjectGuid(projectFilePath), projectDirectory);
+        }
+
+        string? templatePath = preferFallback ? null : ResolveVisualStudioCppTemplatePath(session, request);
+        if (!preferFallback && !string.IsNullOrWhiteSpace(templatePath))
+        {
+            RetryComCall(
+                () => session.Dte.Solution.AddFromTemplate(templatePath, projectDirectory, request.ProjectName, false),
+                120,
+                500);
+            WaitUntil(
+                () => File.Exists(projectFilePath),
+                TimeSpan.FromMinutes(2),
+                $"Visual Studio C++ project file was not created in time: {projectFilePath}");
+        }
+        else if (request.AllowTemplateFallback)
+        {
+            CreateFallbackVisualStudioCppProjectFiles(projectFilePath, request.ProjectName, request.PlatformToolset);
+            RetryComCall(() => session.Dte.Solution.AddFromFile(projectFilePath, false), 60, 500);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"Unable to resolve a Visual Studio C++ template for TemplateKind='{request.TemplateKind}'. " +
+                "Pass candidate template paths or set AllowTemplateFallback=true explicitly.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.PlatformToolset))
+        {
+            SetCppProjectProperty(
+                session,
+                new SetCppProjectPropertyRequest(
+                    request.ProjectName,
+                    "PlatformToolset",
+                    request.PlatformToolset!,
+                    PropertyGroupLabel: "Configuration"));
+        }
+
+        SaveAll(session);
+        string projectGuid = ReadOrCreateProjectGuid(projectFilePath);
+        WaitUntil(
+            () => FindProjectByName(session.Dte, request.ProjectName) is not null,
+            TimeSpan.FromMinutes(1),
+            $"Visual Studio solution model did not expose project '{request.ProjectName}'.");
+
+        return new VisualStudioCppProjectInfo(projectFilePath, projectGuid, projectDirectory);
+    }
+
+    public SolutionProjectDependencyResult EnsureSolutionProjectDependency(
+        TwinCatEngineeringSession session,
+        EnsureSolutionProjectDependencyRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        string solutionPath = RetryComCall(() => session.Dte.Solution.FullName, 10, 300);
+        if (string.IsNullOrWhiteSpace(solutionPath) || !File.Exists(solutionPath))
+        {
+            throw new InvalidOperationException("The loaded solution does not have a saved .sln path.");
+        }
+
+        SaveAll(session);
+        SlnProjectEntry project = FindSlnProjectEntry(solutionPath, request.ProjectName);
+        SlnProjectEntry dependency = FindSlnProjectEntry(solutionPath, request.DependsOnProjectName);
+        UpsertSlnProjectDependency(solutionPath, project.Guid, dependency.Guid);
+
+        return new SolutionProjectDependencyResult(project.Guid, dependency.Guid);
+    }
+
+    public CppProjectItemResult CreateCppProjectItem(
+        TwinCatEngineeringSession session,
+        CreateCppProjectItemRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        string relativePath = NormalizeProjectRelativePath(request.RelativePath);
+        string filePath = ResolveProjectContainedPath(paths.ProjectDirectory, relativePath);
+        CppProjectItemType itemType = ResolveCppProjectItemType(relativePath, request.ItemType);
+
+        bool fileExists = File.Exists(filePath);
+        bool registered = VcxprojHasItem(paths.ProjectFilePath, relativePath, itemType);
+        if (request.ConflictPolicy == ProjectItemConflictPolicy.FailIfExists && (fileExists || registered))
+        {
+            throw new InvalidOperationException(
+                $"C++ project item already exists or is already registered: Project='{request.ProjectName}', RelativePath='{relativePath}'.");
+        }
+
+        if (request.CreatePhysicalFile && !fileExists)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+            using FileStream stream = File.Create(filePath);
+        }
+
+        bool addedToProject = false;
+        if (request.AddToProject)
+        {
+            if (!request.AllowMsBuildFallback)
+            {
+                Project project = FindProjectByName(session.Dte, request.ProjectName)
+                    ?? throw new InvalidOperationException($"DTE solution model does not contain C++ project '{request.ProjectName}'.");
+                RetryComCall(() => project.ProjectItems.AddFromFile(filePath), 20, 300);
+            }
+
+            UpsertCppProjectItemRegistration(paths.ProjectFilePath, relativePath, itemType, request.ConflictPolicy);
+            if (!string.IsNullOrWhiteSpace(request.Filter))
+            {
+                UpsertCppProjectItemFilter(paths.FiltersFilePath, relativePath, itemType, request.Filter!);
+            }
+
+            addedToProject = VcxprojHasItem(paths.ProjectFilePath, relativePath, itemType);
+        }
+
+        return new CppProjectItemResult(paths.ProjectFilePath, filePath, itemType, request.Filter, addedToProject);
+    }
+
+    public CppProjectItemContentResult WriteCppProjectItemContent(
+        TwinCatEngineeringSession session,
+        WriteCppProjectItemContentRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        string relativePath = NormalizeProjectRelativePath(request.RelativePath);
+        string filePath = ResolveProjectContainedPath(paths.ProjectDirectory, relativePath);
+        if (request.RequireProjectRegistration &&
+            !VcxprojHasAnyItem(paths.ProjectFilePath, relativePath))
+        {
+            throw new InvalidOperationException(
+                $"C++ project item '{relativePath}' is not registered in '{paths.ProjectFilePath}'.");
+        }
+
+        WriteProjectItemContentToFile(request, filePath);
+        byte[] bytes = File.ReadAllBytes(filePath);
+        string sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+        return new CppProjectItemContentResult(filePath, sha256, bytes.LongLength);
+    }
+
+    public RemoveCppProjectItemResult RemoveCppProjectItem(
+        TwinCatEngineeringSession session,
+        RemoveCppProjectItemRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        string relativePath = NormalizeProjectRelativePath(request.RelativePath);
+        CppProjectItemType itemType = ResolveCppProjectItemType(relativePath, request.ItemType);
+        string filePath = ResolveProjectContainedPath(paths.ProjectDirectory, relativePath);
+
+        bool removedFromProject = RemoveCppProjectItemRegistration(paths.ProjectFilePath, relativePath, itemType);
+        bool removedFromFilters = true;
+        if (request.RemoveFilterEntry && File.Exists(paths.FiltersFilePath))
+        {
+            removedFromFilters = RemoveCppProjectItemFilter(paths.FiltersFilePath, relativePath, itemType);
+        }
+
+        if (!removedFromProject && !removedFromFilters && !File.Exists(filePath) && !request.IgnoreMissing)
+        {
+            throw new InvalidOperationException(
+                $"C++ project item '{relativePath}' was not found in project '{request.ProjectName}'.");
+        }
+
+        bool deletedFile = false;
+        if (request.DeletePhysicalFile && File.Exists(filePath))
+        {
+            File.Delete(filePath);
+            deletedFile = true;
+        }
+
+        return new RemoveCppProjectItemResult(removedFromProject, deletedFile);
+    }
+
+    public CppProjectPropertyResult SetCppProjectProperty(
+        TwinCatEngineeringSession session,
+        SetCppProjectPropertyRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        UpsertCppProjectProperty(
+            paths.ProjectFilePath,
+            request.PropertyName,
+            request.Value,
+            request.Condition,
+            request.PropertyGroupLabel);
+        return new CppProjectPropertyResult(paths.ProjectFilePath, request.PropertyName, request.Condition);
+    }
+
+    public CppItemDefinitionPropertyResult SetCppItemDefinitionProperty(
+        TwinCatEngineeringSession session,
+        SetCppItemDefinitionPropertyRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        UpsertCppItemDefinitionProperty(
+            paths.ProjectFilePath,
+            request.ToolName,
+            request.PropertyName,
+            request.Value,
+            request.Condition);
+        return new CppItemDefinitionPropertyResult(paths.ProjectFilePath, request.ToolName, request.PropertyName, request.Condition);
+    }
+
+    public CppProjectItemMetadataResult SetCppProjectItemMetadata(
+        TwinCatEngineeringSession session,
+        SetCppProjectItemMetadataRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        string relativePath = NormalizeProjectRelativePath(request.RelativePath);
+        CppProjectItemType itemType = ResolveCppProjectItemType(relativePath, request.ItemType);
+        UpsertCppProjectItemMetadata(
+            paths.ProjectFilePath,
+            relativePath,
+            itemType,
+            request.MetadataName,
+            request.Value,
+            request.Condition);
+        return new CppProjectItemMetadataResult(paths.ProjectFilePath, relativePath, request.MetadataName, request.Condition);
+    }
+
+    public PublishModulesResult PublishModules(TwinCatEngineeringSession session, PublishModulesRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        ITcSysManager sysManager = RequireSysManager(session);
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        string tmcPath = Path.Combine(paths.ProjectDirectory, request.ProjectName + ".tmc");
+        DateTime previousWrite = File.Exists(tmcPath) ? File.GetLastWriteTimeUtc(tmcPath) : DateTime.MinValue;
+        string? previousHash = File.Exists(tmcPath) ? ComputeFileSha256(tmcPath) : null;
+
+        ITcSmTreeItem? projectItem = null;
+        try
+        {
+            projectItem = GetTreeItem(sysManager, $"TIXC^{request.ProjectName}");
+            XDocument document = XDocument.Parse(RetryComCall(() => projectItem.ProduceXml(true)));
+            XElement publish = document.Descendants()
+                .FirstOrDefault(element => element.Name.LocalName == "PublishModules")
+                ?? throw new InvalidOperationException($"PublishModules method is not exposed for C++ project '{request.ProjectName}'.");
+            SetOrCreateChildElementValue(publish, "Active", "true");
+            RetryComCall(() => projectItem.ConsumeXml(document.ToString(SaveOptions.DisableFormatting)), 20, 500);
+            SaveAll(session);
+        }
+        finally
+        {
+            ReleaseComObjectIfNeeded(projectItem);
+        }
+
+        ThreadingThread.Sleep(Math.Max(0, request.PostPublishDelayMs));
+        bool updated = WaitForTmcUpdate(tmcPath, previousWrite, previousHash, request.WaitForUpdatedTmcTimeoutMs);
+        bool hasReadableTmc = TryReadTmc(tmcPath, out _);
+        return new PublishModulesResult(hasReadableTmc, File.Exists(tmcPath) ? tmcPath : null, updated);
+    }
+
     public TwinCatNodeInfo AddModuleInstance(TwinCatEngineeringSession session, AddModuleInstanceRequest request)
     {
         ITcSysManager sysManager = RequireSysManager(session);
@@ -568,7 +852,14 @@ public sealed class TwinCatEngineeringService
             string? projectPath = ResolveTwinCatProjectPathForOfflineMutation(session);
             if (!string.IsNullOrWhiteSpace(projectPath) && File.Exists(projectPath))
             {
-                if (TryResolveCppInstanceFromTsproj(projectPath, request.ProjectName, displayName, objectId, out string persistedName, out string? persistedObjectId))
+                if (TryNormalizeCppInstanceNameInTsproj(
+                        projectPath,
+                        request.ProjectName,
+                        request.InstanceBaseName,
+                        displayName,
+                        objectId,
+                        out string persistedName,
+                        out string? persistedObjectId))
                 {
                     displayName = persistedName;
                     objectId = string.IsNullOrWhiteSpace(persistedObjectId) ? objectId : persistedObjectId;
@@ -577,6 +868,8 @@ public sealed class TwinCatEngineeringService
                 {
                     return CreateOfflineModuleInstanceFallback(session, request, moduleGuid);
                 }
+
+                _ = TryNormalizeCppInstanceNamesInTsproj(projectPath, request.ProjectName);
             }
 
             return new TwinCatNodeInfo(
@@ -734,6 +1027,8 @@ public sealed class TwinCatEngineeringService
         catch
         {
         }
+
+        TryNormalizeCurrentTwinCatProjectInstanceNames(session);
     }
 
     public BuildResult BuildCurrentSolution(TwinCatEngineeringSession session, BuildSolutionRequest request)
@@ -989,6 +1284,857 @@ public sealed class TwinCatEngineeringService
         {
             // Best-effort close only; some TwinCAT operations tear down COM endpoints abruptly.
         }
+    }
+
+    private static string ResolveSolutionDirectory(TwinCatEngineeringSession session)
+    {
+        string? solutionPath = RetryComCall(() => session.Dte.Solution.FullName, 10, 300);
+        if (!string.IsNullOrWhiteSpace(solutionPath) && File.Exists(solutionPath))
+        {
+            return Path.GetDirectoryName(solutionPath)
+                ?? throw new InvalidOperationException($"Unable to resolve solution directory from '{solutionPath}'.");
+        }
+
+        return session.CurrentSolutionDirectory
+            ?? throw new InvalidOperationException("Current solution directory is not available.");
+    }
+
+    private static string ResolveRequestedProjectDirectory(string solutionDirectory, string projectName, string? projectDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(projectName))
+        {
+            throw new InvalidOperationException("ProjectName must not be empty.");
+        }
+
+        string rawDirectory = string.IsNullOrWhiteSpace(projectDirectory)
+            ? Path.Combine(solutionDirectory, projectName)
+            : projectDirectory!;
+        return Path.GetFullPath(rawDirectory);
+    }
+
+    private static string? ResolveVisualStudioCppTemplatePath(
+        TwinCatEngineeringSession session,
+        CreateVisualStudioCppProjectRequest request)
+    {
+        foreach (string candidate in request.CandidateTemplatePaths ?? Array.Empty<string>())
+        {
+            string fullPath = Path.GetFullPath(candidate);
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        if (!request.TemplateKind.Equals("ConsoleApplication", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        string[] templateNames =
+        {
+            "ConsoleApplication.zip",
+            "Console App.zip",
+            "Windows Console Application.zip",
+            "EmptyProject.zip"
+        };
+
+        foreach (string templateName in templateNames)
+        {
+            try
+            {
+                dynamic solution = session.Dte.Solution;
+                string resolved = RetryComCall(() => (string)solution.GetProjectTemplate(templateName, "VC"), 3, 200);
+                if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+                {
+                    return resolved;
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private static void CreateFallbackVisualStudioCppProjectFiles(string projectFilePath, string projectName, string? platformToolset)
+    {
+        string projectDirectory = Path.GetDirectoryName(projectFilePath)
+            ?? throw new InvalidOperationException($"Unable to resolve project directory for '{projectFilePath}'.");
+        Directory.CreateDirectory(projectDirectory);
+
+        string projectGuid = Guid.NewGuid().ToString("B").ToUpperInvariant();
+        string toolset = string.IsNullOrWhiteSpace(platformToolset) ? "v143" : platformToolset!;
+        XNamespace ns = "http://schemas.microsoft.com/developer/msbuild/2003";
+        XDocument project = new(
+            new XElement(
+                ns + "Project",
+                new XAttribute("DefaultTargets", "Build"),
+                new XAttribute("ToolsVersion", "17.0"),
+                new XElement(
+                    ns + "ItemGroup",
+                    new XAttribute("Label", "ProjectConfigurations"),
+                    CreateProjectConfiguration(ns, "Debug", "x64"),
+                    CreateProjectConfiguration(ns, "Release", "x64")),
+                new XElement(
+                    ns + "PropertyGroup",
+                    new XAttribute("Label", "Globals"),
+                    new XElement(ns + "VCProjectVersion", "17.0"),
+                    new XElement(ns + "Keyword", "Win32Proj"),
+                    new XElement(ns + "ProjectGuid", projectGuid),
+                    new XElement(ns + "RootNamespace", MakeSafeIdentifier(projectName))),
+                new XElement(ns + "Import", new XAttribute("Project", "$(VCTargetsPath)\\Microsoft.Cpp.Default.props")),
+                CreateConfigurationGroup(ns, "Debug", "x64", "Application", toolset, useDebugLibraries: true),
+                CreateConfigurationGroup(ns, "Release", "x64", "Application", toolset, useDebugLibraries: false),
+                new XElement(ns + "Import", new XAttribute("Project", "$(VCTargetsPath)\\Microsoft.Cpp.props")),
+                new XElement(ns + "ItemDefinitionGroup", new XAttribute("Condition", "'$(Configuration)|$(Platform)'=='Debug|x64'")),
+                new XElement(ns + "ItemDefinitionGroup", new XAttribute("Condition", "'$(Configuration)|$(Platform)'=='Release|x64'")),
+                new XElement(ns + "Import", new XAttribute("Project", "$(VCTargetsPath)\\Microsoft.Cpp.targets"))));
+
+        project.Save(projectFilePath);
+
+        XDocument filters = new(
+            new XElement(
+                ns + "Project",
+                new XAttribute("ToolsVersion", "4.0"),
+                new XElement(
+                    ns + "ItemGroup",
+                    CreateFilter(ns, "Source Files", "cpp;c;cxx;def;odl;idl;hpj;bat;asm;asmx"),
+                    CreateFilter(ns, "Header Files", "h;hh;hpp;hxx;hm;inl;inc;xsd"),
+                    CreateFilter(ns, "Resource Files", "rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav"))));
+        filters.Save(projectFilePath + ".filters");
+    }
+
+    private static XElement CreateProjectConfiguration(XNamespace ns, string configuration, string platform) =>
+        new(
+            ns + "ProjectConfiguration",
+            new XAttribute("Include", $"{configuration}|{platform}"),
+            new XElement(ns + "Configuration", configuration),
+            new XElement(ns + "Platform", platform));
+
+    private static XElement CreateConfigurationGroup(
+        XNamespace ns,
+        string configuration,
+        string platform,
+        string configurationType,
+        string platformToolset,
+        bool useDebugLibraries) =>
+        new(
+            ns + "PropertyGroup",
+            new XAttribute("Condition", $"'$(Configuration)|$(Platform)'=='{configuration}|{platform}'"),
+            new XAttribute("Label", "Configuration"),
+            new XElement(ns + "ConfigurationType", configurationType),
+            new XElement(ns + "UseDebugLibraries", useDebugLibraries ? "true" : "false"),
+            new XElement(ns + "PlatformToolset", platformToolset),
+            new XElement(ns + "CharacterSet", "Unicode"));
+
+    private static XElement CreateFilter(XNamespace ns, string name, string extensions) =>
+        new(
+            ns + "Filter",
+            new XAttribute("Include", name),
+            new XElement(ns + "UniqueIdentifier", Guid.NewGuid().ToString("B").ToUpperInvariant()),
+            new XElement(ns + "Extensions", extensions));
+
+    private static string ReadOrCreateProjectGuid(string projectFilePath)
+    {
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        XElement globals = document.Root?.Elements(ns + "PropertyGroup")
+            .FirstOrDefault(group => string.Equals(group.Attribute("Label")?.Value, "Globals", StringComparison.OrdinalIgnoreCase))
+            ?? new XElement(ns + "PropertyGroup", new XAttribute("Label", "Globals"));
+        if (globals.Parent is null)
+        {
+            document.Root?.AddFirst(globals);
+        }
+
+        XElement? guidElement = globals.Elements(ns + "ProjectGuid").FirstOrDefault();
+        if (guidElement is null || string.IsNullOrWhiteSpace(guidElement.Value))
+        {
+            guidElement = new XElement(ns + "ProjectGuid", Guid.NewGuid().ToString("B").ToUpperInvariant());
+            globals.Add(guidElement);
+            document.Save(projectFilePath, SaveOptions.DisableFormatting);
+        }
+
+        return NormalizeGuidText(guidElement.Value);
+    }
+
+    private static Project? FindProjectByName(DTE dte, string projectName)
+    {
+        Projects projects = RetryComCall(() => dte.Solution.Projects);
+        for (int index = 1; index <= projects.Count; index++)
+        {
+            Project? project = FindProjectByNameRecursive(projects.Item(index), projectName);
+            if (project is not null)
+            {
+                return project;
+            }
+        }
+
+        return null;
+    }
+
+    private static Project? FindProjectByNameRecursive(Project? project, string projectName)
+    {
+        if (project is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (string.Equals(project.Name, projectName, StringComparison.OrdinalIgnoreCase))
+            {
+                return project;
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            ProjectItems? items = project.ProjectItems;
+            if (items is null)
+            {
+                return null;
+            }
+
+            foreach (ProjectItem item in items)
+            {
+                Project? match = FindProjectByNameRecursive(item.SubProject, projectName);
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static SlnProjectEntry FindSlnProjectEntry(string solutionPath, string projectName)
+    {
+        string text = File.ReadAllText(solutionPath);
+        Regex regex = new(
+            @"Project\(""\{(?<type>[^""]+)\}""\)\s*=\s*""(?<name>[^""]+)""\s*,\s*""(?<path>[^""]+)""\s*,\s*""(?<guid>\{[^""]+\})""",
+            RegexOptions.IgnoreCase);
+        foreach (Match match in regex.Matches(text))
+        {
+            if (string.Equals(match.Groups["name"].Value, projectName, StringComparison.OrdinalIgnoreCase))
+            {
+                return new SlnProjectEntry(
+                    match.Groups["name"].Value,
+                    NormalizeGuidText(match.Groups["guid"].Value));
+            }
+        }
+
+        throw new InvalidOperationException($"Project '{projectName}' was not found in solution '{solutionPath}'.");
+    }
+
+    private static void UpsertSlnProjectDependency(string solutionPath, string projectGuid, string dependsOnProjectGuid)
+    {
+        string text = File.ReadAllText(solutionPath);
+        string normalizedProjectGuid = NormalizeGuidText(projectGuid);
+        string normalizedDependencyGuid = NormalizeGuidText(dependsOnProjectGuid);
+        string projectHeaderPattern = @"Project\(""\{[^""]+\}""\)\s*=\s*""[^""]+""\s*,\s*""[^""]+""\s*,\s*""" + Regex.Escape(normalizedProjectGuid) + @"""";
+        Match header = Regex.Match(text, projectHeaderPattern, RegexOptions.IgnoreCase);
+        if (!header.Success)
+        {
+            throw new InvalidOperationException($"Project GUID '{normalizedProjectGuid}' was not found in '{solutionPath}'.");
+        }
+
+        int projectEnd = text.IndexOf("EndProject", header.Index, StringComparison.Ordinal);
+        if (projectEnd < 0)
+        {
+            throw new InvalidOperationException($"Project section for '{normalizedProjectGuid}' is malformed.");
+        }
+
+        string block = text[header.Index..projectEnd];
+        if (block.Contains(normalizedDependencyGuid, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string dependencyLine = "\t\t" + normalizedDependencyGuid + " = " + normalizedDependencyGuid + Environment.NewLine;
+        string sectionStart = "\tProjectSection(ProjectDependencies) = postProject";
+        string sectionEnd = "\tEndProjectSection";
+        string replacement;
+        if (block.Contains("ProjectSection(ProjectDependencies)", StringComparison.OrdinalIgnoreCase))
+        {
+            int sectionEndIndex = block.IndexOf(sectionEnd, StringComparison.Ordinal);
+            replacement = block.Insert(sectionEndIndex, dependencyLine);
+        }
+        else
+        {
+            replacement = block + sectionStart + Environment.NewLine + dependencyLine + sectionEnd + Environment.NewLine;
+        }
+
+        text = text.Remove(header.Index, block.Length).Insert(header.Index, replacement);
+        File.WriteAllText(solutionPath, text, Encoding.UTF8);
+    }
+
+    private CppProjectPaths ResolveCppProjectPaths(TwinCatEngineeringSession session, string projectName)
+    {
+        if (string.IsNullOrWhiteSpace(projectName))
+        {
+            throw new InvalidOperationException("ProjectName must not be empty.");
+        }
+
+        Project? dteProject = FindProjectByName(session.Dte, projectName);
+        string? fullName = dteProject is null ? null : SafeGetProjectFullName(dteProject);
+        string projectFilePath = ResolveCppProjectFilePath(session, projectName, fullName);
+        if (!File.Exists(projectFilePath))
+        {
+            throw new FileNotFoundException($"C++ .vcxproj file was not found for project '{projectName}'.", projectFilePath);
+        }
+
+        string projectDirectory = Path.GetDirectoryName(projectFilePath)
+            ?? throw new InvalidOperationException($"Unable to resolve project directory from '{projectFilePath}'.");
+        return new CppProjectPaths(projectName, projectDirectory, projectFilePath, projectFilePath + ".filters");
+    }
+
+    private static string ResolveCppProjectFilePath(TwinCatEngineeringSession session, string projectName, string? dteProjectFullName)
+    {
+        if (!string.IsNullOrWhiteSpace(dteProjectFullName) &&
+            dteProjectFullName.EndsWith(".vcxproj", StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(dteProjectFullName))
+        {
+            return Path.GetFullPath(dteProjectFullName);
+        }
+
+        List<string> candidates = [];
+        void AddCandidate(string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+            {
+                return;
+            }
+
+            candidates.Add(Path.Combine(directory!, projectName, projectName + ".vcxproj"));
+        }
+
+        AddCandidate(session.CurrentSolutionDirectory);
+        try
+        {
+            string solutionDirectory = ResolveSolutionDirectory(session);
+            AddCandidate(solutionDirectory);
+            if (Directory.Exists(solutionDirectory))
+            {
+                candidates.AddRange(Directory.GetFiles(solutionDirectory, projectName + ".vcxproj", SearchOption.AllDirectories));
+            }
+        }
+        catch
+        {
+        }
+
+        string[] existing = candidates
+            .Select(Path.GetFullPath)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (existing.Length == 1)
+        {
+            return existing[0];
+        }
+
+        string[] exactParentMatches = existing
+            .Where(path => string.Equals(Path.GetFileName(Path.GetDirectoryName(path)), projectName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (exactParentMatches.Length == 1)
+        {
+            return exactParentMatches[0];
+        }
+
+        if (existing.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Multiple C++ .vcxproj files named '{projectName}.vcxproj' were found. " +
+                "Use a unique project name or expose the project through the DTE solution model. " +
+                string.Join("; ", existing));
+        }
+
+        return Path.GetFullPath(Path.Combine(ResolveSolutionDirectory(session), projectName, projectName + ".vcxproj"));
+    }
+
+    private static string NormalizeProjectRelativePath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            throw new InvalidOperationException("RelativePath must not be empty.");
+        }
+
+        string normalized = relativePath.Replace('/', '\\').Trim();
+        if (Path.IsPathRooted(normalized))
+        {
+            throw new InvalidOperationException($"RelativePath must not be rooted. Actual='{relativePath}'.");
+        }
+
+        string[] segments = normalized.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Any(segment => segment == "." || segment == ".."))
+        {
+            throw new InvalidOperationException($"RelativePath must not contain '.' or '..'. Actual='{relativePath}'.");
+        }
+
+        return string.Join('\\', segments);
+    }
+
+    private static string ResolveProjectContainedPath(string projectDirectory, string relativePath)
+    {
+        string fullPath = Path.GetFullPath(Path.Combine(projectDirectory, relativePath));
+        string root = Path.GetFullPath(projectDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Resolved path escapes the project directory: {fullPath}");
+        }
+
+        return fullPath;
+    }
+
+    private static CppProjectItemType ResolveCppProjectItemType(string relativePath, CppProjectItemType requested)
+    {
+        if (requested != CppProjectItemType.Infer)
+        {
+            return requested;
+        }
+
+        string extension = Path.GetExtension(relativePath).ToLowerInvariant();
+        return extension switch
+        {
+            ".cpp" or ".c" or ".cxx" => CppProjectItemType.ClCompile,
+            ".h" or ".hpp" or ".hh" or ".hxx" => CppProjectItemType.ClInclude,
+            ".rc" => CppProjectItemType.ResourceCompile,
+            _ => CppProjectItemType.None
+        };
+    }
+
+    private static string GetMsBuildItemName(CppProjectItemType itemType) =>
+        itemType == CppProjectItemType.Infer
+            ? throw new InvalidOperationException("CppProjectItemType.Infer must be resolved before writing MSBuild XML.")
+            : itemType.ToString();
+
+    private static bool VcxprojHasItem(string projectFilePath, string relativePath, CppProjectItemType itemType)
+    {
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        string itemName = GetMsBuildItemName(itemType);
+        return document.Descendants(ns + itemName).Any(element => IncludeMatches(element, relativePath));
+    }
+
+    private static bool VcxprojHasAnyItem(string projectFilePath, string relativePath)
+    {
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        return document.Descendants().Any(element =>
+            IsCppProjectItemElement(element) &&
+            IncludeMatches(element, relativePath));
+    }
+
+    private static bool IsCppProjectItemElement(XElement element) =>
+        element.Name.LocalName is "ClCompile" or "ClInclude" or "ResourceCompile" or "None";
+
+    private static bool IncludeMatches(XElement element, string relativePath) =>
+        string.Equals(
+            NormalizeMsBuildRelativePath(element.Attribute("Include")?.Value),
+            NormalizeMsBuildRelativePath(relativePath),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeMsBuildRelativePath(string? value) =>
+        (value ?? string.Empty).Replace('/', '\\').Trim();
+
+    private static void UpsertCppProjectItemRegistration(
+        string projectFilePath,
+        string relativePath,
+        CppProjectItemType itemType,
+        ProjectItemConflictPolicy conflictPolicy)
+    {
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        string itemName = GetMsBuildItemName(itemType);
+
+        if (conflictPolicy == ProjectItemConflictPolicy.ReplaceProjectRegistration)
+        {
+            foreach (XElement existing in document.Descendants(ns + itemName)
+                         .Where(element => IncludeMatches(element, relativePath))
+                         .ToList())
+            {
+                existing.Remove();
+            }
+        }
+        else if (document.Descendants(ns + itemName).Any(element => IncludeMatches(element, relativePath)))
+        {
+            return;
+        }
+
+        XElement group = document.Root?.Elements(ns + "ItemGroup")
+            .FirstOrDefault(itemGroup => itemGroup.Elements(ns + itemName).Any())
+            ?? new XElement(ns + "ItemGroup");
+        if (group.Parent is null)
+        {
+            document.Root?.Add(group);
+        }
+
+        group.Add(new XElement(ns + itemName, new XAttribute("Include", relativePath)));
+        document.Save(projectFilePath, SaveOptions.DisableFormatting);
+    }
+
+    private static bool RemoveCppProjectItemRegistration(
+        string projectFilePath,
+        string relativePath,
+        CppProjectItemType itemType)
+    {
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        string itemName = GetMsBuildItemName(itemType);
+        List<XElement> matches = document.Descendants(ns + itemName)
+            .Where(element => IncludeMatches(element, relativePath))
+            .ToList();
+        foreach (XElement match in matches)
+        {
+            match.Remove();
+        }
+
+        if (matches.Count > 0)
+        {
+            document.Save(projectFilePath, SaveOptions.DisableFormatting);
+        }
+
+        return matches.Count > 0;
+    }
+
+    private static void UpsertCppProjectItemFilter(
+        string filtersFilePath,
+        string relativePath,
+        CppProjectItemType itemType,
+        string filter)
+    {
+        XDocument document = LoadOrCreateFiltersDocument(filtersFilePath);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        EnsureFilterExists(document, ns, filter);
+
+        string itemName = GetMsBuildItemName(itemType);
+        XElement item = document.Descendants(ns + itemName)
+            .FirstOrDefault(element => IncludeMatches(element, relativePath))
+            ?? new XElement(ns + itemName, new XAttribute("Include", relativePath));
+        if (item.Parent is null)
+        {
+            XElement group = document.Root?.Elements(ns + "ItemGroup")
+                .FirstOrDefault(itemGroup => itemGroup.Elements(ns + itemName).Any())
+                ?? new XElement(ns + "ItemGroup");
+            if (group.Parent is null)
+            {
+                document.Root?.Add(group);
+            }
+
+            group.Add(item);
+        }
+
+        SetOrCreateChildElementValue(item, "Filter", filter);
+        document.Save(filtersFilePath, SaveOptions.DisableFormatting);
+    }
+
+    private static bool RemoveCppProjectItemFilter(
+        string filtersFilePath,
+        string relativePath,
+        CppProjectItemType itemType)
+    {
+        XDocument document = XDocument.Load(filtersFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        string itemName = GetMsBuildItemName(itemType);
+        List<XElement> matches = document.Descendants(ns + itemName)
+            .Where(element => IncludeMatches(element, relativePath))
+            .ToList();
+        foreach (XElement match in matches)
+        {
+            match.Remove();
+        }
+
+        if (matches.Count > 0)
+        {
+            document.Save(filtersFilePath, SaveOptions.DisableFormatting);
+        }
+
+        return matches.Count > 0;
+    }
+
+    private static XDocument LoadOrCreateFiltersDocument(string filtersFilePath)
+    {
+        if (File.Exists(filtersFilePath))
+        {
+            return XDocument.Load(filtersFilePath, LoadOptions.PreserveWhitespace);
+        }
+
+        XNamespace ns = "http://schemas.microsoft.com/developer/msbuild/2003";
+        XDocument document = new(new XElement(ns + "Project", new XAttribute("ToolsVersion", "4.0")));
+        Directory.CreateDirectory(Path.GetDirectoryName(filtersFilePath)!);
+        document.Save(filtersFilePath);
+        return document;
+    }
+
+    private static void EnsureFilterExists(XDocument document, XNamespace ns, string filter)
+    {
+        bool exists = document.Descendants(ns + "Filter")
+            .Any(element => string.Equals(element.Attribute("Include")?.Value, filter, StringComparison.OrdinalIgnoreCase));
+        if (exists)
+        {
+            return;
+        }
+
+        XElement group = document.Root?.Elements(ns + "ItemGroup")
+            .FirstOrDefault(itemGroup => itemGroup.Elements(ns + "Filter").Any())
+            ?? new XElement(ns + "ItemGroup");
+        if (group.Parent is null)
+        {
+            document.Root?.AddFirst(group);
+        }
+
+        group.Add(
+            new XElement(
+                ns + "Filter",
+                new XAttribute("Include", filter),
+                new XElement(ns + "UniqueIdentifier", Guid.NewGuid().ToString("B").ToUpperInvariant())));
+    }
+
+    private static void WriteProjectItemContentToFile(WriteCppProjectItemContentRequest request, string filePath)
+    {
+        if (!File.Exists(filePath) && request.WritePolicy == ProjectItemWritePolicy.FailIfMissing)
+        {
+            throw new FileNotFoundException("Project item file was not found.", filePath);
+        }
+
+        if (File.Exists(filePath) &&
+            request.WritePolicy == ProjectItemWritePolicy.FailIfNonEmpty &&
+            new FileInfo(filePath).Length > 0)
+        {
+            throw new InvalidOperationException($"Project item file is not empty: {filePath}");
+        }
+
+        bool hasContentText = request.ContentText is not null;
+        bool hasContentFile = !string.IsNullOrWhiteSpace(request.ContentFile);
+        if (hasContentText == hasContentFile)
+        {
+            throw new InvalidOperationException("Pass exactly one of ContentText or ContentFile.");
+        }
+
+        string content = hasContentFile
+            ? File.ReadAllText(Path.GetFullPath(request.ContentFile!), ResolveTextEncoding(request.Encoding, detectBom: true))
+            : request.ContentText!;
+        content = NormalizeNewLine(content, request.NewLine);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
+        File.WriteAllText(filePath, content, ResolveTextEncoding(request.Encoding, detectBom: false));
+    }
+
+    private static Encoding ResolveTextEncoding(string encodingName, bool detectBom)
+    {
+        string normalized = string.IsNullOrWhiteSpace(encodingName) ? "utf-8" : encodingName.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "utf-8" or "utf8" => detectBom ? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true) : new UTF8Encoding(false),
+            "utf-8-bom" or "utf8-bom" => new UTF8Encoding(true),
+            "ascii" => Encoding.ASCII,
+            _ => throw new InvalidOperationException($"Unsupported encoding '{encodingName}'. Use utf-8, utf-8-bom, or ascii.")
+        };
+    }
+
+    private static string NormalizeNewLine(string content, string newLine)
+    {
+        string normalized = string.IsNullOrWhiteSpace(newLine) ? "preserve" : newLine.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "preserve" => content,
+            "crlf" => content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal).Replace("\n", "\r\n", StringComparison.Ordinal),
+            "lf" => content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal),
+            _ => throw new InvalidOperationException($"Unsupported newline mode '{newLine}'. Use preserve, crlf, or lf.")
+        };
+    }
+
+    private static void UpsertCppProjectProperty(
+        string projectFilePath,
+        string propertyName,
+        string value,
+        string? condition,
+        string? propertyGroupLabel)
+    {
+        ValidateXmlName(propertyName, nameof(propertyName));
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        XElement group = document.Root?.Elements(ns + "PropertyGroup")
+            .FirstOrDefault(candidate =>
+                AttributeEquals(candidate, "Condition", condition) &&
+                AttributeEquals(candidate, "Label", propertyGroupLabel))
+            ?? new XElement(ns + "PropertyGroup");
+        if (group.Parent is null)
+        {
+            if (!string.IsNullOrWhiteSpace(condition))
+            {
+                group.SetAttributeValue("Condition", condition);
+            }
+
+            if (!string.IsNullOrWhiteSpace(propertyGroupLabel))
+            {
+                group.SetAttributeValue("Label", propertyGroupLabel);
+            }
+
+            document.Root?.Add(group);
+        }
+
+        SetOrCreateChildElementValue(group, propertyName, value);
+        document.Save(projectFilePath, SaveOptions.DisableFormatting);
+    }
+
+    private static void UpsertCppItemDefinitionProperty(
+        string projectFilePath,
+        string toolName,
+        string propertyName,
+        string value,
+        string? condition)
+    {
+        ValidateXmlName(toolName, nameof(toolName));
+        ValidateXmlName(propertyName, nameof(propertyName));
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        XElement group = document.Root?.Elements(ns + "ItemDefinitionGroup")
+            .FirstOrDefault(candidate => AttributeEquals(candidate, "Condition", condition))
+            ?? new XElement(ns + "ItemDefinitionGroup");
+        if (group.Parent is null)
+        {
+            if (!string.IsNullOrWhiteSpace(condition))
+            {
+                group.SetAttributeValue("Condition", condition);
+            }
+
+            document.Root?.Add(group);
+        }
+
+        XElement tool = group.Elements(ns + toolName).FirstOrDefault() ?? new XElement(ns + toolName);
+        if (tool.Parent is null)
+        {
+            group.Add(tool);
+        }
+
+        SetOrCreateChildElementValue(tool, propertyName, value);
+        document.Save(projectFilePath, SaveOptions.DisableFormatting);
+    }
+
+    private static void UpsertCppProjectItemMetadata(
+        string projectFilePath,
+        string relativePath,
+        CppProjectItemType itemType,
+        string metadataName,
+        string value,
+        string? condition)
+    {
+        ValidateXmlName(metadataName, nameof(metadataName));
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        string itemName = GetMsBuildItemName(itemType);
+        XElement item = document.Descendants(ns + itemName)
+            .FirstOrDefault(element =>
+                IncludeMatches(element, relativePath) &&
+                AttributeEquals(element, "Condition", condition))
+            ?? document.Descendants(ns + itemName).FirstOrDefault(element => IncludeMatches(element, relativePath))
+            ?? throw new InvalidOperationException($"Project item '{relativePath}' with item type '{itemName}' was not found in '{projectFilePath}'.");
+
+        if (!string.IsNullOrWhiteSpace(condition))
+        {
+            item.SetAttributeValue("Condition", condition);
+        }
+
+        SetOrCreateChildElementValue(item, metadataName, value);
+        document.Save(projectFilePath, SaveOptions.DisableFormatting);
+    }
+
+    private static bool AttributeEquals(XElement element, string attributeName, string? expected)
+    {
+        string? actual = element.Attribute(attributeName)?.Value;
+        if (string.IsNullOrWhiteSpace(expected))
+        {
+            return string.IsNullOrWhiteSpace(actual);
+        }
+
+        return string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ValidateXmlName(string value, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"{parameterName} must not be empty.");
+        }
+
+        try
+        {
+            _ = XName.Get(value);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"{parameterName} is not a valid XML element name: '{value}'.", ex);
+        }
+    }
+
+    private static bool WaitForTmcUpdate(string tmcPath, DateTime previousWrite, string? previousHash, int timeoutMs)
+    {
+        int waited = 0;
+        int effectiveTimeout = Math.Max(0, timeoutMs);
+        while (waited <= effectiveTimeout)
+        {
+            if (File.Exists(tmcPath))
+            {
+                DateTime current = File.GetLastWriteTimeUtc(tmcPath);
+                if (previousWrite == DateTime.MinValue || current > previousWrite)
+                {
+                    return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(previousHash) &&
+                    !string.Equals(previousHash, ComputeFileSha256(tmcPath), StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            ThreadingThread.Sleep(500);
+            waited += 500;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadTmc(string tmcPath, out XDocument? document)
+    {
+        document = null;
+        if (!File.Exists(tmcPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            document = XDocument.Load(tmcPath);
+            return document.Root is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string ComputeFileSha256(string path)
+    {
+        using FileStream stream = File.OpenRead(path);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static string NormalizeGuidText(string value)
+    {
+        if (!Guid.TryParse(value, out Guid guid))
+        {
+            throw new InvalidOperationException($"Invalid GUID text: '{value}'.");
+        }
+
+        return guid.ToString("B").ToUpperInvariant();
     }
 
     private static ITcSysManager RequireSysManager(TwinCatEngineeringSession session) =>
@@ -2819,8 +3965,7 @@ public sealed class TwinCatEngineeringService
             throw new InvalidOperationException("TwinCAT project path could not be resolved for AddModuleInstance fallback.");
         }
 
-        string moduleClassName = ResolveModuleClassNameByGuid(request.ProjectTmcPath, moduleGuid) ?? "CFallbackModule";
-        string displayName = request.InstanceBaseName + " (" + moduleClassName + ")";
+        string displayName = request.InstanceBaseName;
 
         XDocument document = XDocument.Load(projectPath);
         XElement? cppProject = document.Descendants().FirstOrDefault(element =>
@@ -2835,10 +3980,13 @@ public sealed class TwinCatEngineeringService
 
         XElement? existing = cppProject.Elements().FirstOrDefault(element =>
             element.Name.LocalName == "Instance" &&
-            string.Equals(GetChildElementValue(element, "Name"), displayName, StringComparison.OrdinalIgnoreCase));
+            (string.Equals(GetChildElementValue(element, "Name"), displayName, StringComparison.OrdinalIgnoreCase) ||
+             IsXaeSuffixedDisplayName(GetChildElementValue(element, "Name"), displayName)));
         if (existing is not null)
         {
-            string existingObjectId = existing.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "OTCID")?.Value ?? "#x02010010";
+            SetOrCreateChildElementValue(existing, "Name", displayName);
+            document.Save(projectPath);
+            string existingObjectId = existing.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName is "OTCID" or "Id")?.Value ?? "#x02010010";
             return new TwinCatNodeInfo(
                 $"TIXC^{request.ProjectName}^{displayName}",
                 displayName,
@@ -2849,7 +3997,7 @@ public sealed class TwinCatEngineeringService
 
         HashSet<string> usedObjectIds = cppProject.Elements()
             .Where(element => element.Name.LocalName == "Instance")
-            .Select(element => element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "OTCID")?.Value)
+            .Select(element => element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName is "OTCID" or "Id")?.Value)
             .Where(value => !string.IsNullOrWhiteSpace(value))
             .Select(value => value!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -2918,15 +4066,16 @@ public sealed class TwinCatEngineeringService
             ?? GetChildElementValue(module, "Name");
     }
 
-    private static bool TryResolveCppInstanceFromTsproj(
+    private static bool TryNormalizeCppInstanceNameInTsproj(
         string projectPath,
         string cppProjectName,
+        string requestedName,
         string displayName,
         string? objectId,
         out string persistedName,
         out string? persistedObjectId)
     {
-        persistedName = displayName;
+        persistedName = requestedName;
         persistedObjectId = objectId;
 
         XDocument document;
@@ -2951,15 +4100,26 @@ public sealed class TwinCatEngineeringService
 
         XElement? instance = cppProject.Elements().FirstOrDefault(element =>
             element.Name.LocalName == "Instance" &&
-            string.Equals(GetChildElementValue(element, "Name"), displayName, StringComparison.OrdinalIgnoreCase));
-        if (instance is null && !string.IsNullOrWhiteSpace(objectId))
+            string.Equals(GetChildElementValue(element, "Name"), requestedName, StringComparison.OrdinalIgnoreCase));
+        if (instance is null)
         {
             instance = cppProject.Elements().FirstOrDefault(element =>
                 element.Name.LocalName == "Instance" &&
-                string.Equals(
-                    element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "OTCID")?.Value,
-                    objectId,
-                    StringComparison.OrdinalIgnoreCase));
+                InstanceObjectIdEquals(element, objectId));
+        }
+
+        if (instance is null)
+        {
+            instance = cppProject.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Instance" &&
+                IsXaeSuffixedDisplayName(GetChildElementValue(element, "Name"), requestedName));
+        }
+
+        if (instance is null)
+        {
+            instance = cppProject.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Instance" &&
+                string.Equals(GetChildElementValue(element, "Name"), displayName, StringComparison.OrdinalIgnoreCase));
         }
 
         if (instance is null)
@@ -2967,9 +4127,121 @@ public sealed class TwinCatEngineeringService
             return false;
         }
 
-        persistedName = GetChildElementValue(instance, "Name") ?? displayName;
-        persistedObjectId = instance.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "OTCID")?.Value ?? objectId;
+        SetOrCreateChildElementValue(instance, "Name", requestedName);
+        persistedName = requestedName;
+        persistedObjectId =
+            instance.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName is "OTCID" or "Id")?.Value ??
+            objectId;
+        document.Save(projectPath);
         return true;
+    }
+
+    private static void TryNormalizeCurrentTwinCatProjectInstanceNames(TwinCatEngineeringSession session)
+    {
+        string? projectPath = ResolveTwinCatProjectPathForOfflineMutation(session);
+        if (!string.IsNullOrWhiteSpace(projectPath) && File.Exists(projectPath))
+        {
+            _ = TryNormalizeCppInstanceNamesInTsproj(projectPath, cppProjectName: null);
+        }
+    }
+
+    private static bool TryNormalizeCppInstanceNamesInTsproj(string projectPath, string? cppProjectName)
+    {
+        XDocument document;
+        try
+        {
+            document = XDocument.Load(projectPath);
+        }
+        catch
+        {
+            return false;
+        }
+
+        XElement[] cppProjects = document.Descendants().Where(element =>
+            element.Name.LocalName == "Project" &&
+            element.Parent?.Name.LocalName == "Cpp" &&
+            (string.IsNullOrWhiteSpace(cppProjectName) ||
+             string.Equals(element.Attributes().FirstOrDefault(attribute => attribute.Name.LocalName == "Name")?.Value, cppProjectName, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(GetChildElementValue(element, "Name"), cppProjectName, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+        if (cppProjects.Length == 0)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        foreach (XElement instance in cppProjects
+                     .SelectMany(project => project.Elements())
+                     .Where(element => element.Name.LocalName == "Instance"))
+        {
+            string? name = GetChildElementValue(instance, "Name");
+            string? normalized = NormalizeXaeSuffixedDisplayName(instance, name);
+            if (!string.IsNullOrWhiteSpace(normalized) &&
+                !string.Equals(name, normalized, StringComparison.Ordinal))
+            {
+                SetOrCreateChildElementValue(instance, "Name", normalized);
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            return true;
+        }
+
+        document.Save(projectPath);
+        return true;
+    }
+
+    private static bool InstanceObjectIdEquals(XElement instance, string? objectId)
+    {
+        if (string.IsNullOrWhiteSpace(objectId))
+        {
+            return false;
+        }
+
+        return instance.Attributes().Any(attribute =>
+            attribute.Name.LocalName is "OTCID" or "Id" &&
+            string.Equals(attribute.Value, objectId, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsXaeSuffixedDisplayName(string? candidate, string requestedName)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        return candidate.StartsWith(requestedName + " (", StringComparison.OrdinalIgnoreCase) &&
+               candidate.EndsWith(')');
+    }
+
+    private static string? NormalizeXaeSuffixedDisplayName(XElement instance, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return candidate;
+        }
+
+        int suffixStart = candidate.LastIndexOf(" (", StringComparison.Ordinal);
+        if (suffixStart <= 0 || !candidate.EndsWith(')'))
+        {
+            return candidate;
+        }
+
+        string suffix = candidate[(suffixStart + 2)..^1];
+        string? tmcName = instance.Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "TmcDesc")?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "Name")?
+            .Value;
+        if (string.IsNullOrWhiteSpace(tmcName) ||
+            !string.Equals(suffix, tmcName, StringComparison.OrdinalIgnoreCase))
+        {
+            return candidate;
+        }
+
+        return candidate[..suffixStart];
     }
 
     private static bool GuidMatches(string? candidate, Guid expected) =>
@@ -3032,4 +4304,14 @@ public sealed class TwinCatEngineeringService
             }
         }
     }
+
+    private sealed record CppProjectPaths(
+        string ProjectName,
+        string ProjectDirectory,
+        string ProjectFilePath,
+        string FiltersFilePath);
+
+    private sealed record SlnProjectEntry(
+        string Name,
+        string Guid);
 }

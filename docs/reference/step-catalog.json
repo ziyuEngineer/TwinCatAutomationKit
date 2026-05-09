@@ -53,7 +53,16 @@
     "engineering.launch-visual-studio",
     "engineering.create-xae-solution",
     "engineering.create-cpp-project",
+    "engineering.create-vs-cpp-project",
+    "engineering.ensure-solution-project-dependency",
+    "cpp.remove-project-item",
+    "cpp.create-project-item",
+    "cpp.write-project-item-content",
+    "cpp.set-project-property",
+    "cpp.set-item-definition-property",
+    "cpp.set-project-item-metadata",
     "engineering.create-module",
+    "engineering.publish-modules",
     "engineering.add-module-instance",
     "engineering.ensure-task",
     "engineering.export-tree-item-xml",
@@ -109,6 +118,470 @@
     "validation.ads-read-symbols"
   ],
   "Steps": [
+    {
+      "Kind": "cpp.create-project-item",
+      "MethodName": "TwinCatEngineeringService.CreateCppProjectItem",
+      "Category": "cpp",
+      "Summary": "Creates a C\u002B\u002B/header/resource/None project item, optionally creating the physical file and registering it in .vcxproj and .filters.",
+      "Preconditions": [
+        "The target C\u002B\u002B .vcxproj must already exist.",
+        "RelativePath must be inside the project directory."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "RelativePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path relative to the C\u002B\u002B project directory.",
+          "Example": null
+        },
+        {
+          "Name": "ItemType",
+          "Type": "CppProjectItemType",
+          "Required": false,
+          "Description": "MSBuild item type, or Infer from extension.",
+          "Example": "Infer"
+        },
+        {
+          "Name": "Filter",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional .vcxproj.filters display filter.",
+          "Example": null
+        },
+        {
+          "Name": "AddToProject",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to register the item in .vcxproj.",
+          "Example": "true"
+        },
+        {
+          "Name": "CreatePhysicalFile",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to create an empty physical file.",
+          "Example": "true"
+        },
+        {
+          "Name": "ConflictPolicy",
+          "Type": "ProjectItemConflictPolicy",
+          "Required": false,
+          "Description": "FailIfExists, KeepExisting, or ReplaceProjectRegistration.",
+          "Example": "FailIfExists"
+        },
+        {
+          "Name": "AllowMsBuildFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Allow typed MSBuild XML update when DTE ProjectItems is not stable.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Updated .vcxproj path."
+        },
+        {
+          "Name": "filePath",
+          "Type": "string",
+          "Description": "Physical project item path."
+        },
+        {
+          "Name": "itemType",
+          "Type": "CppProjectItemType",
+          "Description": "Resolved MSBuild item type."
+        },
+        {
+          "Name": "addedToProject",
+          "Type": "bool",
+          "Description": "Whether .vcxproj registration exists after the step."
+        }
+      ],
+      "VerificationNotes": [
+        "Verify the file exists, .vcxproj contains the requested Include, .filters contains filter mapping when requested, and reopen shows the item."
+      ]
+    },
+    {
+      "Kind": "cpp.remove-project-item",
+      "MethodName": "TwinCatEngineeringService.RemoveCppProjectItem",
+      "Category": "cpp",
+      "Summary": "Removes a C\u002B\u002B project item registration and optional filter entry and physical file.",
+      "Preconditions": [
+        "The target C\u002B\u002B .vcxproj must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "RelativePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path relative to the C\u002B\u002B project directory.",
+          "Example": null
+        },
+        {
+          "Name": "ItemType",
+          "Type": "CppProjectItemType",
+          "Required": false,
+          "Description": "MSBuild item type, or Infer from extension.",
+          "Example": "Infer"
+        },
+        {
+          "Name": "DeletePhysicalFile",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to delete the physical file.",
+          "Example": "true"
+        },
+        {
+          "Name": "RemoveFilterEntry",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to remove the .vcxproj.filters item mapping.",
+          "Example": "true"
+        },
+        {
+          "Name": "IgnoreMissing",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Treat missing item/file as success.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "removedFromProject",
+          "Type": "bool",
+          "Description": "Whether .vcxproj registration was removed."
+        },
+        {
+          "Name": "deletedFile",
+          "Type": "bool",
+          "Description": "Whether a physical file was deleted."
+        }
+      ],
+      "VerificationNotes": [
+        "Verify .vcxproj/.filters no longer reference the item and the file is absent when DeletePhysicalFile=true."
+      ]
+    },
+    {
+      "Kind": "cpp.set-item-definition-property",
+      "MethodName": "TwinCatEngineeringService.SetCppItemDefinitionProperty",
+      "Category": "cpp",
+      "Summary": "Sets a C\u002B\u002B ItemDefinitionGroup tool property such as ClCompile include paths or Link dependencies.",
+      "Preconditions": [
+        "The target C\u002B\u002B .vcxproj must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "ToolName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Tool element name such as ClCompile, Link, ResourceCompile, or PostBuildEvent.",
+          "Example": null
+        },
+        {
+          "Name": "PropertyName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Tool property element name.",
+          "Example": null
+        },
+        {
+          "Name": "Value",
+          "Type": "string",
+          "Required": true,
+          "Description": "Property value, including inherited macros when required.",
+          "Example": null
+        },
+        {
+          "Name": "Condition",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional ItemDefinitionGroup Condition.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Updated .vcxproj path."
+        },
+        {
+          "Name": "toolName",
+          "Type": "string",
+          "Description": "Tool element name."
+        },
+        {
+          "Name": "propertyName",
+          "Type": "string",
+          "Description": "Property element name."
+        },
+        {
+          "Name": "condition",
+          "Type": "string",
+          "Description": "Applied condition, if any."
+        }
+      ],
+      "VerificationNotes": [
+        "Inspect ItemDefinitionGroup XML and confirm build logs use include paths, library paths, language standard, dependencies, or events."
+      ]
+    },
+    {
+      "Kind": "cpp.set-project-item-metadata",
+      "MethodName": "TwinCatEngineeringService.SetCppProjectItemMetadata",
+      "Category": "cpp",
+      "Summary": "Sets file-level MSBuild metadata for a C\u002B\u002B project item, such as PrecompiledHeader or ExcludedFromBuild.",
+      "Preconditions": [
+        "The target item must already be registered in .vcxproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "RelativePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path relative to the C\u002B\u002B project directory.",
+          "Example": null
+        },
+        {
+          "Name": "ItemType",
+          "Type": "CppProjectItemType",
+          "Required": true,
+          "Description": "MSBuild item type containing the item.",
+          "Example": null
+        },
+        {
+          "Name": "MetadataName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Metadata element name.",
+          "Example": null
+        },
+        {
+          "Name": "Value",
+          "Type": "string",
+          "Required": true,
+          "Description": "Metadata value.",
+          "Example": null
+        },
+        {
+          "Name": "Condition",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional item Condition.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Updated .vcxproj path."
+        },
+        {
+          "Name": "relativePath",
+          "Type": "string",
+          "Description": "Item Include path."
+        },
+        {
+          "Name": "metadataName",
+          "Type": "string",
+          "Description": "Metadata element name."
+        },
+        {
+          "Name": "condition",
+          "Type": "string",
+          "Description": "Applied condition, if any."
+        }
+      ],
+      "VerificationNotes": [
+        "Inspect the item XML and confirm build output respects include/exclude or PCH metadata."
+      ]
+    },
+    {
+      "Kind": "cpp.set-project-property",
+      "MethodName": "TwinCatEngineeringService.SetCppProjectProperty",
+      "Category": "cpp",
+      "Summary": "Sets a project-level or configuration-level MSBuild property in a C\u002B\u002B .vcxproj.",
+      "Preconditions": [
+        "The target C\u002B\u002B .vcxproj must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "PropertyName",
+          "Type": "string",
+          "Required": true,
+          "Description": "MSBuild property element name.",
+          "Example": null
+        },
+        {
+          "Name": "Value",
+          "Type": "string",
+          "Required": true,
+          "Description": "Property value.",
+          "Example": null
+        },
+        {
+          "Name": "Condition",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional PropertyGroup Condition.",
+          "Example": null
+        },
+        {
+          "Name": "PropertyGroupLabel",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional PropertyGroup Label, such as Globals or Configuration.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Updated .vcxproj path."
+        },
+        {
+          "Name": "propertyName",
+          "Type": "string",
+          "Description": "Property name."
+        },
+        {
+          "Name": "condition",
+          "Type": "string",
+          "Description": "Applied condition, if any."
+        }
+      ],
+      "VerificationNotes": [
+        "Inspect .vcxproj and confirm the PropertyGroup contains the requested value; build log should reflect build-affecting properties."
+      ]
+    },
+    {
+      "Kind": "cpp.write-project-item-content",
+      "MethodName": "TwinCatEngineeringService.WriteCppProjectItemContent",
+      "Category": "cpp",
+      "Summary": "Writes source/resource/text payload into an existing C\u002B\u002B project item file and returns its content hash.",
+      "Preconditions": [
+        "The target C\u002B\u002B project must already exist.",
+        "ContentText and ContentFile are mutually exclusive."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "RelativePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Path relative to the C\u002B\u002B project directory.",
+          "Example": null
+        },
+        {
+          "Name": "ContentText",
+          "Type": "string",
+          "Required": false,
+          "Description": "Inline source payload.",
+          "Example": null
+        },
+        {
+          "Name": "ContentFile",
+          "Type": "string",
+          "Required": false,
+          "Description": "Payload file path produced by the JSON plan files[] section or another explicit caller-owned payload.",
+          "Example": null
+        },
+        {
+          "Name": "Encoding",
+          "Type": "string",
+          "Required": false,
+          "Description": "utf-8, utf-8-bom, or ascii.",
+          "Example": "utf-8"
+        },
+        {
+          "Name": "NewLine",
+          "Type": "string",
+          "Required": false,
+          "Description": "preserve, crlf, or lf.",
+          "Example": "preserve"
+        },
+        {
+          "Name": "WritePolicy",
+          "Type": "ProjectItemWritePolicy",
+          "Required": false,
+          "Description": "FailIfMissing, FailIfNonEmpty, or Overwrite.",
+          "Example": "Overwrite"
+        },
+        {
+          "Name": "RequireProjectRegistration",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Fail if .vcxproj does not already register the item.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "filePath",
+          "Type": "string",
+          "Description": "Written file path."
+        },
+        {
+          "Name": "sha256",
+          "Type": "string",
+          "Description": "SHA256 hash of the written bytes."
+        },
+        {
+          "Name": "bytesWritten",
+          "Type": "long",
+          "Description": "Number of bytes written."
+        }
+      ],
+      "VerificationNotes": [
+        "Compare the output hash with the payload and reopen the item in VS."
+      ]
+    },
     {
       "Kind": "engineering.activate-configuration",
       "MethodName": "TwinCatEngineeringService.ActivateConfiguration",
@@ -390,6 +863,80 @@
       ]
     },
     {
+      "Kind": "engineering.create-vs-cpp-project",
+      "MethodName": "TwinCatEngineeringService.CreateVisualStudioCppProject",
+      "Category": "engineering",
+      "Summary": "Creates a regular Visual Studio C\u002B\u002B project inside the current solution, such as an AdsClient console application.",
+      "Preconditions": [
+        "A solution must already be loaded in the DTE session.",
+        "An installed Visual Studio C\u002B\u002B template or explicit AllowTemplateFallback=true is required."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Visual Studio C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectDirectory",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional project directory. Defaults to SolutionDirectory/ProjectName.",
+          "Example": null
+        },
+        {
+          "Name": "TemplateKind",
+          "Type": "string",
+          "Required": false,
+          "Description": "Template semantic kind. P0 supports ConsoleApplication.",
+          "Example": "ConsoleApplication"
+        },
+        {
+          "Name": "CandidateTemplatePaths",
+          "Type": "string[]",
+          "Required": false,
+          "Description": "Optional explicit template paths for machine-specific VS installs.",
+          "Example": null
+        },
+        {
+          "Name": "PlatformToolset",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional PlatformToolset value such as v143.",
+          "Example": null
+        },
+        {
+          "Name": "AllowTemplateFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether the service may synthesize a minimal MSBuild C\u002B\u002B project if no installed template is found.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Absolute .vcxproj path."
+        },
+        {
+          "Name": "projectGuid",
+          "Type": "string",
+          "Description": "Project GUID registered in the .vcxproj/.sln."
+        },
+        {
+          "Name": "projectDirectory",
+          "Type": "string",
+          "Description": "Absolute project directory."
+        }
+      ],
+      "VerificationNotes": [
+        "Verify the .sln contains the project, .vcxproj exists, DTE can find it by name, and reopen keeps it visible."
+      ]
+    },
+    {
       "Kind": "engineering.create-xae-solution",
       "MethodName": "TwinCatEngineeringService.CreateTwinCatSolution",
       "Category": "engineering",
@@ -435,6 +982,46 @@
       ],
       "VerificationNotes": [
         "Check that the .sln and .tsproj files exist and that ITcSysManager can be retrieved."
+      ]
+    },
+    {
+      "Kind": "engineering.ensure-solution-project-dependency",
+      "MethodName": "TwinCatEngineeringService.EnsureSolutionProjectDependency",
+      "Category": "engineering",
+      "Summary": "Ensures a Visual Studio solution ProjectDependencies entry exists from one project to another.",
+      "Preconditions": [
+        "Both projects must already exist in the saved .sln."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Dependent project name.",
+          "Example": null
+        },
+        {
+          "Name": "DependsOnProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Project that must build before ProjectName.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectGuid",
+          "Type": "string",
+          "Description": "Dependent project GUID."
+        },
+        {
+          "Name": "dependsOnProjectGuid",
+          "Type": "string",
+          "Description": "Dependency project GUID."
+        }
+      ],
+      "VerificationNotes": [
+        "Inspect .sln ProjectSection(ProjectDependencies) and reload the solution to confirm the dependency remains."
       ]
     },
     {
@@ -629,6 +1216,58 @@
       ],
       "VerificationNotes": [
         "Confirm that the project can be found again in the DTE solution model."
+      ]
+    },
+    {
+      "Kind": "engineering.publish-modules",
+      "MethodName": "TwinCatEngineeringService.PublishModules",
+      "Category": "engineering",
+      "Summary": "Invokes the TwinCAT C\u002B\u002B project PublishModules method so updated module source regenerates TMC metadata.",
+      "Preconditions": [
+        "The target TwinCAT C\u002B\u002B project must exist and expose PublishModules in its tree XML."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "PostPublishDelayMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Delay after triggering PublishModules.",
+          "Example": "5000"
+        },
+        {
+          "Name": "WaitForUpdatedTmcTimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum wait for the project .tmc timestamp to update.",
+          "Example": "30000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "updatedTmcPath",
+          "Type": "string",
+          "Description": "Project .tmc path observed after publish."
+        },
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether publish left a readable project .tmc."
+        },
+        {
+          "Name": "updated",
+          "Type": "bool",
+          "Description": "Whether the .tmc timestamp or content changed during this publish call."
+        }
+      ],
+      "VerificationNotes": [
+        "Check that the .tmc is readable and contains the expected module classes; updated=true means the timestamp or content changed during this publish call."
       ]
     },
     {

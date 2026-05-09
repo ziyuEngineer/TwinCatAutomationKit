@@ -285,8 +285,11 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `engineering.launch-visual-studio` | `ordered-step-surface` | DTE session 可创建，后续真实 XAE 操作可继续。 |
 | `engineering.create-xae-solution` | `ordered-step-surface` | `.sln` 和 `.tsproj` 由 Beckhoff XAE template 创建。 |
 | `engineering.create-cpp-project` | `ordered-step-surface` | 返回的 tree path/display name/file path 精确匹配；`.vcxproj` 有 `ProjectGuid`，`.tmc` 存在。 |
+| `engineering.create-vs-cpp-project` | `ordered-step-surface` | 创建普通 VS C++ `AdsClient` project，`.sln`、`.vcxproj` 和 DTE model 都能定位。 |
+| `engineering.ensure-solution-project-dependency` | `ordered-step-surface` | `.sln` 中出现 `ProjectSection(ProjectDependencies)`，`AdsClient` 依赖 TwinCAT project 的 GUID 精确匹配。 |
 | `engineering.create-plc-project` | `ordered-step-surface` | `.tsproj` 可解析 PLC project/instance，测试写入 `MAIN.TcPOU` payload，并由 build/ADS 证明 payload 加载。 |
 | `engineering.create-module` | `ordered-step-surface` | 辅助 module 写入 header/source/TMC metadata，返回名包含请求名；允许 fallback 时必须被 full-project reopen/export 接受，不冒充严格 wizard proof。 |
+| `engineering.publish-modules` | `ordered-step-surface` | 调用 `PublishModules` 后 `.tmc` 可读并包含 `AuxModule` metadata；`updated` output 记录本次 timestamp/hash 是否变化。 |
 | `engineering.add-module-instance` | `ordered-step-surface` | primary/aux instance 返回可解析 ObjectId，DisplayName 包含请求名，并在 `.tsproj` 中按精确 ObjectId 存在；允许 fallback 时必须被 full-project reopen/export 接受。 |
 | `engineering.ensure-task` | `ordered-step-surface` | 两个 task 返回可解析 ObjectId，并在 reopen 后精确匹配 priority、cycle、AMS port、affinity、layout。 |
 | `engineering.export-tree-item-xml` | `ordered-step-surface` | `TIXC` 和 `TIRT` 导出 XML evidence，并解析校验 `TreeItem`、`ItemName`、`PathName`、subtype。 |
@@ -295,6 +298,12 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `engineering.open-xae-solution` | `ordered-step-surface` | file mutation 后 XAE reopen 不抛异常，且 export XML 成功。 |
 | `engineering.build-solution` | `ordered-step-surface` | PLC-only runtime clone 上 `BuildCurrentSolution` 返回成功和 `LastBuildInfo=0`，并生成或更新非空 PLC `.tmc` / `.compileinfo`。 |
 | `engineering.activate-configuration` | `activation-ads-runtime` | `EnableActivation=true` 时 activation 成功，记录 command/restart，并写出非空 `activated.tszip`。 |
+| `cpp.create-project-item` | `ordered-step-surface` / `atomic-step-wrappers` | 创建 `.cpp`、`.h`、`.rc`、`None` item，物理文件存在，`.vcxproj` 注册，`.filters` filter mapping 精确存在。 |
+| `cpp.write-project-item-content` | `ordered-step-surface` / `atomic-step-wrappers` | payload 内容写入 project item，SHA256 / bytes output 与文件一致，且 `RequireProjectRegistration=true` 能防止未注册文件。 |
+| `cpp.remove-project-item` | `ordered-step-surface` | `.vcxproj` 和 `.filters` 不再引用 exact item，物理 `.license` 文件被删除。 |
+| `cpp.set-project-property` | `ordered-step-surface` | `.vcxproj` XML 中 `CharacterSet` / `ConfigurationType` 等 property 写入目标 `PropertyGroup`。 |
+| `cpp.set-item-definition-property` | `ordered-step-surface` | `.vcxproj` XML 中 `ClCompile.LanguageStandard`、include path、Link setting 等 tool property 精确存在。 |
+| `cpp.set-project-item-metadata` | `ordered-step-surface` / `atomic-step-wrappers` | `.vcxproj` item metadata 写入 `ExcludedFromBuild` / `PrecompiledHeader`，atomic summary 记录 wrapper 输出。 |
 | `signing.set-license` | `signing-metadata` | 先污染 stale signing password/duplicate metadata，再写入唯一 `TcSign` PropertyGroup，`TcSignTwinCat=false`、license name 精确匹配、无 password、无重复节点。 |
 | `signing.grant-certificate` | `excluded-signing-certificate` | 默认排除；需要本机真实 TwinCAT OEM signing certificate/private key。 |
 | `signing.sign-twincat-binary` | `excluded-signing-certificate` | 默认排除；没有真实 OEM signing credential 时不伪造通过。 |

@@ -138,14 +138,23 @@ internal static partial class StepInvokeCommand
             "engineering.create-xae-solution" => ExecuteEngineeringCreateXaeSolution(options),
             "engineering.open-xae-solution" => ExecuteEngineeringOpenXaeSolution(options),
             "engineering.create-cpp-project" => ExecuteEngineeringCreateCppProject(options),
+            "engineering.create-vs-cpp-project" => ExecuteEngineeringCreateVsCppProject(options),
+            "engineering.ensure-solution-project-dependency" => ExecuteEngineeringEnsureSolutionProjectDependency(options),
             "engineering.create-plc-project" => ExecuteEngineeringCreatePlcProject(options),
             "engineering.create-module" => ExecuteEngineeringCreateModule(options),
+            "engineering.publish-modules" => ExecuteEngineeringPublishModules(options),
             "engineering.add-module-instance" => ExecuteEngineeringAddModuleInstance(options),
             "engineering.ensure-task" => ExecuteEngineeringEnsureTask(options),
             "engineering.export-tree-item-xml" => ExecuteEngineeringExportTreeItemXml(options),
             "engineering.save-all" => ExecuteEngineeringSaveAll(options),
             "engineering.close-visual-studio" => ExecuteEngineeringCloseVisualStudio(options),
             "engineering.build-solution" => ExecuteEngineeringBuildSolution(options),
+            "cpp.create-project-item" => ExecuteCppCreateProjectItem(options),
+            "cpp.write-project-item-content" => ExecuteCppWriteProjectItemContent(options),
+            "cpp.remove-project-item" => ExecuteCppRemoveProjectItem(options),
+            "cpp.set-project-property" => ExecuteCppSetProjectProperty(options),
+            "cpp.set-item-definition-property" => ExecuteCppSetItemDefinitionProperty(options),
+            "cpp.set-project-item-metadata" => ExecuteCppSetProjectItemMetadata(options),
             "signing.grant-certificate" => ExecuteSigningGrantCertificate(options),
             "signing.set-license" => ExecuteSigningSetLicense(options),
             "signing.sign-twincat-binary" => ExecuteSigningSignTwinCatBinary(options),
@@ -606,6 +615,24 @@ internal static partial class StepInvokeCommand
                 CppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
                 WizardId = CliOptionParser.GetOption(options, "wizard-id") ?? "TcVersionedDriverWizard"
             },
+            "engineering.create-vs-cpp-project" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "vs-project-name", "cpp-project-name", "project-name"),
+                ProjectDirectory = CliOptionParser.GetOption(options, "project-directory"),
+                TemplateKind = CliOptionParser.GetOption(options, "template-kind") ?? "ConsoleApplication",
+                CandidateTemplatePaths = CliOptionParser.GetOption(options, "candidate-template-paths", "candidate-template-path"),
+                PlatformToolset = CliOptionParser.GetOption(options, "platform-toolset"),
+                AllowTemplateFallback = CliOptionParser.GetOption(options, "allow-template-fallback")
+            },
+            "engineering.ensure-solution-project-dependency" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "dependency-project-name", "project-name"),
+                DependsOnProjectName = CliOptionParser.GetOption(options, "depends-on-project-name", "depends-on")
+            },
             "engineering.create-plc-project" => new
             {
                 SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
@@ -620,6 +647,14 @@ internal static partial class StepInvokeCommand
                 CppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
                 ModuleName = CliOptionParser.GetOption(options, "module-name"),
                 WizardId = CliOptionParser.GetOption(options, "wizard-id") ?? "TcModuleClassWizard",
+            },
+            "engineering.publish-modules" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                CppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                PostPublishDelayMs = CliOptionParser.GetOption(options, "post-publish-delay-ms"),
+                WaitForUpdatedTmcTimeoutMs = CliOptionParser.GetOption(options, "wait-for-updated-tmc-timeout-ms")
             },
             "engineering.add-module-instance" => new
             {
@@ -662,6 +697,74 @@ internal static partial class StepInvokeCommand
                 ConfigurationArchivePath = CliOptionParser.GetOption(options, "configuration-archive-path"),
                 Visible = CliOptionParser.GetOption(options, "visible"),
                 StartupDelayMs = CliOptionParser.GetOption(options, "startup-delay-ms")
+            },
+            "cpp.create-project-item" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                RelativePath = CliOptionParser.GetOption(options, "relative-path", "path"),
+                ItemType = CliOptionParser.GetOption(options, "item-type"),
+                Filter = CliOptionParser.GetOption(options, "filter"),
+                AddToProject = CliOptionParser.GetOption(options, "add-to-project"),
+                CreatePhysicalFile = CliOptionParser.GetOption(options, "create-physical-file"),
+                ConflictPolicy = CliOptionParser.GetOption(options, "conflict-policy"),
+                AllowMsBuildFallback = CliOptionParser.GetOption(options, "allow-msbuild-fallback")
+            },
+            "cpp.write-project-item-content" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                RelativePath = CliOptionParser.GetOption(options, "relative-path", "path"),
+                ContentText = CliOptionParser.GetOption(options, "content-text", "content") is null ? null : "<inline content>",
+                ContentFile = CliOptionParser.GetOption(options, "content-file"),
+                Encoding = CliOptionParser.GetOption(options, "encoding"),
+                NewLine = CliOptionParser.GetOption(options, "new-line", "newline"),
+                WritePolicy = CliOptionParser.GetOption(options, "write-policy"),
+                RequireProjectRegistration = CliOptionParser.GetOption(options, "require-project-registration")
+            },
+            "cpp.remove-project-item" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                RelativePath = CliOptionParser.GetOption(options, "relative-path", "path"),
+                ItemType = CliOptionParser.GetOption(options, "item-type"),
+                DeletePhysicalFile = CliOptionParser.GetOption(options, "delete-physical-file"),
+                RemoveFilterEntry = CliOptionParser.GetOption(options, "remove-filter-entry"),
+                IgnoreMissing = CliOptionParser.GetOption(options, "ignore-missing")
+            },
+            "cpp.set-project-property" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                PropertyName = CliOptionParser.GetOption(options, "property-name"),
+                Value = CliOptionParser.GetOption(options, "value"),
+                Condition = CliOptionParser.GetOption(options, "condition"),
+                PropertyGroupLabel = CliOptionParser.GetOption(options, "property-group-label")
+            },
+            "cpp.set-item-definition-property" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                ToolName = CliOptionParser.GetOption(options, "tool-name"),
+                PropertyName = CliOptionParser.GetOption(options, "property-name"),
+                Value = CliOptionParser.GetOption(options, "value"),
+                Condition = CliOptionParser.GetOption(options, "condition")
+            },
+            "cpp.set-project-item-metadata" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                RelativePath = CliOptionParser.GetOption(options, "relative-path", "path"),
+                ItemType = CliOptionParser.GetOption(options, "item-type"),
+                MetadataName = CliOptionParser.GetOption(options, "metadata-name"),
+                Value = CliOptionParser.GetOption(options, "value"),
+                Condition = CliOptionParser.GetOption(options, "condition")
             },
             "signing.grant-certificate" => new
             {
@@ -856,6 +959,36 @@ internal static partial class StepInvokeCommand
         }
 
         return value;
+    }
+
+    private static TEnum ParseEnumOption<TEnum>(
+        IReadOnlyDictionary<string, string> options,
+        string key,
+        TEnum fallback)
+        where TEnum : struct, Enum
+    {
+        string? raw = CliOptionParser.GetOption(options, key);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return fallback;
+        }
+
+        if (Enum.TryParse(raw, ignoreCase: true, out TEnum parsed))
+        {
+            return parsed;
+        }
+
+        throw new InvalidOperationException($"--{key} is invalid. Actual='{raw}'. Expected one of: {string.Join(", ", Enum.GetNames<TEnum>())}.");
+    }
+
+    private static IReadOnlyList<string>? ParseOptionalList(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        return raw.Split(new[] { ';', '|' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private static IReadOnlyList<int> ParsePorts(string? raw, IReadOnlyList<int> fallback)

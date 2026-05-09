@@ -29,6 +29,91 @@ public sealed record CreateCppProjectRequest(
     string ProjectName,
     string WizardId = "TcVersionedDriverWizard");
 
+public sealed record CreateVisualStudioCppProjectRequest(
+    string ProjectName,
+    string? ProjectDirectory = null,
+    string TemplateKind = "ConsoleApplication",
+    IReadOnlyList<string>? CandidateTemplatePaths = null,
+    string? PlatformToolset = null,
+    bool AllowTemplateFallback = false);
+
+public sealed record EnsureSolutionProjectDependencyRequest(
+    string ProjectName,
+    string DependsOnProjectName);
+
+public enum CppProjectItemType
+{
+    Infer,
+    ClCompile,
+    ClInclude,
+    ResourceCompile,
+    None
+}
+
+public enum ProjectItemConflictPolicy
+{
+    FailIfExists,
+    KeepExisting,
+    ReplaceProjectRegistration
+}
+
+public enum ProjectItemWritePolicy
+{
+    FailIfMissing,
+    FailIfNonEmpty,
+    Overwrite
+}
+
+public sealed record CreateCppProjectItemRequest(
+    string ProjectName,
+    string RelativePath,
+    CppProjectItemType ItemType = CppProjectItemType.Infer,
+    string? Filter = null,
+    bool AddToProject = true,
+    bool CreatePhysicalFile = true,
+    ProjectItemConflictPolicy ConflictPolicy = ProjectItemConflictPolicy.FailIfExists,
+    bool AllowMsBuildFallback = true);
+
+public sealed record WriteCppProjectItemContentRequest(
+    string ProjectName,
+    string RelativePath,
+    string? ContentText = null,
+    string? ContentFile = null,
+    string Encoding = "utf-8",
+    string NewLine = "preserve",
+    ProjectItemWritePolicy WritePolicy = ProjectItemWritePolicy.Overwrite,
+    bool RequireProjectRegistration = false);
+
+public sealed record RemoveCppProjectItemRequest(
+    string ProjectName,
+    string RelativePath,
+    CppProjectItemType ItemType = CppProjectItemType.Infer,
+    bool DeletePhysicalFile = true,
+    bool RemoveFilterEntry = true,
+    bool IgnoreMissing = false);
+
+public sealed record SetCppProjectPropertyRequest(
+    string ProjectName,
+    string PropertyName,
+    string Value,
+    string? Condition = null,
+    string? PropertyGroupLabel = null);
+
+public sealed record SetCppItemDefinitionPropertyRequest(
+    string ProjectName,
+    string ToolName,
+    string PropertyName,
+    string Value,
+    string? Condition = null);
+
+public sealed record SetCppProjectItemMetadataRequest(
+    string ProjectName,
+    string RelativePath,
+    CppProjectItemType ItemType,
+    string MetadataName,
+    string Value,
+    string? Condition = null);
+
 public sealed record ProbeCppProjectModuleArtifactsRequest(
     string SolutionDirectory,
     string ProjectName);
@@ -452,12 +537,54 @@ public sealed record TwinCatProjectInfo(
     string ProjectPath,
     string SolutionDirectory);
 
+public sealed record VisualStudioCppProjectInfo(
+    string ProjectFilePath,
+    string ProjectGuid,
+    string ProjectDirectory);
+
 public sealed record TwinCatNodeInfo(
     string TreeItemPath,
     string DisplayName,
     string? ObjectId = null,
     string? FilePath = null,
     bool UsedFallback = false);
+
+public sealed record SolutionProjectDependencyResult(
+    string ProjectGuid,
+    string DependsOnProjectGuid);
+
+public sealed record CppProjectItemResult(
+    string ProjectFilePath,
+    string FilePath,
+    CppProjectItemType ItemType,
+    string? Filter,
+    bool AddedToProject);
+
+public sealed record CppProjectItemContentResult(
+    string FilePath,
+    string Sha256,
+    long BytesWritten);
+
+public sealed record RemoveCppProjectItemResult(
+    bool RemovedFromProject,
+    bool DeletedFile);
+
+public sealed record CppProjectPropertyResult(
+    string ProjectFilePath,
+    string PropertyName,
+    string? Condition);
+
+public sealed record CppItemDefinitionPropertyResult(
+    string ProjectFilePath,
+    string ToolName,
+    string PropertyName,
+    string? Condition);
+
+public sealed record CppProjectItemMetadataResult(
+    string ProjectFilePath,
+    string RelativePath,
+    string MetadataName,
+    string? Condition);
 
 public sealed record BuildResult(
     bool Succeeded,
@@ -466,7 +593,8 @@ public sealed record BuildResult(
 
 public sealed record PublishModulesResult(
     bool Succeeded,
-    string? UpdatedTmcPath);
+    string? UpdatedTmcPath,
+    bool Updated = false);
 
 public sealed record ActivationResult(
     bool Succeeded,
