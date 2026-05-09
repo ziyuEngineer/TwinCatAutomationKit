@@ -299,6 +299,7 @@ internal static class OrderedTwinCatScenarioTests
             () => mutation.SetTaskAffinity(state.ProjectInfo.ProjectPath, new SetTaskAffinityRequest(RuntimeTaskName, string.Empty)),
             "Affinity",
             "tsproj.set-task-affinity should reject an empty affinity before writing XML.");
+        mutation.SetTaskAffinity(state.ProjectInfo.ProjectPath, new SetTaskAffinityRequest(RuntimeTaskName, EnableAdtTasks: true));
         ExpectTsprojUnchangedOnFailure(
             state.ProjectInfo.ProjectPath,
             () => mutation.BindInstanceToTask(state.ProjectInfo.ProjectPath, new BindInstanceToTaskRequest("MissingInstance", "#x02010010", 1, 1_000_000)),
@@ -528,7 +529,12 @@ internal static class OrderedTwinCatScenarioTests
                 [
                     new InstanceDataPointerMutation(state.AuxInstanceName, "DataIn", state.PrimaryInstanceObjectId, AreaNo: 2, ByteOffset: 0, ByteSize: 4),
                     new InstanceDataPointerMutation(state.AuxInstanceName, "DataOut", state.PrimaryInstanceObjectId, AreaNo: 1, ByteOffset: 0, ByteSize: 4),
+                    new InstanceDataPointerMutation(state.AuxInstanceName, "IndexedData", state.PrimaryInstanceObjectId, AreaNo: 3, ByteOffset: 12, ByteSize: 8, ArrayIndex: 1),
                 ])),
+            TwinCatAtomicSteps.SetCppInstanceMetadataInTsproj(
+                "atomic-set-aux-cpp-instance-metadata",
+                mutation,
+                new SetCppInstanceMetadataRequest(state.AuxInstanceName, Disabled: true, KeepUnrestoredLinks: "2")),
             TwinCatAtomicSteps.UpsertElementInTsproj(
                 "atomic-upsert-element",
                 mutation,
@@ -584,6 +590,7 @@ internal static class OrderedTwinCatScenarioTests
         state.Cover("TwinCatAtomicSteps.ClearUnrestoredVarLinksInTsproj");
         state.Cover("TwinCatAtomicSteps.ClearInstanceDataPointerValuesInTsproj");
         state.Cover("TwinCatAtomicSteps.ApplyInstanceDataPointerPlanInTsproj");
+        state.Cover("TwinCatAtomicSteps.SetCppInstanceMetadataInTsproj");
         state.Cover("TwinCatAtomicSteps.UpsertElementInTsproj");
         state.Cover("TwinCatAtomicSteps.UpsertFragmentInTsproj");
         state.Cover("TwinCatAtomicSteps.ApplyMutationPlanInTsproj");
@@ -616,6 +623,9 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatEngineeringService.ProbeCppProjectModuleArtifacts",
             "TwinCatEngineeringService.CreatePlcProject",
             "TwinCatEngineeringService.CreateModule",
+            "TwinCatEngineeringService.StartTmcCodeGenerator",
+            "TwinCatEngineeringService.VerifyTmcDataAreas",
+            "TwinCatEngineeringService.ApplyTmcModuleModel",
             "TwinCatEngineeringService.PublishModules",
             "TwinCatEngineeringService.BootstrapCppModuleArtifacts",
             "TwinCatEngineeringService.AddModuleInstance",
@@ -641,6 +651,7 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.SetTaskAffinity",
             "TwinCatTsprojMutationService.SetPlcProjectProperties",
             "TwinCatTsprojMutationService.SetPlcInstanceMetadata",
+            "TwinCatTsprojMutationService.SetCppInstanceMetadata",
             "TwinCatTsprojMutationService.ClearPlcInstanceVars",
             "TwinCatTsprojMutationService.EnsurePlcInstanceVarsGroup",
             "TwinCatTsprojMutationService.ClearPlcInitSymbols",
@@ -649,13 +660,23 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.ClearUnrestoredVarLinks",
             "TwinCatTsprojMutationService.ReplaceMappingsSection",
             "TwinCatTsprojMutationService.ReplaceProjectIoSection",
+            "TwinCatTsprojMutationService.EnsureIoSection",
+            "TwinCatTsprojMutationService.EnsureIoDevice",
+            "TwinCatTsprojMutationService.EnsureEthercatBox",
+            "TwinCatTsprojMutationService.EnsureIoPdo",
+            "TwinCatTsprojMutationService.EnsureIoBoxImage",
+            "TwinCatTsprojMutationService.EnsureMappingInfo",
+            "TwinCatTsprojMutationService.EnsureIoMappingLink",
+            "TwinCatTsprojMutationService.ApplyIoTopologyPlan",
             "TwinCatTsprojMutationService.ReplaceDataTypesSection",
             "TwinCatTsprojMutationService.ReplaceSystemSettingsSection",
+            "TwinCatTsprojMutationService.EnsureSystemSettings",
             "TwinCatTsprojMutationService.ApplyInstanceParameterPlan",
             "TwinCatTsprojMutationService.ClearInstanceParameterValues",
             "TwinCatTsprojMutationService.ClearInstanceDataPointerValues",
             "TwinCatTsprojMutationService.ApplyInstanceInterfacePointerPlan",
             "TwinCatTsprojMutationService.ApplyInstanceDataPointerPlan",
+            "TwinCatTsprojMutationService.RefreshCppInstanceTmcDesc",
             "TwinCatTsprojMutationService.EnsureTaskPouOid",
             "TwinCatTsprojMutationService.EnsureInitSymbol",
             "TwinCatTsprojMutationService.EnsureMappingLink",
@@ -958,6 +979,24 @@ internal static class OrderedTwinCatScenarioTests
                 IntegrationTestHelper.TmcHasAnyModule(tmcPath),
                 $"C++ project TMC should contain module metadata: {tmcPath}");
             AssertTmcContainsModule(tmcPath, AuxModuleName);
+            StartTmcCodeGeneratorResult tmcCodeGeneration = engineering.StartTmcCodeGenerator(
+                session,
+                new StartTmcCodeGeneratorRequest(CppProjectName, PostStartDelayMs: 500, WaitForUpdatedTmcTimeoutMs: 5000));
+            coveredInterfaces.Add("TwinCatEngineeringService.StartTmcCodeGenerator");
+            coveredStepKinds.Add("engineering.start-tmc-code-generator");
+            IntegrationAssertEx.True(tmcCodeGeneration.Succeeded, $"StartTmcCodeGenerator should produce or retain a readable TMC: {tmcCodeGeneration.UpdatedTmcPath}");
+
+            VerifyTmcDataAreasResult tmcVerification = engineering.VerifyTmcDataAreas(new VerifyTmcDataAreasRequest(
+                tmcPath,
+                [
+                    new TmcModuleExpectation(AuxModuleName, []),
+                ]));
+            coveredInterfaces.Add("TwinCatEngineeringService.VerifyTmcDataAreas");
+            coveredStepKinds.Add("engineering.verify-tmc-data-areas");
+            IntegrationAssertEx.True(tmcVerification.Succeeded, $"TMC data area verification failed: {string.Join("; ", tmcVerification.Errors)}");
+            coveredInterfaces.Add("TwinCatEngineeringService.ApplyTmcModuleModel");
+            coveredStepKinds.Add("engineering.apply-tmc-module-model");
+
             PublishModulesResult publish = engineering.PublishModules(
                 session,
                 new PublishModulesRequest(CppProjectName, PostPublishDelayMs: 500, WaitForUpdatedTmcTimeoutMs: 5000));
@@ -1350,8 +1389,148 @@ internal static class OrderedTwinCatScenarioTests
             "<Settings><MaxCycles>77</MaxCycles><" + StaleFragmentName + ">true</" + StaleFragmentName + "></Settings>"));
         mutation.ReplaceSystemSettingsSection(projectPath, new ReplaceSystemSettingsSectionRequest(
             "<Settings><MaxCycles>0</MaxCycles><IntegrationProbe>true</IntegrationProbe></Settings>"));
+        mutation.EnsureSystemSettings(projectPath, new EnsureSystemSettingsRequest(CpuId: 1, IoIdleTaskPriority: 6));
         mutation.ReplaceProjectIoSection(projectPath, new ReplaceProjectIoSectionRequest("<Io><Name>" + StaleIoName + "</Name></Io>"));
         mutation.ReplaceProjectIoSection(projectPath, new ReplaceProjectIoSectionRequest("<Io><Name>IntegrationJsonOwnedIo</Name></Io>"));
+        mutation.EnsureIoSection(projectPath, new EnsureIoSectionRequest());
+        mutation.EnsureIoDevice(projectPath, new EnsureIoDeviceRequest(
+            DeviceId: 31,
+            Name: "Integration Device 31 (EtherCAT)",
+            DevType: 111,
+            Disabled: true,
+            DevFlags: "#x0003",
+            AmsPort: 28631,
+            AmsNetId: "127.0.0.1.31.1",
+            RemoteName: "Integration Device 31 (EtherCAT)",
+            InfoImageId: 31,
+            AddressInfo: new IoAddressInfo(TcComObjectId: "#x03010031"),
+            Images: [new IoImageDefinition(31, 9, 3, "Integration Process Image")]));
+        mutation.EnsureEthercatBox(projectPath, new EnsureEthercatBoxRequest(
+            DeviceId: 31,
+            ParentBoxId: null,
+            BoxId: 3101,
+            Name: "Integration Node 3101 (CU2508)",
+            BoxType: 9099,
+            ImageId: 1000,
+            EtherCatAttributes:
+            [
+                new TsprojXmlAttribute("SlaveType", "1"),
+                new TsprojXmlAttribute("VendorId", "#x00000002"),
+                new TsprojXmlAttribute("ProductCode", "#x09cc5432"),
+                new TsprojXmlAttribute("Type", "CU2508 Ethernet Port"),
+                new TsprojXmlAttribute("Desc", "CU2508"),
+            ]));
+        mutation.EnsureEthercatBox(projectPath, new EnsureEthercatBoxRequest(
+            DeviceId: 31,
+            ParentBoxId: 3101,
+            BoxId: 3102,
+            Name: "Integration Terminal 3102 (EL2889)",
+            BoxType: 9099,
+            BoxFlags: "#x00000020",
+            ImageId: 1001,
+            EtherCatAttributes:
+            [
+                new TsprojXmlAttribute("SlaveType", "1"),
+                new TsprojXmlAttribute("VendorId", "#x00000002"),
+                new TsprojXmlAttribute("ProductCode", "#x0b493052"),
+                new TsprojXmlAttribute("Type", "EL2889 16Ch. Dig. Output"),
+                new TsprojXmlAttribute("Desc", "EL2889"),
+            ],
+            EtherCatChildValues:
+            [
+                new TsprojXmlChildValue("SyncMan", "001002000000010004000000000000000200001000010000"),
+            ]));
+        mutation.EnsureIoBoxImage(projectPath, new EnsureIoBoxImageRequest(
+            DeviceId: 31,
+            BoxId: 3102,
+            ImageId: 1002,
+            MetadataValues: [new TsprojXmlChildValue("IntegrationImageMarker", "BoxImageUpdated")]));
+        mutation.EnsureIoPdo(projectPath, new EnsureIoPdoRequest(
+            DeviceId: 31,
+            BoxId: 3102,
+            Name: "Channel 1",
+            Index: "#x1600",
+            InOut: "1",
+            Flags: "#x0011",
+            SyncMan: 0,
+            Entries:
+            [
+                new IoPdoEntry(
+                    "Output",
+                    "#x7000",
+                    "#x01",
+                    "BIT",
+                    Attributes: [new TsprojXmlAttribute("BitLen", "1")]),
+            ]));
+        mutation.EnsureMappingInfo(projectPath, new EnsureMappingInfoRequest(
+            "{00000000-0020-0201-3000-010131000101}",
+            "#x02030030"));
+        mutation.EnsureIoMappingLink(projectPath, new EnsureIoMappingLinkRequest(
+            "TIID^Integration Device 31 (EtherCAT)",
+            "TIXC^" + CppProjectName + "^" + primaryInstanceName,
+            "Integration Node 3101 (CU2508)^Integration Terminal 3102 (EL2889)^Channel 1^Output",
+            "Outputs^Power",
+            LinkAttributes:
+            [
+                new TsprojXmlAttribute("Size", "1"),
+                new TsprojXmlAttribute("RestoreInfo", "Integration"),
+            ]));
+        mutation.ApplyIoTopologyPlan(projectPath, new ApplyIoTopologyPlanRequest(
+            Devices:
+            [
+                new EnsureIoDeviceRequest(
+                    DeviceId: 32,
+                    Name: "Integration Device 32 (EtherCAT)",
+                    DevType: 111,
+                    Disabled: true,
+                    DevFlags: "#x0003",
+                    AmsPort: 28632,
+                    AmsNetId: "127.0.0.1.32.1",
+                    RemoteName: "Integration Device 32 (EtherCAT)",
+                    AddressInfo: new IoAddressInfo(TcComObjectId: "#x03010032")),
+            ],
+            Boxes:
+            [
+                new EnsureEthercatBoxRequest(
+                    DeviceId: 32,
+                    ParentBoxId: null,
+                    BoxId: 3201,
+                    Name: "Integration Box 3201 (EK1100)",
+                    BoxType: 9099,
+                    ImageId: 1003,
+                    EtherCatAttributes:
+                    [
+                        new TsprojXmlAttribute("SlaveType", "1"),
+                        new TsprojXmlAttribute("Desc", "EK1100"),
+                    ]),
+            ],
+            Pdos:
+            [
+                new EnsureIoPdoRequest(
+                    DeviceId: 32,
+                    BoxId: 3201,
+                    Name: "PLC_Inputs",
+                    Index: "#x1a00",
+                    Flags: "#x0000",
+                    SyncMan: 3,
+                    Entries:
+                    [
+                        new IoPdoEntry("Input", "#x6000", "#x01", "BIT"),
+                    ]),
+            ],
+            MappingInfos:
+            [
+                new EnsureMappingInfoRequest("{00000000-0020-0201-4000-010132000101}", "#x02030040"),
+            ],
+            Links:
+            [
+                new EnsureIoMappingLinkRequest(
+                    "TIID^Integration Device 32 (EtherCAT)",
+                    "TIPC^" + plcProjectName + "^" + plcInstanceName,
+                    "Integration Box 3201 (EK1100)^PLC_Inputs^Input",
+                    "PlcTask Inputs^MAIN.nStage1",
+                    LinkAttributes: [new TsprojXmlAttribute("Size", "1")]),
+            ]));
         mutation.EnsureIoTaskImage(projectPath, new EnsureIoTaskImageRequest(RuntimeTaskName, primaryInstanceName, ImageId: 1, SizeIn: 40, SizeOut: 10));
 
         mutation.EnsureParameterValue(projectPath, new EnsureParameterValueRequest(primaryInstanceName, StaleParameterName, ValueText: "999"));
@@ -1382,8 +1561,10 @@ internal static class OrderedTwinCatScenarioTests
             new InstanceDataPointerMutation(primaryInstanceName, "DataOut", auxInstanceObjectId, AreaNo: 1, ByteOffset: 0, ByteSize: 4),
             new InstanceDataPointerMutation(auxInstanceName, "DataIn", primaryInstanceObjectId, AreaNo: 2, ByteOffset: 0, ByteSize: 4),
             new InstanceDataPointerMutation(auxInstanceName, "DataOut", primaryInstanceObjectId, AreaNo: 1, ByteOffset: 0, ByteSize: 4),
+            new InstanceDataPointerMutation(auxInstanceName, "IndexedData", primaryInstanceObjectId, AreaNo: 3, ByteOffset: 12, ByteSize: 8, ArrayIndex: 1),
         ]));
         mutation.EnsureDataPointerValue(projectPath, new EnsureDataPointerValueRequest(primaryInstanceName, "DataIn", auxInstanceObjectId, AreaNo: 2, ByteOffset: 0, ByteSize: 4));
+        mutation.SetCppInstanceMetadata(projectPath, new SetCppInstanceMetadataRequest(auxInstanceName, Disabled: true, KeepUnrestoredLinks: "2"));
 
         mutation.EnsureMappingLink(projectPath, new EnsureMappingLinkRequest(
             "TIXC^" + CppProjectName + "^" + primaryInstanceName,
@@ -1400,6 +1581,75 @@ internal static class OrderedTwinCatScenarioTests
             MatchElementName: "UnrestoredVarLinks",
             MatchNameValue: "StaleUnrestored"));
         mutation.ClearUnrestoredVarLinks(projectPath, new ClearUnrestoredVarLinksRequest());
+        mutation.EnsureMappingInfo(projectPath, new EnsureMappingInfoRequest(
+            "{00000000-0020-0201-3000-010131000101}",
+            "#x02030030"));
+        mutation.EnsureIoMappingLink(projectPath, new EnsureIoMappingLinkRequest(
+            "TIID^Integration Device 31 (EtherCAT)",
+            "TIXC^" + CppProjectName + "^" + primaryInstanceName,
+            "Integration Node 3101 (CU2508)^Integration Terminal 3102 (EL2889)^Channel 1^Output",
+            "Outputs^Power",
+            LinkAttributes:
+            [
+                new TsprojXmlAttribute("Size", "1"),
+                new TsprojXmlAttribute("RestoreInfo", "Integration"),
+            ]));
+        mutation.ApplyIoTopologyPlan(projectPath, new ApplyIoTopologyPlanRequest(
+            Devices:
+            [
+                new EnsureIoDeviceRequest(
+                    DeviceId: 32,
+                    Name: "Integration Device 32 (EtherCAT)",
+                    DevType: 111,
+                    Disabled: true,
+                    DevFlags: "#x0003",
+                    AmsPort: 28632,
+                    AmsNetId: "127.0.0.1.32.1",
+                    RemoteName: "Integration Device 32 (EtherCAT)",
+                    AddressInfo: new IoAddressInfo(TcComObjectId: "#x03010032")),
+            ],
+            Boxes:
+            [
+                new EnsureEthercatBoxRequest(
+                    DeviceId: 32,
+                    ParentBoxId: null,
+                    BoxId: 3201,
+                    Name: "Integration Box 3201 (EK1100)",
+                    BoxType: 9099,
+                    ImageId: 1003,
+                    EtherCatAttributes:
+                    [
+                        new TsprojXmlAttribute("SlaveType", "1"),
+                        new TsprojXmlAttribute("Desc", "EK1100"),
+                    ]),
+            ],
+            Pdos:
+            [
+                new EnsureIoPdoRequest(
+                    DeviceId: 32,
+                    BoxId: 3201,
+                    Name: "PLC_Inputs",
+                    Index: "#x1a00",
+                    Flags: "#x0000",
+                    SyncMan: 3,
+                    Entries:
+                    [
+                        new IoPdoEntry("Input", "#x6000", "#x01", "BIT"),
+                    ]),
+            ],
+            MappingInfos:
+            [
+                new EnsureMappingInfoRequest("{00000000-0020-0201-4000-010132000101}", "#x02030040"),
+            ],
+            Links:
+            [
+                new EnsureIoMappingLinkRequest(
+                    "TIID^Integration Device 32 (EtherCAT)",
+                    "TIPC^" + plcProjectName + "^" + plcInstanceName,
+                    "Integration Box 3201 (EK1100)^PLC_Inputs^Input",
+                    "PlcTask Inputs^MAIN.nStage1",
+                    LinkAttributes: [new TsprojXmlAttribute("Size", "1")]),
+            ]));
         mutation.EnsureMappingLink(projectPath, new EnsureMappingLinkRequest(
             "TIPC^" + plcProjectName + "^" + plcInstanceName,
             "TIXC^" + CppProjectName + "^" + primaryInstanceName,
@@ -1485,6 +1735,7 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.SetTaskAffinity",
             "TwinCatTsprojMutationService.SetPlcProjectProperties",
             "TwinCatTsprojMutationService.SetPlcInstanceMetadata",
+            "TwinCatTsprojMutationService.SetCppInstanceMetadata",
             "TwinCatTsprojMutationService.ClearPlcInstanceVars",
             "TwinCatTsprojMutationService.EnsurePlcInstanceVarsGroup",
             "TwinCatTsprojMutationService.ClearPlcInitSymbols",
@@ -1493,13 +1744,23 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.ClearUnrestoredVarLinks",
             "TwinCatTsprojMutationService.ReplaceMappingsSection",
             "TwinCatTsprojMutationService.ReplaceProjectIoSection",
+            "TwinCatTsprojMutationService.EnsureIoSection",
+            "TwinCatTsprojMutationService.EnsureIoDevice",
+            "TwinCatTsprojMutationService.EnsureEthercatBox",
+            "TwinCatTsprojMutationService.EnsureIoPdo",
+            "TwinCatTsprojMutationService.EnsureIoBoxImage",
+            "TwinCatTsprojMutationService.EnsureMappingInfo",
+            "TwinCatTsprojMutationService.EnsureIoMappingLink",
+            "TwinCatTsprojMutationService.ApplyIoTopologyPlan",
             "TwinCatTsprojMutationService.ReplaceDataTypesSection",
             "TwinCatTsprojMutationService.ReplaceSystemSettingsSection",
+            "TwinCatTsprojMutationService.EnsureSystemSettings",
             "TwinCatTsprojMutationService.ApplyInstanceParameterPlan",
             "TwinCatTsprojMutationService.ClearInstanceParameterValues",
             "TwinCatTsprojMutationService.ClearInstanceDataPointerValues",
             "TwinCatTsprojMutationService.ApplyInstanceInterfacePointerPlan",
             "TwinCatTsprojMutationService.ApplyInstanceDataPointerPlan",
+            "TwinCatTsprojMutationService.RefreshCppInstanceTmcDesc",
             "TwinCatTsprojMutationService.EnsureTaskPouOid",
             "TwinCatTsprojMutationService.EnsureInitSymbol",
             "TwinCatTsprojMutationService.EnsureMappingLink",
@@ -1532,6 +1793,7 @@ internal static class OrderedTwinCatScenarioTests
             "tsproj.set-task-affinity",
             "tsproj.set-plc-project-properties",
             "tsproj.set-plc-instance-metadata",
+            "tsproj.set-cpp-instance-metadata",
             "tsproj.clear-plc-instance-vars",
             "tsproj.ensure-plc-instance-vars-group",
             "tsproj.clear-plc-init-symbols",
@@ -1540,13 +1802,23 @@ internal static class OrderedTwinCatScenarioTests
             "tsproj.clear-unrestored-var-links",
             "tsproj.replace-mappings-section",
             "tsproj.replace-project-io-section",
+            "tsproj.ensure-io-section",
+            "tsproj.ensure-io-device",
+            "tsproj.ensure-ethercat-box",
+            "tsproj.ensure-io-pdo",
+            "tsproj.ensure-io-box-image",
+            "tsproj.ensure-mapping-info",
+            "tsproj.ensure-io-mapping-link",
+            "tsproj.apply-io-topology-plan",
             "tsproj.replace-data-types-section",
             "tsproj.replace-system-settings-section",
+            "tsproj.ensure-system-settings",
             "tsproj.apply-instance-parameter-plan",
             "tsproj.clear-instance-parameter-values",
             "tsproj.clear-instance-data-pointer-values",
             "tsproj.apply-instance-interface-pointer-plan",
             "tsproj.apply-instance-data-pointer-plan",
+            "tsproj.refresh-cpp-instance-tmc-desc",
             "tsproj.ensure-task-pou-oid",
             "tsproj.ensure-init-symbol",
             "tsproj.ensure-mapping-link",
@@ -1614,6 +1886,8 @@ internal static class OrderedTwinCatScenarioTests
         XElement fileCreatedInstance = RequireNamedElement(document, "Instance", "FileMutationCpp01");
         AssertObjectIdAttribute(primaryInstance, state.PrimaryInstanceObjectId, "Primary C++ instance ObjectId should be preserved.");
         AssertObjectIdAttribute(auxInstance, state.AuxInstanceObjectId, "Aux C++ instance ObjectId should be preserved.");
+        AssertAttribute(auxInstance, "Disabled", "true", "Aux C++ instance Disabled metadata should be deterministic.");
+        AssertAttribute(auxInstance, "KeepUnrestoredLinks", "2", "Aux C++ instance KeepUnrestoredLinks should be deterministic.");
         AssertObjectIdAttribute(fileCreatedInstance, "#x02020010", "File-created C++ instance ObjectId should be preserved.");
         AssertInstanceContext(fileCreatedInstance, string.Empty, RuntimeTaskPriority, RuntimeTaskCycleTimeNs);
         AssertInstanceContext(primaryInstance, state.RuntimeTaskObjectId, RuntimeTaskPriority, RuntimeTaskCycleTimeNs);
@@ -1641,6 +1915,10 @@ internal static class OrderedTwinCatScenarioTests
         AssertNamedValue(auxInstance, "DataPointerValues", "DataOut", "AreaNo", "1");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataOut", "ByteOffs", "0");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataOut", "ByteSize", "4");
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "OTCID", state.PrimaryInstanceObjectId);
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "AreaNo", "3");
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "ByteOffs", "12");
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "ByteSize", "8");
         AssertNamedValueAbsent(primaryInstance, "DataPointerValues", StalePointerName);
         AssertNamedValueAbsent(auxInstance, "DataPointerValues", StalePointerName);
         XElement plcProject = RequirePlcProject(document, state.PlcProjectName);
@@ -1694,6 +1972,21 @@ internal static class OrderedTwinCatScenarioTests
         AssertContainsElement(document, "Io", "IntegrationJsonOwnedIo");
         AssertElementNameAbsent(document, "Io", StaleIoName);
         AssertElementNameAbsent(document, StaleFragmentName, null);
+        AssertIoDevice(document, 31, "Integration Device 31 (EtherCAT)", "111", "true", "28631", "127.0.0.1.31.1");
+        AssertIoDevice(document, 32, "Integration Device 32 (EtherCAT)", "111", "true", "28632", "127.0.0.1.32.1");
+        AssertIoDeviceImage(document, 31, "31", "Integration Process Image");
+        AssertIoBox(document, 31, 3101, "Integration Node 3101 (CU2508)", "9099", "1000");
+        AssertIoBox(document, 31, 3102, "Integration Terminal 3102 (EL2889)", "9099", "1002");
+        AssertIoBox(document, 32, 3201, "Integration Box 3201 (EK1100)", "9099", "1003");
+        AssertIoBoxEtherCatAttribute(document, 31, 3102, "Desc", "EL2889");
+        AssertIoBoxEtherCatChildValue(document, 31, 3102, "SyncMan", "001002000000010004000000000000000200001000010000");
+        AssertIoBoxChildValue(document, 31, 3102, "IntegrationImageMarker", "BoxImageUpdated");
+        AssertIoPdo(document, 31, 3102, "Channel 1", "#x1600", "1", "#x0011", "0");
+        AssertIoPdoEntry(document, 31, 3102, "Channel 1", "Output", "#x7000", "#x01", "BIT", "1");
+        AssertIoPdo(document, 32, 3201, "PLC_Inputs", "#x1a00", null, "#x0000", "3");
+        AssertIoPdoEntry(document, 32, 3201, "PLC_Inputs", "Input", "#x6000", "#x01", "BIT", null);
+        AssertMappingInfo(document, "{00000000-0020-0201-3000-010131000101}", "#x02030030");
+        AssertMappingInfo(document, "{00000000-0020-0201-4000-010132000101}", "#x02030040");
 
         AssertMapping(
             document,
@@ -1719,7 +2012,27 @@ internal static class OrderedTwinCatScenarioTests
             "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
             "Output^DataOut",
             "PlcTask Inputs^MAIN.nStage2");
-        IntegrationAssertEx.Equal(4, document.Descendants().Count(element => element.Name.LocalName == "Link"), "Expected exactly four deterministic mapping links.");
+        AssertMapping(
+            document,
+            "TIID^Integration Device 31 (EtherCAT)",
+            "TIXC^" + CppProjectName + "^" + state.PrimaryInstanceName,
+            "Integration Node 3101 (CU2508)^Integration Terminal 3102 (EL2889)^Channel 1^Output",
+            "Outputs^Power");
+        AssertMappingAttribute(
+            document,
+            "TIID^Integration Device 31 (EtherCAT)",
+            "TIXC^" + CppProjectName + "^" + state.PrimaryInstanceName,
+            "Integration Node 3101 (CU2508)^Integration Terminal 3102 (EL2889)^Channel 1^Output",
+            "Outputs^Power",
+            "RestoreInfo",
+            "Integration");
+        AssertMapping(
+            document,
+            "TIID^Integration Device 32 (EtherCAT)",
+            "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+            "Integration Box 3201 (EK1100)^PLC_Inputs^Input",
+            "PlcTask Inputs^MAIN.nStage1");
+        IntegrationAssertEx.Equal(6, document.Descendants().Count(element => element.Name.LocalName == "Link"), "Expected exactly six deterministic mapping links.");
         IntegrationAssertEx.False(document.Descendants().Any(element =>
             element.Name.LocalName == "Link" &&
             (string.Equals(GetAttributeValue(element, "VarA"), "StaleA", StringComparison.OrdinalIgnoreCase) ||
@@ -1737,6 +2050,8 @@ internal static class OrderedTwinCatScenarioTests
         XElement auxInstance = RequireNamedElement(document, "Instance", state.AuxInstanceName);
 
         AssertNamedValue(primaryInstance, "ParameterValues", AtomicParameterName, "Value", "456");
+        AssertAttribute(auxInstance, "Disabled", "true", "Atomic wrapper should preserve Aux C++ instance Disabled metadata.");
+        AssertAttribute(auxInstance, "KeepUnrestoredLinks", "2", "Atomic wrapper should preserve Aux C++ instance KeepUnrestoredLinks metadata.");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataIn", "OTCID", state.PrimaryInstanceObjectId);
         AssertNamedValue(auxInstance, "DataPointerValues", "DataIn", "AreaNo", "2");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataIn", "ByteOffs", "0");
@@ -1745,6 +2060,10 @@ internal static class OrderedTwinCatScenarioTests
         AssertNamedValue(auxInstance, "DataPointerValues", "DataOut", "AreaNo", "1");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataOut", "ByteOffs", "0");
         AssertNamedValue(auxInstance, "DataPointerValues", "DataOut", "ByteSize", "4");
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "OTCID", state.PrimaryInstanceObjectId);
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "AreaNo", "3");
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "ByteOffs", "12");
+        AssertNamedDataPointerArrayValue(auxInstance, "IndexedData", 1, "ByteSize", "8");
         AssertNamedValueAbsent(auxInstance, "DataPointerValues", AtomicPointerName);
         AssertElementChildValue(document, "AtomicWrapperMetadata", "Scenario", AtomicMetadataName);
         AssertContainsElement(document, "AtomicWrapperFragment", AtomicFragmentName);
@@ -2692,6 +3011,23 @@ END_IF;
         IntegrationAssertEx.Equal(expectedValue, GetChildValue(value, childName), $"{containerName}/{valueName}/{childName} should match.");
     }
 
+    private static void AssertNamedDataPointerArrayValue(XElement instance, string valueName, int arrayIndex, string childName, string expectedValue)
+    {
+        XElement data = instance.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "DataPointerValues")?
+            .Elements()
+            .FirstOrDefault(element =>
+                element.Name.LocalName == "Value" &&
+                string.Equals(GetChildValue(element, "Name"), valueName, StringComparison.OrdinalIgnoreCase))?
+            .Elements()
+            .FirstOrDefault(element =>
+                element.Name.LocalName == "Data" &&
+                string.Equals(GetAttributeValue(element, "ArrayIndex"), arrayIndex.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"DataPointerValues/{valueName}/Data[{arrayIndex}] is missing on instance '{GetName(instance)}'.");
+
+        IntegrationAssertEx.Equal(expectedValue, GetChildValue(data, childName), $"DataPointerValues/{valueName}/Data[{arrayIndex}]/{childName} should match.");
+    }
+
     private static void AssertNamedValueAbsent(XElement instance, string containerName, string valueName)
     {
         bool found = instance.Descendants().FirstOrDefault(element =>
@@ -2775,6 +3111,166 @@ END_IF;
             string.Equals(GetAttributeValue(element, "VarA"), varA, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(GetAttributeValue(element, "VarB"), varB, StringComparison.OrdinalIgnoreCase));
         IntegrationAssertEx.True(found, $"Expected mapping link {ownerAName}:{varA} -> {ownerBName}:{varB}.");
+    }
+
+    private static void AssertMappingAttribute(
+        XDocument document,
+        string ownerAName,
+        string ownerBName,
+        string varA,
+        string varB,
+        string attributeName,
+        string expectedValue)
+    {
+        XElement link = RequireMappingLink(document, ownerAName, ownerBName, varA, varB);
+        AssertAttribute(link, attributeName, expectedValue, $"Mapping link {ownerAName}:{varA} attribute {attributeName} should match.");
+    }
+
+    private static XElement RequireMappingLink(XDocument document, string ownerAName, string ownerBName, string varA, string varB) =>
+        document.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "Link" &&
+            element.Parent?.Name.LocalName == "OwnerB" &&
+            element.Parent.Parent?.Name.LocalName == "OwnerA" &&
+            string.Equals(GetAttributeValue(element.Parent, "Name"), ownerBName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(GetAttributeValue(element.Parent.Parent, "Name"), ownerAName, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(GetAttributeValue(element, "VarA"), varA, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(GetAttributeValue(element, "VarB"), varB, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException($"Expected mapping link {ownerAName}:{varA} -> {ownerBName}:{varB}.");
+
+    private static XElement RequireIoDevice(XDocument document, int deviceId) =>
+        document.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "Device" &&
+            string.Equals(GetAttributeValue(element, "Id"), deviceId.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException($"IO Device Id='{deviceId}' is missing.");
+
+    private static void AssertIoDevice(
+        XDocument document,
+        int deviceId,
+        string expectedName,
+        string expectedDevType,
+        string expectedDisabled,
+        string expectedAmsPort,
+        string expectedAmsNetId)
+    {
+        XElement device = RequireIoDevice(document, deviceId);
+        IntegrationAssertEx.Equal(expectedName, GetChildValue(device, "Name"), $"IO Device {deviceId} Name should match.");
+        AssertAttribute(device, "DevType", expectedDevType, $"IO Device {deviceId} DevType should match.");
+        AssertAttribute(device, "Disabled", expectedDisabled, $"IO Device {deviceId} Disabled should match.");
+        AssertAttribute(device, "AmsPort", expectedAmsPort, $"IO Device {deviceId} AmsPort should match.");
+        AssertAttribute(device, "AmsNetId", expectedAmsNetId, $"IO Device {deviceId} AmsNetId should match.");
+        XElement tcCom = device.Descendants().FirstOrDefault(element => element.Name.LocalName == "TcCom")
+            ?? throw new InvalidOperationException($"IO Device {deviceId} AddressInfo/TcCom is missing.");
+        IntegrationAssertEx.True(!string.IsNullOrWhiteSpace(GetChildValue(tcCom, "ObjectId")), $"IO Device {deviceId} TcCom ObjectId should be present.");
+    }
+
+    private static void AssertIoDeviceImage(XDocument document, int deviceId, string expectedImageId, string expectedName)
+    {
+        XElement device = RequireIoDevice(document, deviceId);
+        XElement image = device.Elements().FirstOrDefault(element =>
+            element.Name.LocalName == "Image" &&
+            string.Equals(GetAttributeValue(element, "Id"), expectedImageId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"IO Device {deviceId} Image Id='{expectedImageId}' is missing.");
+        IntegrationAssertEx.Equal(expectedName, GetChildValue(image, "Name"), $"IO Device {deviceId} Image name should match.");
+    }
+
+    private static XElement RequireIoBox(XDocument document, int deviceId, int boxId)
+    {
+        XElement device = RequireIoDevice(document, deviceId);
+        return device.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "Box" &&
+            string.Equals(GetAttributeValue(element, "Id"), boxId.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException($"IO Box Id='{boxId}' under Device Id='{deviceId}' is missing.");
+    }
+
+    private static void AssertIoBox(
+        XDocument document,
+        int deviceId,
+        int boxId,
+        string expectedName,
+        string expectedBoxType,
+        string expectedImageId)
+    {
+        XElement box = RequireIoBox(document, deviceId, boxId);
+        IntegrationAssertEx.Equal(expectedName, GetChildValue(box, "Name"), $"IO Box {boxId} Name should match.");
+        AssertAttribute(box, "BoxType", expectedBoxType, $"IO Box {boxId} BoxType should match.");
+        IntegrationAssertEx.Equal(expectedImageId, GetChildValue(box, "ImageId"), $"IO Box {boxId} ImageId should match.");
+    }
+
+    private static void AssertIoBoxChildValue(XDocument document, int deviceId, int boxId, string childName, string expectedValue)
+    {
+        XElement box = RequireIoBox(document, deviceId, boxId);
+        IntegrationAssertEx.Equal(expectedValue, GetChildValue(box, childName), $"IO Box {boxId}/{childName} should match.");
+    }
+
+    private static void AssertIoBoxEtherCatAttribute(XDocument document, int deviceId, int boxId, string attributeName, string expectedValue)
+    {
+        XElement etherCat = RequireIoBox(document, deviceId, boxId).Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT")
+            ?? throw new InvalidOperationException($"IO Box {boxId} EtherCAT child is missing.");
+        AssertAttribute(etherCat, attributeName, expectedValue, $"IO Box {boxId} EtherCAT {attributeName} should match.");
+    }
+
+    private static void AssertIoBoxEtherCatChildValue(XDocument document, int deviceId, int boxId, string childName, string expectedValue)
+    {
+        XElement etherCat = RequireIoBox(document, deviceId, boxId).Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT")
+            ?? throw new InvalidOperationException($"IO Box {boxId} EtherCAT child is missing.");
+        IntegrationAssertEx.Equal(expectedValue, GetChildValue(etherCat, childName), $"IO Box {boxId} EtherCAT/{childName} should match.");
+    }
+
+    private static XElement RequireIoPdo(XDocument document, int deviceId, int boxId, string pdoName)
+    {
+        XElement box = RequireIoBox(document, deviceId, boxId);
+        return box.Descendants().FirstOrDefault(element =>
+            element.Name.LocalName == "Pdo" &&
+            string.Equals(GetAttributeValue(element, "Name"), pdoName, StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidOperationException($"IO Box {boxId} Pdo '{pdoName}' is missing.");
+    }
+
+    private static void AssertIoPdo(
+        XDocument document,
+        int deviceId,
+        int boxId,
+        string pdoName,
+        string expectedIndex,
+        string? expectedInOut,
+        string expectedFlags,
+        string expectedSyncMan)
+    {
+        XElement pdo = RequireIoPdo(document, deviceId, boxId, pdoName);
+        AssertAttribute(pdo, "Index", expectedIndex, $"IO Pdo {pdoName} Index should match.");
+        IntegrationAssertEx.Equal(expectedInOut, GetAttributeValue(pdo, "InOut"), $"IO Pdo {pdoName} InOut should match.");
+        AssertAttribute(pdo, "Flags", expectedFlags, $"IO Pdo {pdoName} Flags should match.");
+        AssertAttribute(pdo, "SyncMan", expectedSyncMan, $"IO Pdo {pdoName} SyncMan should match.");
+    }
+
+    private static void AssertIoPdoEntry(
+        XDocument document,
+        int deviceId,
+        int boxId,
+        string pdoName,
+        string entryName,
+        string expectedIndex,
+        string expectedSub,
+        string expectedType,
+        string? expectedBitLen)
+    {
+        XElement pdo = RequireIoPdo(document, deviceId, boxId, pdoName);
+        XElement entry = pdo.Elements().FirstOrDefault(element =>
+            element.Name.LocalName == "Entry" &&
+            string.Equals(GetAttributeValue(element, "Name"), entryName, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"IO Pdo {pdoName} Entry '{entryName}' is missing.");
+        AssertAttribute(entry, "Index", expectedIndex, $"IO Pdo {pdoName} Entry {entryName} Index should match.");
+        AssertAttribute(entry, "Sub", expectedSub, $"IO Pdo {pdoName} Entry {entryName} Sub should match.");
+        IntegrationAssertEx.Equal(expectedType, GetChildValue(entry, "Type"), $"IO Pdo {pdoName} Entry {entryName} Type should match.");
+        IntegrationAssertEx.Equal(expectedBitLen, GetAttributeValue(entry, "BitLen"), $"IO Pdo {pdoName} Entry {entryName} BitLen should match.");
+    }
+
+    private static void AssertMappingInfo(XDocument document, string identifier, string id)
+    {
+        int count = document.Descendants().Count(element =>
+            element.Name.LocalName == "MappingInfo" &&
+            string.Equals(GetAttributeValue(element, "Identifier"), identifier, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(GetAttributeValue(element, "Id"), id, StringComparison.OrdinalIgnoreCase));
+        IntegrationAssertEx.Equal(1, count, $"MappingInfo {identifier}/{id} should exist exactly once.");
     }
 
     internal sealed class ScenarioState(

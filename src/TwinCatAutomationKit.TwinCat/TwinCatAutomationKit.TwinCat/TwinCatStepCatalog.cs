@@ -168,7 +168,8 @@ public static class TwinCatStepCatalog
             {
                 new StepParameterContract("ProjectName", "string", true, "TwinCAT C++ project name."),
                 new StepParameterContract("PostPublishDelayMs", "int", false, "Delay after triggering PublishModules.", "5000"),
-                new StepParameterContract("WaitForUpdatedTmcTimeoutMs", "int", false, "Maximum wait for the project .tmc timestamp to update.", "30000")
+                new StepParameterContract("WaitForUpdatedTmcTimeoutMs", "int", false, "Maximum wait for the project .tmc timestamp to update.", "30000"),
+                new StepParameterContract("RunTmcCodeGeneratorFirst", "bool", false, "Whether to invoke StartTmcCodeGenerator before PublishModules.", "false")
             },
             new[]
             {
@@ -177,6 +178,72 @@ public static class TwinCatStepCatalog
                 new StepOutputContract("updated", "bool", "Whether the .tmc timestamp or content changed during this publish call.")
             },
             new[] { "Check that the .tmc is readable and contains the expected module classes; updated=true means the timestamp or content changed during this publish call." }),
+
+        new StepContract(
+            "engineering.start-tmc-code-generator",
+            "TwinCatEngineeringService.StartTmcCodeGenerator",
+            "engineering",
+            "Invokes the TwinCAT C++ project StartTmcCodeGenerator method so source annotations regenerate TMC metadata.",
+            new[] { "The target TwinCAT C++ project must exist and expose StartTmcCodeGenerator in its tree XML." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "TwinCAT C++ project name."),
+                new StepParameterContract("PostStartDelayMs", "int", false, "Delay after triggering StartTmcCodeGenerator.", "500"),
+                new StepParameterContract("WaitForUpdatedTmcTimeoutMs", "int", false, "Maximum wait for the project .tmc timestamp to update.", "30000")
+            },
+            new[]
+            {
+                new StepOutputContract("updatedTmcPath", "string", "Project .tmc path observed after code generation."),
+                new StepOutputContract("succeeded", "bool", "Whether code generation left a readable project .tmc."),
+                new StepOutputContract("updated", "bool", "Whether the .tmc timestamp or content changed during this code generation call.")
+            },
+            new[] { "Check that the .tmc is readable and contains source-derived DataAreas, Parameters, Interfaces, and module classes; updated=false can still be acceptable if content was already current." }),
+
+        new StepContract(
+            "engineering.verify-tmc-data-areas",
+            "TwinCatEngineeringService.VerifyTmcDataAreas",
+            "engineering",
+            "Reads a TwinCAT C++ .tmc file and verifies expected module DataAreas and symbols before instances are created.",
+            new[] { "Run engineering.start-tmc-code-generator and engineering.publish-modules first when source annotations were just written." },
+            new[]
+            {
+                new StepParameterContract("ProjectTmcPath", "string", true, "Absolute path to the project .tmc file."),
+                new StepParameterContract("Modules", "IReadOnlyList<TmcModuleExpectation>", true, "Expected module names, DataAreas, AreaTypes, and symbols."),
+                new StepParameterContract("FailOnUnexpectedModule", "bool", false, "Whether modules not listed in Modules should fail verification.", "false")
+            },
+            new[]
+            {
+                new StepOutputContract("projectTmcPath", "string", "Verified project .tmc path."),
+                new StepOutputContract("expectedModuleCount", "int", "Expected module count from the request."),
+                new StepOutputContract("matchedModuleCount", "int", "Number of expected modules found."),
+                new StepOutputContract("errorsJson", "json", "Detailed mismatch list when verification fails.")
+            },
+            new[] { "Use this after C++ code generation and before add-module-instance; a fallback skeleton TMC with Input/DataIn and Output/DataOut should fail this step." }),
+
+        new StepContract(
+            "engineering.apply-tmc-module-model",
+            "TwinCatEngineeringService.ApplyTmcModuleModel",
+            "engineering",
+            "Applies a structured JSON module model to a TwinCAT C++ project .tmc without copying a whole known-good TMC file.",
+            new[] { "The target project .tmc must already exist.", "GeneratedServicesHeaderPath should point at the project Services.h; GeneratedHeaderPaths can add companion headers such as Interfaces.h for custom interface GUIDs." },
+            new[]
+            {
+                new StepParameterContract("ProjectTmcPath", "string", true, "Absolute path to the project .tmc file."),
+                new StepParameterContract("ProjectName", "string", true, "TwinCAT C++ project / class factory name."),
+                new StepParameterContract("Modules", "IReadOnlyList<TmcModuleModel>", true, "Structured module definitions containing GUIDs, interfaces, parameters, DataAreas, interface pointers, data pointers, and event classes."),
+                new StepParameterContract("GeneratedServicesHeaderPath", "string", false, "Optional generated Services.h path used to resolve custom type GUIDs and DataTypes."),
+                new StepParameterContract("GeneratedHeaderPaths", "IReadOnlyList<string>", false, "Optional additional generated headers used to resolve companion custom type or interface GUIDs."),
+                new StepParameterContract("LibraryName", "string", false, "Optional Library/Name override. Defaults to ProjectName."),
+                new StepParameterContract("LibraryVersion", "string", false, "Library/Version value.", "0.0.0.1"),
+                new StepParameterContract("RemoveUnexpectedModules", "bool", false, "Whether module entries not present in Modules should be removed.", "false"),
+                new StepParameterContract("ReplaceDataTypesFromGeneratedHeader", "bool", false, "Whether generated header DataTypes should replace the .tmc DataTypes section.", "true")
+            },
+            new[]
+            {
+                new StepOutputContract("projectTmcPath", "string", "Mutated project .tmc path."),
+                new StepOutputContract("moduleCount", "int", "Number of module models applied.")
+            },
+            new[] { "Run engineering.verify-tmc-data-areas afterwards and inspect the .tmc DataTypes/Modules sections; this step must not receive raw module XML fragments." }),
 
         new StepContract(
             "engineering.add-module-instance",
@@ -658,16 +725,16 @@ public static class TwinCatStepCatalog
             "tsproj.set-task-affinity",
             "TwinCatTsprojMutationService.SetTaskAffinity",
             "tsproj",
-            "Sets Task Affinity and AdtTasks attributes for scheduler placement-sensitive workloads.",
+            "Sets Task Affinity and/or AdtTasks attributes for scheduler placement-sensitive workloads.",
             new[] { "The target Task node must already exist in the .tsproj." },
             new[]
             {
                 new StepParameterContract("TaskName", "string", true, "Task node name."),
-                new StepParameterContract("Affinity", "string", true, "TwinCAT affinity mask or list, for example 1 or 0,2."),
+                new StepParameterContract("Affinity", "string", false, "Optional TwinCAT affinity mask or list, for example 1 or 0,2. Omit to update only AdtTasks."),
                 new StepParameterContract("EnableAdtTasks", "bool", false, "Whether to force AdtTasks=true on the task.", "true")
             },
             Array.Empty<StepOutputContract>(),
-            new[] { "Re-open the .tsproj and confirm the Task node includes Affinity and AdtTasks attributes." }),
+            new[] { "Re-open the .tsproj and confirm the Task node includes the requested Affinity and/or AdtTasks attributes." }),
 
         new StepContract(
             "tsproj.set-plc-project-properties",
@@ -705,6 +772,23 @@ public static class TwinCatStepCatalog
             },
             Array.Empty<StepOutputContract>(),
             new[] { "Re-open the .tsproj and verify PLC instance attributes and CLSID metadata values." }),
+
+        new StepContract(
+            "tsproj.set-cpp-instance-metadata",
+            "TwinCatTsprojMutationService.SetCppInstanceMetadata",
+            "tsproj",
+            "Updates C++ Instance metadata attributes such as Disabled, KeepUnrestoredLinks, ClassFactoryId, or ObjectId without replacing TmcDesc.",
+            new[] { "The target C++ Instance must already exist in the .tsproj." },
+            new[]
+            {
+                new StepParameterContract("InstanceName", "string", true, "C++ instance display name."),
+                new StepParameterContract("Disabled", "bool?", false, "Optional Disabled attribute value. false removes the Disabled attribute.", "true"),
+                new StepParameterContract("KeepUnrestoredLinks", "string", false, "Optional KeepUnrestoredLinks attribute value."),
+                new StepParameterContract("ClassFactoryId", "string", false, "Optional ClassFactoryId attribute value."),
+                new StepParameterContract("ObjectId", "string", false, "Optional instance Id/ObjectId attribute value, for example #x01010010.")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify the C++ Instance metadata attributes were applied while TmcDesc remains intact." }),
 
         new StepContract(
             "tsproj.clear-plc-instance-vars",
@@ -817,6 +901,171 @@ public static class TwinCatStepCatalog
             new[] { "Re-open the .tsproj and verify the root Project contains the requested Io section." }),
 
         new StepContract(
+            "tsproj.ensure-io-section",
+            "TwinCatTsprojMutationService.EnsureIoSection",
+            "tsproj",
+            "Ensures the root Project/Io section exists without replacing other Project children.",
+            new[] { "A root-level Project node must exist in the .tsproj." },
+            Array.Empty<StepParameterContract>(),
+            new[]
+            {
+                new StepOutputContract("created", "bool", "Whether Project/Io was created by this call."),
+                new StepOutputContract("deviceCount", "int", "Number of direct Device children currently under Project/Io."),
+                new StepOutputContract("projectPath", "string", "Mutated .tsproj path.")
+            },
+            new[] { "Re-open the .tsproj and verify Project/Io exists and existing Project/System/Plc/Cpp children remain intact." }),
+
+        new StepContract(
+            "tsproj.ensure-io-device",
+            "TwinCatTsprojMutationService.EnsureIoDevice",
+            "tsproj",
+            "Creates or updates a Project/Io Device with structured TwinCAT IO identity fields.",
+            new[] { "Project/Io will be created if missing.", "Raw AddressInfo or extra fragments require source, parent path, field meaning, and verification evidence." },
+            new[]
+            {
+                new StepParameterContract("DeviceId", "int", true, "Device Id attribute under Project/Io."),
+                new StepParameterContract("Name", "string", true, "Device display name."),
+                new StepParameterContract("DevType", "int", true, "TwinCAT Device DevType, for example 109 for RT-Ethernet Adapter or 111 for EtherCAT."),
+                new StepParameterContract("Disabled", "bool?", false, "Optional Disabled attribute. false removes the attribute."),
+                new StepParameterContract("DevFlags", "string", false, "Optional DevFlags value such as #x0003."),
+                new StepParameterContract("AmsPort", "int?", false, "Optional device AMS port."),
+                new StepParameterContract("AmsNetId", "string", false, "Optional device AMS NetId."),
+                new StepParameterContract("RemoteName", "string", false, "Optional RemoteName attribute."),
+                new StepParameterContract("InfoImageId", "int?", false, "Optional InfoImageId attribute."),
+                new StepParameterContract("AddressInfo", "IoAddressInfo", false, "Structured TcCom/Pnp AddressInfo or documented raw AddressInfo XML."),
+                new StepParameterContract("Images", "IReadOnlyList<IoImageDefinition>", false, "Optional direct Image children for process images."),
+                new StepParameterContract("ExtraFragments", "IReadOnlyList<IoRawXmlFragment>", false, "Known-good extra Device child fragments with required source/meaning/evidence metadata.")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify the Device Id, Name, DevType, AMS fields, AddressInfo, and direct Image children match the requested topology." }),
+
+        new StepContract(
+            "tsproj.ensure-ethercat-box",
+            "TwinCatTsprojMutationService.EnsureEthercatBox",
+            "tsproj",
+            "Creates or updates an EtherCAT Box under a Device or parent Box, preserving nested topology.",
+            new[] { "The target Device must already exist.", "ParentBoxId, when set, must identify exactly one existing Box under that Device." },
+            new[]
+            {
+                new StepParameterContract("DeviceId", "int", true, "Owning Device Id."),
+                new StepParameterContract("ParentBoxId", "int?", false, "Optional parent Box Id for nested terminals or safety modules."),
+                new StepParameterContract("BoxId", "int", true, "Box Id attribute."),
+                new StepParameterContract("Name", "string", true, "Box display name."),
+                new StepParameterContract("BoxType", "int", true, "TwinCAT BoxType value."),
+                new StepParameterContract("Disabled", "bool?", false, "Optional Disabled attribute. false removes the attribute."),
+                new StepParameterContract("BoxFlags", "string", false, "Optional BoxFlags value."),
+                new StepParameterContract("ImageId", "int?", false, "Optional ImageId child value."),
+                new StepParameterContract("EtherCatAttributes", "IReadOnlyList<TsprojXmlAttribute>", false, "Structured attributes for the Box/EtherCAT child."),
+                new StepParameterContract("EtherCatChildValues", "IReadOnlyList<TsprojXmlChildValue>", false, "Simple child values for Box/EtherCAT, such as SyncMan or Fmmu only when their meaning is known."),
+                new StepParameterContract("ExtraFragments", "IReadOnlyList<IoRawXmlFragment>", false, "Known-good extra Box child fragments with required source/meaning/evidence metadata.")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify the Box appears under the expected Device/parent Box with correct Id, Name, ImageId, and EtherCAT metadata." }),
+
+        new StepContract(
+            "tsproj.ensure-io-pdo",
+            "TwinCatTsprojMutationService.EnsureIoPdo",
+            "tsproj",
+            "Creates or updates a Box/EtherCAT Pdo and its Entry children using structured PDO fields.",
+            new[] { "The target Device and Box must already exist.", "Use ExtraFragments only for known-good PDO child XML with documented field meanings and evidence." },
+            new[]
+            {
+                new StepParameterContract("DeviceId", "int", true, "Owning Device Id."),
+                new StepParameterContract("BoxId", "int", true, "Owning Box Id under the Device."),
+                new StepParameterContract("Name", "string", true, "Pdo Name attribute."),
+                new StepParameterContract("Index", "string", true, "Pdo Index attribute, for example #x1a00 or #x1600."),
+                new StepParameterContract("InOut", "string", false, "Optional InOut attribute."),
+                new StepParameterContract("Flags", "string", false, "Optional Flags attribute."),
+                new StepParameterContract("SyncMan", "int?", false, "Optional SyncMan attribute."),
+                new StepParameterContract("Entries", "IReadOnlyList<IoPdoEntry>", false, "PDO Entry definitions containing name/index/sub/type and optional attributes/child values."),
+                new StepParameterContract("ReplaceExistingEntries", "bool", false, "Whether existing Entry children are replaced before Entries are applied.", "true"),
+                new StepParameterContract("ExtraFragments", "IReadOnlyList<IoRawXmlFragment>", false, "Known-good extra Pdo child fragments with required source/meaning/evidence metadata.")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify the target Box/EtherCAT/Pdo entries have the expected Index/Sub/Type/BitLen fields and mapping-visible names." }),
+
+        new StepContract(
+            "tsproj.ensure-io-box-image",
+            "TwinCatTsprojMutationService.EnsureIoBoxImage",
+            "tsproj",
+            "Creates or updates a Box ImageId and optional image metadata without replacing the Box.",
+            new[] { "The target Device and Box must already exist." },
+            new[]
+            {
+                new StepParameterContract("DeviceId", "int", true, "Owning Device Id."),
+                new StepParameterContract("BoxId", "int", true, "Target Box Id."),
+                new StepParameterContract("ImageId", "int", true, "ImageId child value."),
+                new StepParameterContract("MetadataValues", "IReadOnlyList<TsprojXmlChildValue>", false, "Optional simple metadata child values written under the Box."),
+                new StepParameterContract("MetadataFragments", "IReadOnlyList<IoRawXmlFragment>", false, "Known-good image metadata fragments with required source/meaning/evidence metadata.")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify the target Box keeps its topology while ImageId and requested image metadata are present." }),
+
+        new StepContract(
+            "tsproj.ensure-mapping-info",
+            "TwinCatTsprojMutationService.EnsureMappingInfo",
+            "tsproj",
+            "Creates or updates a root Mappings/MappingInfo entry.",
+            new[] { "Root Mappings will be created if missing.", "Identifier and Id must be known from TwinCAT-generated or documented topology." },
+            new[]
+            {
+                new StepParameterContract("Identifier", "string", true, "MappingInfo Identifier attribute."),
+                new StepParameterContract("Id", "string", true, "MappingInfo Id/ObjectId attribute, for example #x02030010."),
+                new StepParameterContract("Attributes", "IReadOnlyList<TsprojXmlAttribute>", false, "Optional additional MappingInfo attributes; Identifier and Id are owned by dedicated fields.")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify root Mappings contains the requested MappingInfo Identifier/Id pair exactly once." }),
+
+        new StepContract(
+            "tsproj.ensure-io-mapping-link",
+            "TwinCatTsprojMutationService.EnsureIoMappingLink",
+            "tsproj",
+            "Creates or updates a mapping OwnerA/OwnerB/Link with optional IO/TcCOM mapping attributes.",
+            new[] { "Owner names and Var paths must match the IO/PDO or TcCOM paths visible to XAE.", "Use structured LinkAttributes for Size, RestoreInfo, GrpA, TypeA, InOutA, GuidA, and similar known mapping metadata." },
+            new[]
+            {
+                new StepParameterContract("OwnerAName", "string", true, "OwnerA Name attribute, for example TIID^Device 3 (EtherCAT)."),
+                new StepParameterContract("OwnerBName", "string", true, "OwnerB Name attribute, for example TIXC^MotionControl^BeckhoffDriver1."),
+                new StepParameterContract("VarA", "string", true, "Link VarA attribute."),
+                new StepParameterContract("VarB", "string", true, "Link VarB attribute."),
+                new StepParameterContract("OwnerAPrefix", "string", false, "Optional OwnerA Prefix attribute."),
+                new StepParameterContract("OwnerAType", "string", false, "Optional OwnerA Type attribute."),
+                new StepParameterContract("OwnerBPrefix", "string", false, "Optional OwnerB Prefix attribute."),
+                new StepParameterContract("OwnerBType", "string", false, "Optional OwnerB Type attribute."),
+                new StepParameterContract("LinkAttributes", "IReadOnlyList<TsprojXmlAttribute>", false, "Optional additional Link attributes such as Size, RestoreInfo, GrpA, TypeA, InOutA, or GuidA."),
+                new StepParameterContract("ReplaceExistingAttributes", "bool", false, "Whether LinkAttributes overwrite existing attribute values.", "true")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify Mappings contains the exact OwnerA/OwnerB/Link path and any requested Size/RestoreInfo/GuidA metadata." }),
+
+        new StepContract(
+            "tsproj.apply-io-topology-plan",
+            "TwinCatTsprojMutationService.ApplyIoTopologyPlan",
+            "tsproj",
+            "Applies a batch IO topology payload by orchestrating dedicated IO Device, Box, PDO, MappingInfo, and Link primitives.",
+            new[] { "The payload must use structured dedicated fields and may only use documented raw fragments for known-good XML gaps.", "Device entries must precede Boxes logically; the service applies Devices, Boxes, BoxImages, Pdos, MappingInfos, then Links." },
+            new[]
+            {
+                new StepParameterContract("Devices", "IReadOnlyList<EnsureIoDeviceRequest>", false, "Device definitions to ensure."),
+                new StepParameterContract("Boxes", "IReadOnlyList<EnsureEthercatBoxRequest>", false, "Box definitions to ensure."),
+                new StepParameterContract("Pdos", "IReadOnlyList<EnsureIoPdoRequest>", false, "PDO definitions to ensure."),
+                new StepParameterContract("BoxImages", "IReadOnlyList<EnsureIoBoxImageRequest>", false, "Box ImageId/image metadata updates."),
+                new StepParameterContract("MappingInfos", "IReadOnlyList<EnsureMappingInfoRequest>", false, "MappingInfo entries to ensure."),
+                new StepParameterContract("Links", "IReadOnlyList<EnsureIoMappingLinkRequest>", false, "Mapping links to ensure."),
+                new StepParameterContract("EnsureIoSection", "bool", false, "Whether Project/Io should be created before applying the plan.", "true")
+            },
+            new[]
+            {
+                new StepOutputContract("deviceCount", "int", "Number of Device entries applied from the payload."),
+                new StepOutputContract("boxCount", "int", "Number of Box entries applied from the payload."),
+                new StepOutputContract("pdoCount", "int", "Number of PDO entries applied from the payload."),
+                new StepOutputContract("boxImageCount", "int", "Number of Box image updates applied from the payload."),
+                new StepOutputContract("mappingInfoCount", "int", "Number of MappingInfo entries applied from the payload."),
+                new StepOutputContract("linkCount", "int", "Number of Link entries applied from the payload.")
+            },
+            new[] { "Re-open XAE and compare normalized Project/Io and root Mappings snapshots; for disabled hardware topologies, build plus normalized XML is the first acceptance gate." }),
+
+        new StepContract(
             "tsproj.replace-data-types-section",
             "TwinCatTsprojMutationService.ReplaceDataTypesSection",
             "tsproj",
@@ -835,7 +1084,7 @@ public static class TwinCatStepCatalog
             "TwinCatTsprojMutationService.ReplaceSystemSettingsSection",
             "tsproj",
             "Replaces System/Settings with a caller-provided Settings fragment while preserving other System children.",
-            new[] { "A System node must exist in the .tsproj.", "The fragment must be a valid Settings element." },
+            new[] { "The target .tsproj must already exist on disk.", "The fragment must be a valid Settings element." },
             new[]
             {
                 new StepParameterContract("SettingsXml", "string", true, "Settings XML fragment to write, rooted at <Settings>."),
@@ -843,6 +1092,21 @@ public static class TwinCatStepCatalog
             },
             Array.Empty<StepOutputContract>(),
             new[] { "Re-open the .tsproj and verify System/Settings content and insertion position." }),
+
+        new StepContract(
+            "tsproj.ensure-system-settings",
+            "TwinCatTsprojMutationService.EnsureSystemSettings",
+            "tsproj",
+            "Ensures typed System/Settings values such as Cpu and IoIdleTask without replacing the whole Settings section.",
+            new[] { "The target .tsproj must already exist on disk.", "At least one typed setting must be provided." },
+            new[]
+            {
+                new StepParameterContract("CpuId", "int?", false, "Optional System/Settings/Cpu CpuId attribute."),
+                new StepParameterContract("IoIdleTaskPriority", "int?", false, "Optional System/Settings/IoIdleTask Priority attribute."),
+                new StepParameterContract("InsertBeforeTasks", "bool", false, "Whether to insert Settings before System/Tasks when Settings is created and Tasks exists.", "true")
+            },
+            Array.Empty<StepOutputContract>(),
+            new[] { "Re-open the .tsproj and verify System/Settings contains the requested Cpu and IoIdleTask attributes while existing Tasks remain intact." }),
 
         new StepContract(
             "tsproj.clear-instance-parameter-values",
@@ -906,10 +1170,34 @@ public static class TwinCatStepCatalog
             new[] { "Each referenced instance must already exist in the .tsproj." },
             new[]
             {
-                new StepParameterContract("Items", "IReadOnlyList<InstanceDataPointerMutation>", true, "Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, and ByteSize.")
+                new StepParameterContract("Items", "IReadOnlyList<InstanceDataPointerMutation>", true, "Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, ByteSize, and optional ArrayIndex for array DataPointerValues.")
             },
             Array.Empty<StepOutputContract>(),
             new[] { "Re-open the .tsproj and verify DataPointerValues entries for each requested instance/pointer pair." }),
+
+        new StepContract(
+            "tsproj.refresh-cpp-instance-tmc-desc",
+            "TwinCatTsprojMutationService.RefreshCppInstanceTmcDesc",
+            "tsproj",
+            "Refreshes existing C++ instance TmcDesc metadata from the project .tmc while preserving instance context and value sections.",
+            new[] { "The target C++ project instances must already exist in the .tsproj.", "The project .tmc must contain the requested module class names." },
+            new[]
+            {
+                new StepParameterContract("CppProjectName", "string", true, "Owning C++ project name in the .tsproj."),
+                new StepParameterContract("ProjectTmcPath", "string", true, "Absolute path to the project .tmc file."),
+                new StepParameterContract("Instances", "IReadOnlyList<CppInstanceTmcDescRefreshItem>", true, "InstanceName to ModuleClassName mapping entries."),
+                new StepParameterContract("PreserveValueSections", "bool", false, "Preserve existing ParameterValues, InterfacePointerValues, and DataPointerValues.", "true"),
+                new StepParameterContract("PreserveContextValues", "bool", false, "Preserve existing TmcDesc Contexts and task ManualConfig.", "true"),
+                new StepParameterContract("ImportDataTypesFromTmc", "bool", false, "Replace root .tsproj DataTypes from the project .tmc DataTypes.", "true"),
+                new StepParameterContract("FailIfMissingModule", "bool", false, "Fail when an instance mapping references a missing TMC module.", "true")
+            },
+            new[]
+            {
+                new StepOutputContract("projectPath", "string", "Mutated .tsproj path."),
+                new StepOutputContract("refreshedCount", "int", "Number of instance TmcDesc sections refreshed."),
+                new StepOutputContract("errorsJson", "json", "Detailed mismatch list when refresh fails.")
+            },
+            new[] { "Re-open the .tsproj and confirm instance DataAreas/Parameters/Pointers match the project .tmc while prior values and task bindings remain." }),
 
         new StepContract(
             "tsproj.ensure-io-task-image",
@@ -1050,7 +1338,8 @@ public static class TwinCatStepCatalog
                 new StepParameterContract("ObjectId", "string", true, "Referenced OTCID."),
                 new StepParameterContract("AreaNo", "int", true, "TwinCAT data area number."),
                 new StepParameterContract("ByteOffset", "int", true, "Offset inside the area."),
-                new StepParameterContract("ByteSize", "int", true, "Byte width of the pointed segment.")
+                new StepParameterContract("ByteSize", "int", true, "Byte width of the pointed segment."),
+                new StepParameterContract("ArrayIndex", "int?", false, "Optional array index. When set, writes a Data child with ArrayIndex under the named DataPointerValues entry.", "0")
             },
             Array.Empty<StepOutputContract>(),
             new[] { "Re-open the .tsproj and confirm the named DataPointerValues/Value entry matches the requested offsets." }),
@@ -1229,7 +1518,10 @@ public static class TwinCatStepCatalog
         "cpp.set-item-definition-property",
         "cpp.set-project-item-metadata",
         "engineering.create-module",
+        "engineering.start-tmc-code-generator",
         "engineering.publish-modules",
+        "engineering.verify-tmc-data-areas",
+        "engineering.apply-tmc-module-model",
         "engineering.add-module-instance",
         "engineering.ensure-task",
         "engineering.export-tree-item-xml",
@@ -1253,8 +1545,17 @@ public static class TwinCatStepCatalog
         "tsproj.clear-unrestored-var-links",
         "tsproj.replace-mappings-section",
         "tsproj.replace-project-io-section",
+        "tsproj.ensure-io-section",
+        "tsproj.ensure-io-device",
+        "tsproj.ensure-ethercat-box",
+        "tsproj.ensure-io-box-image",
+        "tsproj.ensure-io-pdo",
+        "tsproj.ensure-mapping-info",
+        "tsproj.ensure-io-mapping-link",
+        "tsproj.apply-io-topology-plan",
         "tsproj.replace-data-types-section",
         "tsproj.replace-system-settings-section",
+        "tsproj.ensure-system-settings",
         "tsproj.ensure-io-task-image",
         "tsproj.bind-instance-task",
         "tsproj.bind-plc-instance-task",
@@ -1265,6 +1566,7 @@ public static class TwinCatStepCatalog
         "tsproj.apply-instance-parameter-plan",
         "tsproj.apply-instance-interface-pointer-plan",
         "tsproj.apply-instance-data-pointer-plan",
+        "tsproj.refresh-cpp-instance-tmc-desc",
         "tsproj.ensure-parameter",
         "tsproj.ensure-interface-pointer",
         "tsproj.ensure-data-pointer",

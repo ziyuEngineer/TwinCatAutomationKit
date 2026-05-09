@@ -162,12 +162,14 @@ public sealed record BootstrapCppModuleArtifactsResult(
 
 public sealed record StartTmcCodeGeneratorRequest(
     string ProjectName,
-    int PostStartDelayMs = 500);
+    int PostStartDelayMs = 500,
+    int WaitForUpdatedTmcTimeoutMs = 30000);
 
 public sealed record PublishModulesRequest(
     string ProjectName,
     int PostPublishDelayMs = 5000,
-    int WaitForUpdatedTmcTimeoutMs = 30000);
+    int WaitForUpdatedTmcTimeoutMs = 30000,
+    bool RunTmcCodeGeneratorFirst = false);
 
 public sealed record AddModuleInstanceRequest(
     string ProjectName,
@@ -302,7 +304,7 @@ public sealed record BindPlcInstanceToTaskRequest(
 
 public sealed record SetTaskAffinityRequest(
     string TaskName,
-    string Affinity,
+    string? Affinity = null,
     bool EnableAdtTasks = true);
 
 public sealed record SetPlcProjectPropertiesRequest(
@@ -321,6 +323,13 @@ public sealed record SetPlcInstanceMetadataRequest(
     string? KeepUnrestoredLinks = null,
     string? Clsid = null,
     string? ClassFactory = null);
+
+public sealed record SetCppInstanceMetadataRequest(
+    string InstanceName,
+    bool? Disabled = null,
+    string? KeepUnrestoredLinks = null,
+    string? ClassFactoryId = null,
+    string? ObjectId = null);
 
 public sealed record PlcInstanceVarItem(
     string Name,
@@ -384,7 +393,8 @@ public sealed record InstanceDataPointerMutation(
     string ObjectId,
     int AreaNo,
     int ByteOffset,
-    int ByteSize);
+    int ByteSize,
+    int? ArrayIndex = null);
 
 public sealed record ApplyInstanceDataPointerPlanRequest(
     IReadOnlyList<InstanceDataPointerMutation> Items);
@@ -399,12 +409,144 @@ public sealed record ReplaceMappingsSectionRequest(
 public sealed record ReplaceProjectIoSectionRequest(
     string IoXml);
 
+public sealed record EnsureIoSectionRequest();
+
+public sealed record EnsureIoSectionResult(
+    bool Created,
+    int DeviceCount,
+    string ProjectPath);
+
+public sealed record IoRawXmlFragment(
+    string FragmentXml,
+    string? MatchElementName = null,
+    string? MatchNameValue = null,
+    bool ReplaceExisting = true,
+    string? FragmentSource = null,
+    string? TargetParentPath = null,
+    string? FieldMeaning = null,
+    string? VerificationEvidence = null);
+
+public sealed record IoAddressInfo(
+    string? TcComObjectId = null,
+    string? PnpDeviceDesc = null,
+    string? PnpDeviceName = null,
+    string? PnpDeviceData = null,
+    string? RawXml = null,
+    string? FragmentSource = null,
+    string? TargetParentPath = null,
+    string? FieldMeaning = null,
+    string? VerificationEvidence = null);
+
+public sealed record IoImageDefinition(
+    int Id,
+    int AddrType,
+    int ImageType,
+    string Name,
+    int? SizeIn = null,
+    int? SizeOut = null);
+
+public sealed record EnsureIoDeviceRequest(
+    int DeviceId,
+    string Name,
+    int DevType,
+    bool? Disabled = null,
+    string? DevFlags = null,
+    int? AmsPort = null,
+    string? AmsNetId = null,
+    string? RemoteName = null,
+    int? InfoImageId = null,
+    IoAddressInfo? AddressInfo = null,
+    IReadOnlyList<IoImageDefinition>? Images = null,
+    IReadOnlyList<IoRawXmlFragment>? ExtraFragments = null);
+
+public sealed record EnsureEthercatBoxRequest(
+    int DeviceId,
+    int? ParentBoxId,
+    int BoxId,
+    string Name,
+    int BoxType,
+    bool? Disabled = null,
+    string? BoxFlags = null,
+    int? ImageId = null,
+    IReadOnlyList<TsprojXmlAttribute>? EtherCatAttributes = null,
+    IReadOnlyList<TsprojXmlChildValue>? EtherCatChildValues = null,
+    IReadOnlyList<IoRawXmlFragment>? ExtraFragments = null);
+
+public sealed record IoPdoEntry(
+    string? Name = null,
+    string? Index = null,
+    string? Sub = null,
+    string? Type = null,
+    IReadOnlyList<TsprojXmlAttribute>? Attributes = null,
+    IReadOnlyList<TsprojXmlChildValue>? ChildValues = null);
+
+public sealed record EnsureIoPdoRequest(
+    int DeviceId,
+    int BoxId,
+    string Name,
+    string Index,
+    string? InOut = null,
+    string? Flags = null,
+    int? SyncMan = null,
+    IReadOnlyList<IoPdoEntry>? Entries = null,
+    bool ReplaceExistingEntries = true,
+    IReadOnlyList<IoRawXmlFragment>? ExtraFragments = null);
+
+public sealed record EnsureIoBoxImageRequest(
+    int DeviceId,
+    int BoxId,
+    int ImageId,
+    IReadOnlyList<TsprojXmlChildValue>? MetadataValues = null,
+    IReadOnlyList<IoRawXmlFragment>? MetadataFragments = null);
+
+public sealed record EnsureMappingInfoRequest(
+    string Identifier,
+    string Id,
+    IReadOnlyList<TsprojXmlAttribute>? Attributes = null);
+
+public sealed record EnsureIoMappingLinkRequest(
+    string OwnerAName,
+    string OwnerBName,
+    string VarA,
+    string VarB,
+    string? OwnerAPrefix = null,
+    string? OwnerAType = null,
+    string? OwnerBPrefix = null,
+    string? OwnerBType = null,
+    IReadOnlyList<TsprojXmlAttribute>? LinkAttributes = null,
+    bool ReplaceExistingAttributes = true);
+
+public sealed record ApplyIoTopologyPlanRequest(
+    IReadOnlyList<EnsureIoDeviceRequest>? Devices = null,
+    IReadOnlyList<EnsureEthercatBoxRequest>? Boxes = null,
+    IReadOnlyList<EnsureIoPdoRequest>? Pdos = null,
+    IReadOnlyList<EnsureIoBoxImageRequest>? BoxImages = null,
+    IReadOnlyList<EnsureMappingInfoRequest>? MappingInfos = null,
+    IReadOnlyList<EnsureIoMappingLinkRequest>? Links = null,
+    bool EnsureIoSection = true);
+
+public sealed record ApplyIoTopologyPlanResult(
+    bool Succeeded,
+    string ProjectPath,
+    int DeviceCount,
+    int BoxCount,
+    int PdoCount,
+    int BoxImageCount,
+    int MappingInfoCount,
+    int LinkCount,
+    string Summary);
+
 public sealed record ReplaceDataTypesSectionRequest(
     string DataTypesXml,
     bool InsertBeforeProject = true);
 
 public sealed record ReplaceSystemSettingsSectionRequest(
     string SettingsXml,
+    bool InsertBeforeTasks = true);
+
+public sealed record EnsureSystemSettingsRequest(
+    int? CpuId = null,
+    int? IoIdleTaskPriority = null,
     bool InsertBeforeTasks = true);
 
 public sealed record EnsureParameterValueRequest(
@@ -425,7 +567,8 @@ public sealed record EnsureDataPointerValueRequest(
     string ObjectId,
     int AreaNo,
     int ByteOffset,
-    int ByteSize);
+    int ByteSize,
+    int? ArrayIndex = null);
 
 public sealed record EnsureTaskPouOidRequest(
     string PlcProjectName,
@@ -595,6 +738,147 @@ public sealed record PublishModulesResult(
     bool Succeeded,
     string? UpdatedTmcPath,
     bool Updated = false);
+
+public sealed record StartTmcCodeGeneratorResult(
+    bool Succeeded,
+    string? UpdatedTmcPath,
+    bool Updated = false);
+
+public sealed record VerifyTmcDataAreasRequest(
+    string ProjectTmcPath,
+    IReadOnlyList<TmcModuleExpectation> Modules,
+    bool FailOnUnexpectedModule = false);
+
+public sealed record TmcModuleExpectation(
+    string ModuleName,
+    IReadOnlyList<TmcDataAreaExpectation> DataAreas);
+
+public sealed record TmcDataAreaExpectation(
+    string Name,
+    string? AreaType = null,
+    IReadOnlyList<TmcSymbolExpectation>? Symbols = null);
+
+public sealed record TmcSymbolExpectation(
+    string Name,
+    string? TypeName = null);
+
+public sealed record VerifyTmcDataAreasResult(
+    bool Succeeded,
+    string ProjectTmcPath,
+    int ExpectedModuleCount,
+    int MatchedModuleCount,
+    string Summary,
+    IReadOnlyList<string> Errors);
+
+public sealed record ApplyTmcModuleModelRequest(
+    string ProjectTmcPath,
+    string ProjectName,
+    IReadOnlyList<TmcModuleModel> Modules,
+    string? GeneratedServicesHeaderPath = null,
+    IReadOnlyList<string>? GeneratedHeaderPaths = null,
+    string LibraryName = "",
+    string LibraryVersion = "0.0.0.1",
+    bool RemoveUnexpectedModules = false,
+    bool ReplaceDataTypesFromGeneratedHeader = true);
+
+public sealed record TmcModuleModel(
+    string Name,
+    string Guid,
+    IReadOnlyList<TmcInterfaceModel>? Interfaces = null,
+    IReadOnlyList<TmcParameterModel>? Parameters = null,
+    IReadOnlyList<TmcDataAreaModel>? DataAreas = null,
+    IReadOnlyList<TmcPointerModel>? InterfacePointers = null,
+    IReadOnlyList<TmcPointerModel>? DataPointers = null,
+    IReadOnlyList<TmcTypeReference>? EventClasses = null);
+
+public sealed record TmcInterfaceModel(
+    string TypeName,
+    string? TypeGuid = null,
+    int? ContextId = null,
+    bool DisableCodeGeneration = false);
+
+public sealed record TmcParameterModel(
+    string Name,
+    string PtcId,
+    string? TypeName = null,
+    string? TypeGuid = null,
+    int? BitSize = null,
+    IReadOnlyList<TmcSubItemModel>? SubItems = null,
+    int ContextId = 1,
+    bool HideParameter = false,
+    bool CreateSymbol = false,
+    bool ShowSubItems = false,
+    string? Comment = null);
+
+public sealed record TmcDataAreaModel(
+    string Name,
+    int AreaNo,
+    string AreaType,
+    int ContextId = 1,
+    int? ByteSize = null,
+    IReadOnlyList<TmcSymbolModel>? Symbols = null);
+
+public sealed record TmcSymbolModel(
+    string Name,
+    string TypeName,
+    string? TypeGuid = null,
+    int? BitSize = null,
+    int? BitOffset = null,
+    int? ArrayElements = null,
+    bool CreateSymbol = false,
+    IReadOnlyList<TmcPropertyModel>? Properties = null);
+
+public sealed record TmcSubItemModel(
+    string Name,
+    string TypeName,
+    string? TypeGuid = null,
+    int? BitSize = null,
+    int? BitOffset = null,
+    int? ArrayElements = null,
+    IReadOnlyList<TmcPropertyModel>? Properties = null);
+
+public sealed record TmcPointerModel(
+    string Name,
+    string PtcId,
+    string TypeName,
+    string? TypeGuid = null,
+    int? ContextId = 1,
+    int? ArrayElements = null);
+
+public sealed record TmcTypeReference(
+    string TypeName,
+    string? TypeGuid = null);
+
+public sealed record TmcPropertyModel(
+    string Name,
+    string Value);
+
+public sealed record ApplyTmcModuleModelResult(
+    bool Succeeded,
+    string ProjectTmcPath,
+    int ModuleCount,
+    string Summary);
+
+public sealed record RefreshCppInstanceTmcDescRequest(
+    string CppProjectName,
+    string ProjectTmcPath,
+    IReadOnlyList<CppInstanceTmcDescRefreshItem> Instances,
+    bool PreserveValueSections = true,
+    bool PreserveContextValues = true,
+    bool ImportDataTypesFromTmc = true,
+    bool FailIfMissingModule = true);
+
+public sealed record CppInstanceTmcDescRefreshItem(
+    string InstanceName,
+    string ModuleClassName,
+    string? ClassFactoryId = null);
+
+public sealed record RefreshCppInstanceTmcDescResult(
+    bool Succeeded,
+    string ProjectPath,
+    int RefreshedCount,
+    IReadOnlyList<string> Errors,
+    string Summary);
 
 public sealed record ActivationResult(
     bool Succeeded,

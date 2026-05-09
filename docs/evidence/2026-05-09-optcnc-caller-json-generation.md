@@ -4,6 +4,12 @@ English summary: This evidence records the caller-level OptCNC reproduction run:
 
 本文记录以调用者身份使用 kit 和 JSON 生成 `D:\3rd_year\auto_sln` 的结果。样例来源是 `D:\2nd_year\twincat0926\OptcncTwinCAT`。本轮没有复制样例 `.sln/.tsproj/.vcxproj/.filters/.tmc`，没有写文件系统复制源码目录的脚本，也没有使用 generic `.tsproj` XML escape hatch。
 
+## 2026-05-09 correction
+
+后续复盘发现，本文件记录的 caller run 虽然 exit code 为 `0`，但不能证明 OptCNC TMC parity。`D:\3rd_year\auto_sln\OptcncTwinCAT\MotionControl\MotionControl.tmc` 仍是 fallback skeleton：每个 module 只有 `Input/DataIn:UDINT` 和 `Output/DataOut:UDINT`，并多出 `MotionControl` 空 module；目标样例 `.tmc` 则包含 `Outputs/Inputs/Data/Debug` 等源码注解生成的 DataArea 和 symbol。
+
+新的修正证据见 [2026-05-09 OptCNC TMC Shape Guard](2026-05-09-optcnc-tmc-shape-guard.md)。后续判断 OptCNC 生成是否接近样例时，应以后者为准；本文件只保留当时 run、source payload、instance/task/mapping 路径的历史事实，不再作为 TMC shape 通过证据。
+
 ## JSON plan shape
 
 计划文件：
@@ -135,7 +141,7 @@ This directly covers the stricter regression asserted by `OrderedTwinCatScenario
 
 ## Not covered
 
-- The OptCNC plan keeps `engineering.build-solution` and `engineering.activate-configuration` disabled by variables, so this evidence does not claim full OptCNC build, activation, or ADS runtime readback.
+- This first caller-run evidence kept `engineering.build-solution` and `engineering.activate-configuration` disabled by variables. Later follow-up evidence in `2026-05-09-optcnc-tmc-shape-guard.md` records build, signing, activation, and ADS port scan results for the generated OptCNC project.
 - The sample `Scope` project is not reproduced because there is no dedicated public Scope project step yet.
 - Hardware-backed EtherCAT topology is not reproduced; the current plan covers C++/resource/source payloads, module publish, instances, tasks, parameters, interface pointers, and TIXC mappings.
-- Real signing certificate grant/sign/verify remains excluded by the integration test matrix unless a signing config is provided.
+- Real signing certificate grant/sign/verify remains excluded by the integration test matrix unless a signing config is provided; OptCNC-specific follow-up evidence used the local `optcnc` certificate and password `123`.

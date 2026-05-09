@@ -411,6 +411,16 @@ internal static class StepProbeRunner
                         ClassFactory: "TcPlc30")));
                 return Succeeded(ctx, "tsproj.set-plc-instance-metadata probe succeeded.", outputs, artifacts);
 
+            case "tsproj.set-cpp-instance-metadata":
+                EnsureCppInstance(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "set-cpp-instance-metadata", artifacts, path =>
+                    ctx.Mutation.SetCppInstanceMetadata(path, new SetCppInstanceMetadataRequest(
+                        ctx.InstanceName!,
+                        Disabled: true,
+                        KeepUnrestoredLinks: "2")));
+                return Succeeded(ctx, "tsproj.set-cpp-instance-metadata probe succeeded.", outputs, artifacts);
+
             case "tsproj.clear-plc-instance-vars":
                 EnsurePlcProject(ctx);
                 SaveAndCloseForFileMutation(ctx);
@@ -486,6 +496,139 @@ internal static class StepProbeRunner
                         "<Io><Device Name=\"ProbeIo\"><Comment>generated</Comment></Device></Io>")));
                 return Succeeded(ctx, "tsproj.replace-project-io-section probe succeeded.", outputs, artifacts);
 
+            case "tsproj.ensure-io-section":
+                EnsureSolution(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-io-section", artifacts, path =>
+                    ctx.Mutation.EnsureIoSection(path, new EnsureIoSectionRequest()));
+                return Succeeded(ctx, "tsproj.ensure-io-section probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-io-device":
+                EnsureSolution(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-io-device", artifacts, path =>
+                    ctx.Mutation.EnsureIoDevice(path, new EnsureIoDeviceRequest(
+                        31,
+                        "Probe Device 31 (EtherCAT)",
+                        111,
+                        Disabled: true,
+                        DevFlags: "#x0003",
+                        AmsPort: 28631,
+                        AmsNetId: "127.0.0.1.31.1",
+                        AddressInfo: new IoAddressInfo(TcComObjectId: "#x03010031"))));
+                return Succeeded(ctx, "tsproj.ensure-io-device probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-ethercat-box":
+                EnsureProbeIoDevice(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-ethercat-box", artifacts, path =>
+                    ctx.Mutation.EnsureEthercatBox(path, new EnsureEthercatBoxRequest(
+                        31,
+                        null,
+                        3101,
+                        "Probe Box 3101 (EK1100)",
+                        9099,
+                        ImageId: 1000,
+                        EtherCatAttributes:
+                        [
+                            new TsprojXmlAttribute("SlaveType", "1"),
+                            new TsprojXmlAttribute("Desc", "EK1100"),
+                        ])));
+                return Succeeded(ctx, "tsproj.ensure-ethercat-box probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-io-box-image":
+                EnsureProbeIoBox(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-io-box-image", artifacts, path =>
+                    ctx.Mutation.EnsureIoBoxImage(path, new EnsureIoBoxImageRequest(
+                        31,
+                        3101,
+                        1001,
+                        MetadataValues: [new TsprojXmlChildValue("ProbeImageMarker", "updated")])));
+                return Succeeded(ctx, "tsproj.ensure-io-box-image probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-io-pdo":
+                EnsureProbeIoBox(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-io-pdo", artifacts, path =>
+                    ctx.Mutation.EnsureIoPdo(path, new EnsureIoPdoRequest(
+                        31,
+                        3101,
+                        "Channel 1",
+                        "#x1600",
+                        InOut: "1",
+                        Flags: "#x0011",
+                        SyncMan: 0,
+                        Entries:
+                        [
+                            new IoPdoEntry("Output", "#x7000", "#x01", "BIT"),
+                        ])));
+                return Succeeded(ctx, "tsproj.ensure-io-pdo probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-mapping-info":
+                EnsureSolution(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-mapping-info", artifacts, path =>
+                    ctx.Mutation.EnsureMappingInfo(path, new EnsureMappingInfoRequest(
+                        "{00000000-0020-0201-3000-010131000101}",
+                        "#x02030030")));
+                return Succeeded(ctx, "tsproj.ensure-mapping-info probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-io-mapping-link":
+                EnsureSolution(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-io-mapping-link", artifacts, path =>
+                    ctx.Mutation.EnsureIoMappingLink(path, new EnsureIoMappingLinkRequest(
+                        "TIID^Probe Device 31 (EtherCAT)",
+                        "TIXC^Probe^Instance",
+                        "Probe Box 3101 (EK1100)^Channel 1^Output",
+                        "Outputs^Power",
+                        LinkAttributes: [new TsprojXmlAttribute("Size", "1")])));
+                return Succeeded(ctx, "tsproj.ensure-io-mapping-link probe succeeded.", outputs, artifacts);
+
+            case "tsproj.apply-io-topology-plan":
+                EnsureSolution(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "apply-io-topology-plan", artifacts, path =>
+                    ctx.Mutation.ApplyIoTopologyPlan(path, new ApplyIoTopologyPlanRequest(
+                        Devices:
+                        [
+                            new EnsureIoDeviceRequest(
+                                32,
+                                "Probe Device 32 (EtherCAT)",
+                                111,
+                                Disabled: true,
+                                DevFlags: "#x0003",
+                                AmsPort: 28632,
+                                AmsNetId: "127.0.0.1.32.1",
+                                AddressInfo: new IoAddressInfo(TcComObjectId: "#x03010032")),
+                        ],
+                        Boxes:
+                        [
+                            new EnsureEthercatBoxRequest(32, null, 3201, "Probe Box 3201 (EK1100)", 9099, ImageId: 1002),
+                        ],
+                        Pdos:
+                        [
+                            new EnsureIoPdoRequest(
+                                32,
+                                3201,
+                                "PLC_Inputs",
+                                "#x1a00",
+                                Flags: "#x0000",
+                                SyncMan: 3,
+                                Entries: [new IoPdoEntry("Input", "#x6000", "#x01", "BIT")]),
+                        ],
+                        MappingInfos:
+                        [
+                            new EnsureMappingInfoRequest("{00000000-0020-0201-4000-010132000101}", "#x02030040"),
+                        ],
+                        Links:
+                        [
+                            new EnsureIoMappingLinkRequest(
+                                "TIID^Probe Device 32 (EtherCAT)",
+                                "TIPC^ProbePlc^ProbeInst",
+                                "Probe Box 3201 (EK1100)^PLC_Inputs^Input",
+                                "PlcTask Inputs^MAIN.nValue"),
+                        ])));
+                return Succeeded(ctx, "tsproj.apply-io-topology-plan probe succeeded.", outputs, artifacts);
+
             case "tsproj.replace-data-types-section":
                 EnsureSolution(ctx);
                 SaveAndCloseForFileMutation(ctx);
@@ -501,6 +644,13 @@ internal static class StepProbeRunner
                     ctx.Mutation.ReplaceSystemSettingsSection(path, new ReplaceSystemSettingsSectionRequest(
                         "<Settings><Option Name=\"Mode\">Probe</Option></Settings>")));
                 return Succeeded(ctx, "tsproj.replace-system-settings-section probe succeeded.", outputs, artifacts);
+
+            case "tsproj.ensure-system-settings":
+                EnsureSolution(ctx);
+                SaveAndCloseForFileMutation(ctx);
+                AddSnapshotArtifacts(ctx, "ensure-system-settings", artifacts, path =>
+                    ctx.Mutation.EnsureSystemSettings(path, new EnsureSystemSettingsRequest(CpuId: 1, IoIdleTaskPriority: 6)));
+                return Succeeded(ctx, "tsproj.ensure-system-settings probe succeeded.", outputs, artifacts);
 
             case "tsproj.apply-instance-parameter-plan":
                 EnsureCppInstance(ctx);
@@ -531,7 +681,8 @@ internal static class StepProbeRunner
                     ctx.Mutation.ApplyInstanceDataPointerPlan(path, new ApplyInstanceDataPointerPlanRequest(
                     [
                         new InstanceDataPointerMutation(ctx.InstanceName!, "DataIn", "#x02010050", 3, 0, 8),
-                        new InstanceDataPointerMutation(ctx.InstanceName!, "DataOut", "#x02010060", 3, 8, 8)
+                        new InstanceDataPointerMutation(ctx.InstanceName!, "DataOut", "#x02010060", 3, 8, 8),
+                        new InstanceDataPointerMutation(ctx.InstanceName!, "IndexedData", "#x02010070", 3, 16, 8, ArrayIndex: 1)
                     ])));
                 return Succeeded(ctx, "tsproj.apply-instance-data-pointer-plan probe succeeded.", outputs, artifacts);
 
@@ -800,6 +951,38 @@ internal static class StepProbeRunner
     {
         EnsurePlcProject(ctx);
         EnsureTask(ctx);
+    }
+
+    private static void EnsureProbeIoDevice(ProbeContext ctx)
+    {
+        EnsureSolution(ctx);
+        SaveAndCloseForFileMutation(ctx);
+        ctx.Mutation.EnsureIoDevice(RequireProjectPath(ctx), new EnsureIoDeviceRequest(
+            31,
+            "Probe Device 31 (EtherCAT)",
+            111,
+            Disabled: true,
+            DevFlags: "#x0003",
+            AmsPort: 28631,
+            AmsNetId: "127.0.0.1.31.1",
+            AddressInfo: new IoAddressInfo(TcComObjectId: "#x03010031")));
+    }
+
+    private static void EnsureProbeIoBox(ProbeContext ctx)
+    {
+        EnsureProbeIoDevice(ctx);
+        ctx.Mutation.EnsureEthercatBox(RequireProjectPath(ctx), new EnsureEthercatBoxRequest(
+            31,
+            null,
+            3101,
+            "Probe Box 3101 (EK1100)",
+            9099,
+            ImageId: 1000,
+            EtherCatAttributes:
+            [
+                new TsprojXmlAttribute("SlaveType", "1"),
+                new TsprojXmlAttribute("Desc", "EK1100"),
+            ]));
     }
 
     private static void SaveAndCloseForFileMutation(ProbeContext ctx)

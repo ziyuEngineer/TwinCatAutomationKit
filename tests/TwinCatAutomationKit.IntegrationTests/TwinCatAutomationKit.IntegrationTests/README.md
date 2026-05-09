@@ -10,8 +10,8 @@ English summary: This document explains why the integration suite groups the pub
 
 当前默认 coverage 口径是：
 
-- `TwinCatStepCatalog.All` 里共有 58 个 public step。
-- 默认真实 TwinCAT 测试必须覆盖 55 个 step/interface。
+- `TwinCatStepCatalog.All` 里共有 69 个 public step。
+- 默认真实 TwinCAT 测试必须覆盖 66 个 step/interface。
 - 3 个 OEM signing certificate/private-key step 明确排除：
   - `signing.grant-certificate`
   - `signing.sign-twincat-binary`
@@ -25,7 +25,7 @@ English summary: This document explains why the integration suite groups the pub
 - README 是否提到每个 step kind。
 - 只有上述 3 个 signing certificate step 可以不进入默认真实执行集合。
 
-因此，“7 个测试通过”的含义不是“只测了 7 个接口”，而是 55 个默认 step/interface 被组织进 7 个真实机器场景里验证，并由 coverage contract 防止遗漏。
+因此，“7 个测试通过”的含义不是“只测了 7 个接口”，而是 66 个默认 step/interface 被组织进 7 个真实机器场景里验证，并由 coverage contract 防止遗漏。
 
 ## 运行方式
 
@@ -289,7 +289,9 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `engineering.ensure-solution-project-dependency` | `ordered-step-surface` | `.sln` 中出现 `ProjectSection(ProjectDependencies)`，`AdsClient` 依赖 TwinCAT project 的 GUID 精确匹配。 |
 | `engineering.create-plc-project` | `ordered-step-surface` | `.tsproj` 可解析 PLC project/instance，测试写入 `MAIN.TcPOU` payload，并由 build/ADS 证明 payload 加载。 |
 | `engineering.create-module` | `ordered-step-surface` | 辅助 module 写入 header/source/TMC metadata，返回名包含请求名；允许 fallback 时必须被 full-project reopen/export 接受，不冒充严格 wizard proof。 |
+| `engineering.start-tmc-code-generator` | `ordered-step-surface` | 调用 `StartTmcCodeGenerator` 后 `.tmc` 可读，并为后续 module metadata 验证和实例创建提供输入。 |
 | `engineering.publish-modules` | `ordered-step-surface` | 调用 `PublishModules` 后 `.tmc` 可读并包含 `AuxModule` metadata；`updated` output 记录本次 timestamp/hash 是否变化。 |
+| `engineering.verify-tmc-data-areas` | `ordered-step-surface` | 直接解析 `.tmc`，验证预期 module DataArea 和 symbol shape，防止 fallback skeleton 被当作真实 TMC。 |
 | `engineering.add-module-instance` | `ordered-step-surface` | primary/aux instance 返回可解析 ObjectId，DisplayName 包含请求名，并在 `.tsproj` 中按精确 ObjectId 存在；允许 fallback 时必须被 full-project reopen/export 接受。 |
 | `engineering.ensure-task` | `ordered-step-surface` | 两个 task 返回可解析 ObjectId，并在 reopen 后精确匹配 priority、cycle、AMS port、affinity、layout。 |
 | `engineering.export-tree-item-xml` | `ordered-step-surface` | `TIXC` 和 `TIRT` 导出 XML evidence，并解析校验 `TreeItem`、`ItemName`、`PathName`、subtype。 |
@@ -320,6 +322,7 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.set-task-affinity` | `ordered-step-surface` | 两个 task 都写入 `Affinity` 和 `AdtTasks`。 |
 | `tsproj.set-plc-project-properties` | `ordered-step-surface` | PLC project 的 path、`ReloadTmc`、`AmsPort`、archive settings 被写入。 |
 | `tsproj.set-plc-instance-metadata` | `ordered-step-surface` | PLC instance metadata 和 `CLSID/ClassFactory` 写入，不替换 vars。 |
+| `tsproj.set-cpp-instance-metadata` | `ordered-step-surface` / `atomic-step-wrappers` | C++ instance `Disabled` / `KeepUnrestoredLinks` metadata 写入，不替换 `TmcDesc` 或 value sections。 |
 | `tsproj.clear-plc-instance-vars` | `ordered-step-surface` | 先写入 stale PLC vars，clear 后重建 deterministic input/output groups，reopen 后 stale var 不存在。 |
 | `tsproj.ensure-plc-instance-vars-group` | `ordered-step-surface` | `MAIN.nSeed`、`MAIN.nStage1` 等 PLC process-image vars 的 group type、AreaNo、type、offset、external address 精确匹配。 |
 | `tsproj.clear-plc-init-symbols` | `ordered-step-surface` | 先写入 stale `InitSymbol`，clear 后重建 ObjectId-derived symbols，reopen 后 stale symbol 不存在。 |
@@ -328,7 +331,16 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.ensure-init-symbol` | `ordered-step-surface` | `MAIN.RuntimeTaskOidProbe`、`MAIN.AuxTaskOidProbe` 和 runtime-only probe 写入 ObjectId-derived data；XML 断言 `Type/GUID/AreaNo/Data`，ADS 证明 runtime-only value 由 `InitSymbol` 注入。 |
 | `tsproj.replace-data-types-section` | `ordered-step-surface` | 先替换成 stale `ST_StaleReplacedType`，再替换为 deterministic test types，reopen 后 stale type 不存在。 |
 | `tsproj.replace-system-settings-section` | `ordered-step-surface` | 先替换成带 `StaleFragment` 的 settings，再替换为目标 settings，reopen 后 stale marker 不存在且 `Tasks` 保留。 |
+| `tsproj.ensure-system-settings` | `ordered-step-surface` | 通过 typed primitive 写入 `System/Settings/Cpu` 和 `IoIdleTask`，不使用 raw Settings fragment，也不替换 `Tasks`。 |
 | `tsproj.replace-project-io-section` | `ordered-step-surface` | 先替换成 stale `Io`，再替换为 JSON-owned 非关键 runtime section，reopen 后 stale Io 不存在。 |
+| `tsproj.ensure-io-section` | `ordered-step-surface` | dedicated primitive 创建 `Project/Io`，不替换 `Project` 下其他节点，reopen 后可见。 |
+| `tsproj.ensure-io-device` | `ordered-step-surface` | structured `Device` 写入 Id、Name、DevType、AMS、AddressInfo 字段，不整段复制 `Io`。 |
+| `tsproj.ensure-ethercat-box` | `ordered-step-surface` | structured `Box` 写入 Device/parent Box 下的 Id、Name、ImageId、EtherCAT attributes。 |
+| `tsproj.ensure-io-box-image` | `ordered-step-surface` | Box `ImageId` 和 metadata child 更新，不丢失已有 Box topology。 |
+| `tsproj.ensure-io-pdo` | `ordered-step-surface` | Box/EtherCAT/Pdo 写入 Name、Index、Flags、SyncMan 和 Entry Type 等精确 XML。 |
+| `tsproj.ensure-mapping-info` | `ordered-step-surface` | root `Mappings/MappingInfo` 的 Identifier/ObjectId pair 精确写入且唯一。 |
+| `tsproj.ensure-io-mapping-link` | `ordered-step-surface` | IO-to-TcCOM `OwnerA/OwnerB/Link` 写入，并支持 `Size` / `RestoreInfo` 等已知 mapping attributes。 |
+| `tsproj.apply-io-topology-plan` | `ordered-step-surface` | batch JSON 通过 dedicated primitives 写入 Device、Box、Pdo、MappingInfo 和 Link，并按 count/结构断言。 |
 | `tsproj.ensure-io-task-image` | `ordered-step-surface` | task image 与 primary instance `IoTaskImage` pointer 一起生成，并精确指向 `#x03040010`。 |
 | `tsproj.clear-instance-parameter-values` | `ordered-step-surface` | 先写入 stale `Parameter.stale=999/888`，clear 后由 plan 重建，reopen 后 stale parameter 不存在。 |
 | `tsproj.apply-instance-parameter-plan` | `ordered-step-surface` | batch plan 精确写入 primary `Parameter.data1=123` 和 aux `Parameter.data1=17`，reopen 后按值断言。 |

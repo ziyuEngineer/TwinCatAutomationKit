@@ -120,16 +120,79 @@ internal sealed class IntegrationTestConfig
 
         string? path = FindSourceConfigPath();
         if (path is null)
-            return _cached = new IntegrationTestConfig();
+            return _cached = ApplyEnvironmentOverrides(new IntegrationTestConfig());
 
         string json = File.ReadAllText(path);
-        _cached = JsonSerializer.Deserialize<IntegrationTestConfig>(json,
+        IntegrationTestConfig loaded = JsonSerializer.Deserialize<IntegrationTestConfig>(json,
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
             ?? new IntegrationTestConfig();
-        _cached.IsExplicitConfig = true;
-        _cached.ConfigPath = path;
+        loaded.IsExplicitConfig = true;
+        loaded.ConfigPath = path;
+        _cached = ApplyEnvironmentOverrides(loaded);
 
         return _cached;
+    }
+
+    private static IntegrationTestConfig ApplyEnvironmentOverrides(IntegrationTestConfig config)
+    {
+        IntegrationTestConfig result = new()
+        {
+            VisualStudioProgId = GetEnvironmentText("TAK_INTEGRATION_VISUAL_STUDIO_PROG_ID") ?? config.VisualStudioProgId,
+            AmsNetId = GetEnvironmentText("TAK_INTEGRATION_AMS_NET_ID") ?? config.AmsNetId,
+            AdsPort = GetEnvironmentInt("TAK_INTEGRATION_ADS_PORT") ?? config.AdsPort,
+            StartupDelayMs = GetEnvironmentInt("TAK_INTEGRATION_STARTUP_DELAY_MS") ?? config.StartupDelayMs,
+            CppModuleWizardId = GetEnvironmentText("TAK_INTEGRATION_CPP_MODULE_WIZARD_ID") ?? config.CppModuleWizardId,
+            WorkRootBase = GetEnvironmentText("TAK_INTEGRATION_WORK_ROOT_BASE") ?? config.WorkRootBase,
+            PreserveArtifacts = GetEnvironmentBool("TAK_INTEGRATION_PRESERVE_ARTIFACTS") ?? config.PreserveArtifacts,
+            EnableActivation = GetEnvironmentBool("TAK_INTEGRATION_ENABLE_ACTIVATION") ?? config.EnableActivation,
+            EnableAdsRead = GetEnvironmentBool("TAK_INTEGRATION_ENABLE_ADS_READ") ?? config.EnableAdsRead,
+            EnableSigning = GetEnvironmentBool("TAK_INTEGRATION_ENABLE_SIGNING") ?? config.EnableSigning,
+            EnableCertificateGrant = GetEnvironmentBool("TAK_INTEGRATION_ENABLE_CERTIFICATE_GRANT") ?? config.EnableCertificateGrant,
+            SigningCertificatePath = GetEnvironmentText("TAK_INTEGRATION_SIGNING_CERTIFICATE_PATH") ?? config.SigningCertificatePath,
+            SigningCertificatePassword = GetEnvironmentText("TAK_INTEGRATION_SIGNING_CERTIFICATE_PASSWORD") ?? config.SigningCertificatePassword,
+            SigningLicenseName = GetEnvironmentText("TAK_INTEGRATION_SIGNING_LICENSE_NAME") ?? config.SigningLicenseName,
+            SigningToolPath = GetEnvironmentText("TAK_INTEGRATION_SIGNING_TOOL_PATH") ?? config.SigningToolPath,
+            AllowTestModeSigningWarning = GetEnvironmentBool("TAK_INTEGRATION_ALLOW_TEST_MODE_SIGNING_WARNING") ?? config.AllowTestModeSigningWarning,
+            RuntimeSettleDelayMs = GetEnvironmentInt("TAK_INTEGRATION_RUNTIME_SETTLE_DELAY_MS") ?? config.RuntimeSettleDelayMs,
+            AdsScanPorts = config.AdsScanPorts,
+            AdsReadSymbols = config.AdsReadSymbols
+        };
+
+        result.IsExplicitConfig = config.IsExplicitConfig;
+        result.ConfigPath = config.ConfigPath;
+        return result;
+    }
+
+    private static string? GetEnvironmentText(string name)
+    {
+        string? value = Environment.GetEnvironmentVariable(name);
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static int? GetEnvironmentInt(string name)
+    {
+        string? value = GetEnvironmentText(name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        return int.TryParse(value, out int parsed)
+            ? parsed
+            : throw new InvalidOperationException($"Environment variable {name} must be an integer.");
+    }
+
+    private static bool? GetEnvironmentBool(string name)
+    {
+        string? value = GetEnvironmentText(name);
+        if (value is null)
+        {
+            return null;
+        }
+
+        return bool.TryParse(value, out bool parsed)
+            ? parsed
+            : throw new InvalidOperationException($"Environment variable {name} must be true or false.");
     }
 
     private static string? FindSourceConfigPath()

@@ -62,7 +62,10 @@
     "cpp.set-item-definition-property",
     "cpp.set-project-item-metadata",
     "engineering.create-module",
+    "engineering.start-tmc-code-generator",
     "engineering.publish-modules",
+    "engineering.verify-tmc-data-areas",
+    "engineering.apply-tmc-module-model",
     "engineering.add-module-instance",
     "engineering.ensure-task",
     "engineering.export-tree-item-xml",
@@ -86,8 +89,17 @@
     "tsproj.clear-unrestored-var-links",
     "tsproj.replace-mappings-section",
     "tsproj.replace-project-io-section",
+    "tsproj.ensure-io-section",
+    "tsproj.ensure-io-device",
+    "tsproj.ensure-ethercat-box",
+    "tsproj.ensure-io-box-image",
+    "tsproj.ensure-io-pdo",
+    "tsproj.ensure-mapping-info",
+    "tsproj.ensure-io-mapping-link",
+    "tsproj.apply-io-topology-plan",
     "tsproj.replace-data-types-section",
     "tsproj.replace-system-settings-section",
+    "tsproj.ensure-system-settings",
     "tsproj.ensure-io-task-image",
     "tsproj.bind-instance-task",
     "tsproj.bind-plc-instance-task",
@@ -98,6 +110,7 @@
     "tsproj.apply-instance-parameter-plan",
     "tsproj.apply-instance-interface-pointer-plan",
     "tsproj.apply-instance-data-pointer-plan",
+    "tsproj.refresh-cpp-instance-tmc-desc",
     "tsproj.ensure-parameter",
     "tsproj.ensure-interface-pointer",
     "tsproj.ensure-data-pointer",
@@ -679,6 +692,96 @@
       ]
     },
     {
+      "Kind": "engineering.apply-tmc-module-model",
+      "MethodName": "TwinCatEngineeringService.ApplyTmcModuleModel",
+      "Category": "engineering",
+      "Summary": "Applies a structured JSON module model to a TwinCAT C\u002B\u002B project .tmc without copying a whole known-good TMC file.",
+      "Preconditions": [
+        "The target project .tmc must already exist.",
+        "GeneratedServicesHeaderPath should point at the project Services.h; GeneratedHeaderPaths can add companion headers such as Interfaces.h for custom interface GUIDs."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectTmcPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute path to the project .tmc file.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT C\u002B\u002B project / class factory name.",
+          "Example": null
+        },
+        {
+          "Name": "Modules",
+          "Type": "IReadOnlyList\u003CTmcModuleModel\u003E",
+          "Required": true,
+          "Description": "Structured module definitions containing GUIDs, interfaces, parameters, DataAreas, interface pointers, data pointers, and event classes.",
+          "Example": null
+        },
+        {
+          "Name": "GeneratedServicesHeaderPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional generated Services.h path used to resolve custom type GUIDs and DataTypes.",
+          "Example": null
+        },
+        {
+          "Name": "GeneratedHeaderPaths",
+          "Type": "IReadOnlyList\u003Cstring\u003E",
+          "Required": false,
+          "Description": "Optional additional generated headers used to resolve companion custom type or interface GUIDs.",
+          "Example": null
+        },
+        {
+          "Name": "LibraryName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional Library/Name override. Defaults to ProjectName.",
+          "Example": null
+        },
+        {
+          "Name": "LibraryVersion",
+          "Type": "string",
+          "Required": false,
+          "Description": "Library/Version value.",
+          "Example": "0.0.0.1"
+        },
+        {
+          "Name": "RemoveUnexpectedModules",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether module entries not present in Modules should be removed.",
+          "Example": "false"
+        },
+        {
+          "Name": "ReplaceDataTypesFromGeneratedHeader",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether generated header DataTypes should replace the .tmc DataTypes section.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectTmcPath",
+          "Type": "string",
+          "Description": "Mutated project .tmc path."
+        },
+        {
+          "Name": "moduleCount",
+          "Type": "int",
+          "Description": "Number of module models applied."
+        }
+      ],
+      "VerificationNotes": [
+        "Run engineering.verify-tmc-data-areas afterwards and inspect the .tmc DataTypes/Modules sections; this step must not receive raw module XML fragments."
+      ]
+    },
+    {
       "Kind": "engineering.build-solution",
       "MethodName": "TwinCatEngineeringService.BuildCurrentSolution",
       "Category": "engineering",
@@ -1247,6 +1350,13 @@
           "Required": false,
           "Description": "Maximum wait for the project .tmc timestamp to update.",
           "Example": "30000"
+        },
+        {
+          "Name": "RunTmcCodeGeneratorFirst",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to invoke StartTmcCodeGenerator before PublishModules.",
+          "Example": "false"
         }
       ],
       "Outputs": [
@@ -1282,6 +1392,115 @@
       "Outputs": [],
       "VerificationNotes": [
         "Re-check file timestamps or solution dirtiness after the command."
+      ]
+    },
+    {
+      "Kind": "engineering.start-tmc-code-generator",
+      "MethodName": "TwinCatEngineeringService.StartTmcCodeGenerator",
+      "Category": "engineering",
+      "Summary": "Invokes the TwinCAT C\u002B\u002B project StartTmcCodeGenerator method so source annotations regenerate TMC metadata.",
+      "Preconditions": [
+        "The target TwinCAT C\u002B\u002B project must exist and expose StartTmcCodeGenerator in its tree XML."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT C\u002B\u002B project name.",
+          "Example": null
+        },
+        {
+          "Name": "PostStartDelayMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Delay after triggering StartTmcCodeGenerator.",
+          "Example": "500"
+        },
+        {
+          "Name": "WaitForUpdatedTmcTimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum wait for the project .tmc timestamp to update.",
+          "Example": "30000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "updatedTmcPath",
+          "Type": "string",
+          "Description": "Project .tmc path observed after code generation."
+        },
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether code generation left a readable project .tmc."
+        },
+        {
+          "Name": "updated",
+          "Type": "bool",
+          "Description": "Whether the .tmc timestamp or content changed during this code generation call."
+        }
+      ],
+      "VerificationNotes": [
+        "Check that the .tmc is readable and contains source-derived DataAreas, Parameters, Interfaces, and module classes; updated=false can still be acceptable if content was already current."
+      ]
+    },
+    {
+      "Kind": "engineering.verify-tmc-data-areas",
+      "MethodName": "TwinCatEngineeringService.VerifyTmcDataAreas",
+      "Category": "engineering",
+      "Summary": "Reads a TwinCAT C\u002B\u002B .tmc file and verifies expected module DataAreas and symbols before instances are created.",
+      "Preconditions": [
+        "Run engineering.start-tmc-code-generator and engineering.publish-modules first when source annotations were just written."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectTmcPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute path to the project .tmc file.",
+          "Example": null
+        },
+        {
+          "Name": "Modules",
+          "Type": "IReadOnlyList\u003CTmcModuleExpectation\u003E",
+          "Required": true,
+          "Description": "Expected module names, DataAreas, AreaTypes, and symbols.",
+          "Example": null
+        },
+        {
+          "Name": "FailOnUnexpectedModule",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether modules not listed in Modules should fail verification.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectTmcPath",
+          "Type": "string",
+          "Description": "Verified project .tmc path."
+        },
+        {
+          "Name": "expectedModuleCount",
+          "Type": "int",
+          "Description": "Expected module count from the request."
+        },
+        {
+          "Name": "matchedModuleCount",
+          "Type": "int",
+          "Description": "Number of expected modules found."
+        },
+        {
+          "Name": "errorsJson",
+          "Type": "json",
+          "Description": "Detailed mismatch list when verification fails."
+        }
+      ],
+      "VerificationNotes": [
+        "Use this after C\u002B\u002B code generation and before add-module-instance; a fallback skeleton TMC with Input/DataIn and Output/DataOut should fail this step."
       ]
     },
     {
@@ -1556,7 +1775,7 @@
           "Name": "Items",
           "Type": "IReadOnlyList\u003CInstanceDataPointerMutation\u003E",
           "Required": true,
-          "Description": "Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, and ByteSize.",
+          "Description": "Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, ByteSize, and optional ArrayIndex for array DataPointerValues.",
           "Example": null
         }
       ],
@@ -1607,6 +1826,102 @@
       "Outputs": [],
       "VerificationNotes": [
         "Re-open the .tsproj and confirm each target instance received the expected ParameterValues updates."
+      ]
+    },
+    {
+      "Kind": "tsproj.apply-io-topology-plan",
+      "MethodName": "TwinCatTsprojMutationService.ApplyIoTopologyPlan",
+      "Category": "tsproj",
+      "Summary": "Applies a batch IO topology payload by orchestrating dedicated IO Device, Box, PDO, MappingInfo, and Link primitives.",
+      "Preconditions": [
+        "The payload must use structured dedicated fields and may only use documented raw fragments for known-good XML gaps.",
+        "Device entries must precede Boxes logically; the service applies Devices, Boxes, BoxImages, Pdos, MappingInfos, then Links."
+      ],
+      "Inputs": [
+        {
+          "Name": "Devices",
+          "Type": "IReadOnlyList\u003CEnsureIoDeviceRequest\u003E",
+          "Required": false,
+          "Description": "Device definitions to ensure.",
+          "Example": null
+        },
+        {
+          "Name": "Boxes",
+          "Type": "IReadOnlyList\u003CEnsureEthercatBoxRequest\u003E",
+          "Required": false,
+          "Description": "Box definitions to ensure.",
+          "Example": null
+        },
+        {
+          "Name": "Pdos",
+          "Type": "IReadOnlyList\u003CEnsureIoPdoRequest\u003E",
+          "Required": false,
+          "Description": "PDO definitions to ensure.",
+          "Example": null
+        },
+        {
+          "Name": "BoxImages",
+          "Type": "IReadOnlyList\u003CEnsureIoBoxImageRequest\u003E",
+          "Required": false,
+          "Description": "Box ImageId/image metadata updates.",
+          "Example": null
+        },
+        {
+          "Name": "MappingInfos",
+          "Type": "IReadOnlyList\u003CEnsureMappingInfoRequest\u003E",
+          "Required": false,
+          "Description": "MappingInfo entries to ensure.",
+          "Example": null
+        },
+        {
+          "Name": "Links",
+          "Type": "IReadOnlyList\u003CEnsureIoMappingLinkRequest\u003E",
+          "Required": false,
+          "Description": "Mapping links to ensure.",
+          "Example": null
+        },
+        {
+          "Name": "EnsureIoSection",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether Project/Io should be created before applying the plan.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "deviceCount",
+          "Type": "int",
+          "Description": "Number of Device entries applied from the payload."
+        },
+        {
+          "Name": "boxCount",
+          "Type": "int",
+          "Description": "Number of Box entries applied from the payload."
+        },
+        {
+          "Name": "pdoCount",
+          "Type": "int",
+          "Description": "Number of PDO entries applied from the payload."
+        },
+        {
+          "Name": "boxImageCount",
+          "Type": "int",
+          "Description": "Number of Box image updates applied from the payload."
+        },
+        {
+          "Name": "mappingInfoCount",
+          "Type": "int",
+          "Description": "Number of MappingInfo entries applied from the payload."
+        },
+        {
+          "Name": "linkCount",
+          "Type": "int",
+          "Description": "Number of Link entries applied from the payload."
+        }
+      ],
+      "VerificationNotes": [
+        "Re-open XAE and compare normalized Project/Io and root Mappings snapshots; for disabled hardware topologies, build plus normalized XML is the first acceptance gate."
       ]
     },
     {
@@ -2162,11 +2477,111 @@
           "Required": true,
           "Description": "Byte width of the pointed segment.",
           "Example": null
+        },
+        {
+          "Name": "ArrayIndex",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional array index. When set, writes a Data child with ArrayIndex under the named DataPointerValues entry.",
+          "Example": "0"
         }
       ],
       "Outputs": [],
       "VerificationNotes": [
         "Re-open the .tsproj and confirm the named DataPointerValues/Value entry matches the requested offsets."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-ethercat-box",
+      "MethodName": "TwinCatTsprojMutationService.EnsureEthercatBox",
+      "Category": "tsproj",
+      "Summary": "Creates or updates an EtherCAT Box under a Device or parent Box, preserving nested topology.",
+      "Preconditions": [
+        "The target Device must already exist.",
+        "ParentBoxId, when set, must identify exactly one existing Box under that Device."
+      ],
+      "Inputs": [
+        {
+          "Name": "DeviceId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Owning Device Id.",
+          "Example": null
+        },
+        {
+          "Name": "ParentBoxId",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional parent Box Id for nested terminals or safety modules.",
+          "Example": null
+        },
+        {
+          "Name": "BoxId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Box Id attribute.",
+          "Example": null
+        },
+        {
+          "Name": "Name",
+          "Type": "string",
+          "Required": true,
+          "Description": "Box display name.",
+          "Example": null
+        },
+        {
+          "Name": "BoxType",
+          "Type": "int",
+          "Required": true,
+          "Description": "TwinCAT BoxType value.",
+          "Example": null
+        },
+        {
+          "Name": "Disabled",
+          "Type": "bool?",
+          "Required": false,
+          "Description": "Optional Disabled attribute. false removes the attribute.",
+          "Example": null
+        },
+        {
+          "Name": "BoxFlags",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional BoxFlags value.",
+          "Example": null
+        },
+        {
+          "Name": "ImageId",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional ImageId child value.",
+          "Example": null
+        },
+        {
+          "Name": "EtherCatAttributes",
+          "Type": "IReadOnlyList\u003CTsprojXmlAttribute\u003E",
+          "Required": false,
+          "Description": "Structured attributes for the Box/EtherCAT child.",
+          "Example": null
+        },
+        {
+          "Name": "EtherCatChildValues",
+          "Type": "IReadOnlyList\u003CTsprojXmlChildValue\u003E",
+          "Required": false,
+          "Description": "Simple child values for Box/EtherCAT, such as SyncMan or Fmmu only when their meaning is known.",
+          "Example": null
+        },
+        {
+          "Name": "ExtraFragments",
+          "Type": "IReadOnlyList\u003CIoRawXmlFragment\u003E",
+          "Required": false,
+          "Description": "Known-good extra Box child fragments with required source/meaning/evidence metadata.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the Box appears under the expected Device/parent Box with correct Id, Name, ImageId, and EtherCAT metadata."
       ]
     },
     {
@@ -2270,6 +2685,358 @@
       ]
     },
     {
+      "Kind": "tsproj.ensure-io-box-image",
+      "MethodName": "TwinCatTsprojMutationService.EnsureIoBoxImage",
+      "Category": "tsproj",
+      "Summary": "Creates or updates a Box ImageId and optional image metadata without replacing the Box.",
+      "Preconditions": [
+        "The target Device and Box must already exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "DeviceId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Owning Device Id.",
+          "Example": null
+        },
+        {
+          "Name": "BoxId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Target Box Id.",
+          "Example": null
+        },
+        {
+          "Name": "ImageId",
+          "Type": "int",
+          "Required": true,
+          "Description": "ImageId child value.",
+          "Example": null
+        },
+        {
+          "Name": "MetadataValues",
+          "Type": "IReadOnlyList\u003CTsprojXmlChildValue\u003E",
+          "Required": false,
+          "Description": "Optional simple metadata child values written under the Box.",
+          "Example": null
+        },
+        {
+          "Name": "MetadataFragments",
+          "Type": "IReadOnlyList\u003CIoRawXmlFragment\u003E",
+          "Required": false,
+          "Description": "Known-good image metadata fragments with required source/meaning/evidence metadata.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the target Box keeps its topology while ImageId and requested image metadata are present."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-io-device",
+      "MethodName": "TwinCatTsprojMutationService.EnsureIoDevice",
+      "Category": "tsproj",
+      "Summary": "Creates or updates a Project/Io Device with structured TwinCAT IO identity fields.",
+      "Preconditions": [
+        "Project/Io will be created if missing.",
+        "Raw AddressInfo or extra fragments require source, parent path, field meaning, and verification evidence."
+      ],
+      "Inputs": [
+        {
+          "Name": "DeviceId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Device Id attribute under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "Name",
+          "Type": "string",
+          "Required": true,
+          "Description": "Device display name.",
+          "Example": null
+        },
+        {
+          "Name": "DevType",
+          "Type": "int",
+          "Required": true,
+          "Description": "TwinCAT Device DevType, for example 109 for RT-Ethernet Adapter or 111 for EtherCAT.",
+          "Example": null
+        },
+        {
+          "Name": "Disabled",
+          "Type": "bool?",
+          "Required": false,
+          "Description": "Optional Disabled attribute. false removes the attribute.",
+          "Example": null
+        },
+        {
+          "Name": "DevFlags",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional DevFlags value such as #x0003.",
+          "Example": null
+        },
+        {
+          "Name": "AmsPort",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional device AMS port.",
+          "Example": null
+        },
+        {
+          "Name": "AmsNetId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional device AMS NetId.",
+          "Example": null
+        },
+        {
+          "Name": "RemoteName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional RemoteName attribute.",
+          "Example": null
+        },
+        {
+          "Name": "InfoImageId",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional InfoImageId attribute.",
+          "Example": null
+        },
+        {
+          "Name": "AddressInfo",
+          "Type": "IoAddressInfo",
+          "Required": false,
+          "Description": "Structured TcCom/Pnp AddressInfo or documented raw AddressInfo XML.",
+          "Example": null
+        },
+        {
+          "Name": "Images",
+          "Type": "IReadOnlyList\u003CIoImageDefinition\u003E",
+          "Required": false,
+          "Description": "Optional direct Image children for process images.",
+          "Example": null
+        },
+        {
+          "Name": "ExtraFragments",
+          "Type": "IReadOnlyList\u003CIoRawXmlFragment\u003E",
+          "Required": false,
+          "Description": "Known-good extra Device child fragments with required source/meaning/evidence metadata.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the Device Id, Name, DevType, AMS fields, AddressInfo, and direct Image children match the requested topology."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-io-mapping-link",
+      "MethodName": "TwinCatTsprojMutationService.EnsureIoMappingLink",
+      "Category": "tsproj",
+      "Summary": "Creates or updates a mapping OwnerA/OwnerB/Link with optional IO/TcCOM mapping attributes.",
+      "Preconditions": [
+        "Owner names and Var paths must match the IO/PDO or TcCOM paths visible to XAE.",
+        "Use structured LinkAttributes for Size, RestoreInfo, GrpA, TypeA, InOutA, GuidA, and similar known mapping metadata."
+      ],
+      "Inputs": [
+        {
+          "Name": "OwnerAName",
+          "Type": "string",
+          "Required": true,
+          "Description": "OwnerA Name attribute, for example TIID^Device 3 (EtherCAT).",
+          "Example": null
+        },
+        {
+          "Name": "OwnerBName",
+          "Type": "string",
+          "Required": true,
+          "Description": "OwnerB Name attribute, for example TIXC^MotionControl^BeckhoffDriver1.",
+          "Example": null
+        },
+        {
+          "Name": "VarA",
+          "Type": "string",
+          "Required": true,
+          "Description": "Link VarA attribute.",
+          "Example": null
+        },
+        {
+          "Name": "VarB",
+          "Type": "string",
+          "Required": true,
+          "Description": "Link VarB attribute.",
+          "Example": null
+        },
+        {
+          "Name": "OwnerAPrefix",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional OwnerA Prefix attribute.",
+          "Example": null
+        },
+        {
+          "Name": "OwnerAType",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional OwnerA Type attribute.",
+          "Example": null
+        },
+        {
+          "Name": "OwnerBPrefix",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional OwnerB Prefix attribute.",
+          "Example": null
+        },
+        {
+          "Name": "OwnerBType",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional OwnerB Type attribute.",
+          "Example": null
+        },
+        {
+          "Name": "LinkAttributes",
+          "Type": "IReadOnlyList\u003CTsprojXmlAttribute\u003E",
+          "Required": false,
+          "Description": "Optional additional Link attributes such as Size, RestoreInfo, GrpA, TypeA, InOutA, or GuidA.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceExistingAttributes",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether LinkAttributes overwrite existing attribute values.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify Mappings contains the exact OwnerA/OwnerB/Link path and any requested Size/RestoreInfo/GuidA metadata."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-io-pdo",
+      "MethodName": "TwinCatTsprojMutationService.EnsureIoPdo",
+      "Category": "tsproj",
+      "Summary": "Creates or updates a Box/EtherCAT Pdo and its Entry children using structured PDO fields.",
+      "Preconditions": [
+        "The target Device and Box must already exist.",
+        "Use ExtraFragments only for known-good PDO child XML with documented field meanings and evidence."
+      ],
+      "Inputs": [
+        {
+          "Name": "DeviceId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Owning Device Id.",
+          "Example": null
+        },
+        {
+          "Name": "BoxId",
+          "Type": "int",
+          "Required": true,
+          "Description": "Owning Box Id under the Device.",
+          "Example": null
+        },
+        {
+          "Name": "Name",
+          "Type": "string",
+          "Required": true,
+          "Description": "Pdo Name attribute.",
+          "Example": null
+        },
+        {
+          "Name": "Index",
+          "Type": "string",
+          "Required": true,
+          "Description": "Pdo Index attribute, for example #x1a00 or #x1600.",
+          "Example": null
+        },
+        {
+          "Name": "InOut",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional InOut attribute.",
+          "Example": null
+        },
+        {
+          "Name": "Flags",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional Flags attribute.",
+          "Example": null
+        },
+        {
+          "Name": "SyncMan",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional SyncMan attribute.",
+          "Example": null
+        },
+        {
+          "Name": "Entries",
+          "Type": "IReadOnlyList\u003CIoPdoEntry\u003E",
+          "Required": false,
+          "Description": "PDO Entry definitions containing name/index/sub/type and optional attributes/child values.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceExistingEntries",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether existing Entry children are replaced before Entries are applied.",
+          "Example": "true"
+        },
+        {
+          "Name": "ExtraFragments",
+          "Type": "IReadOnlyList\u003CIoRawXmlFragment\u003E",
+          "Required": false,
+          "Description": "Known-good extra Pdo child fragments with required source/meaning/evidence metadata.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the target Box/EtherCAT/Pdo entries have the expected Index/Sub/Type/BitLen fields and mapping-visible names."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-io-section",
+      "MethodName": "TwinCatTsprojMutationService.EnsureIoSection",
+      "Category": "tsproj",
+      "Summary": "Ensures the root Project/Io section exists without replacing other Project children.",
+      "Preconditions": [
+        "A root-level Project node must exist in the .tsproj."
+      ],
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Name": "created",
+          "Type": "bool",
+          "Description": "Whether Project/Io was created by this call."
+        },
+        {
+          "Name": "deviceCount",
+          "Type": "int",
+          "Description": "Number of direct Device children currently under Project/Io."
+        },
+        {
+          "Name": "projectPath",
+          "Type": "string",
+          "Description": "Mutated .tsproj path."
+        }
+      ],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify Project/Io exists and existing Project/System/Plc/Cpp children remain intact."
+      ]
+    },
+    {
       "Kind": "tsproj.ensure-io-task-image",
       "MethodName": "TwinCatTsprojMutationService.EnsureIoTaskImage",
       "Category": "tsproj",
@@ -2359,6 +3126,43 @@
       "Outputs": [],
       "VerificationNotes": [
         "Re-open the .tsproj and confirm Task Image plus instance InterfacePointerValues/IoTaskImage were updated."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-mapping-info",
+      "MethodName": "TwinCatTsprojMutationService.EnsureMappingInfo",
+      "Category": "tsproj",
+      "Summary": "Creates or updates a root Mappings/MappingInfo entry.",
+      "Preconditions": [
+        "Root Mappings will be created if missing.",
+        "Identifier and Id must be known from TwinCAT-generated or documented topology."
+      ],
+      "Inputs": [
+        {
+          "Name": "Identifier",
+          "Type": "string",
+          "Required": true,
+          "Description": "MappingInfo Identifier attribute.",
+          "Example": null
+        },
+        {
+          "Name": "Id",
+          "Type": "string",
+          "Required": true,
+          "Description": "MappingInfo Id/ObjectId attribute, for example #x02030010.",
+          "Example": null
+        },
+        {
+          "Name": "Attributes",
+          "Type": "IReadOnlyList\u003CTsprojXmlAttribute\u003E",
+          "Required": false,
+          "Description": "Optional additional MappingInfo attributes; Identifier and Id are owned by dedicated fields.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify root Mappings contains the requested MappingInfo Identifier/Id pair exactly once."
       ]
     },
     {
@@ -2552,6 +3356,43 @@
       "Outputs": [],
       "VerificationNotes": [
         "Re-open the .tsproj and verify the PLC instance Vars group attributes and Var entries."
+      ]
+    },
+    {
+      "Kind": "tsproj.ensure-system-settings",
+      "MethodName": "TwinCatTsprojMutationService.EnsureSystemSettings",
+      "Category": "tsproj",
+      "Summary": "Ensures typed System/Settings values such as Cpu and IoIdleTask without replacing the whole Settings section.",
+      "Preconditions": [
+        "The target .tsproj must already exist on disk.",
+        "At least one typed setting must be provided."
+      ],
+      "Inputs": [
+        {
+          "Name": "CpuId",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional System/Settings/Cpu CpuId attribute.",
+          "Example": null
+        },
+        {
+          "Name": "IoIdleTaskPriority",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional System/Settings/IoIdleTask Priority attribute.",
+          "Example": null
+        },
+        {
+          "Name": "InsertBeforeTasks",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to insert Settings before System/Tasks when Settings is created and Tasks exists.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify System/Settings contains the requested Cpu and IoIdleTask attributes while existing Tasks remain intact."
       ]
     },
     {
@@ -2907,6 +3748,87 @@
       ]
     },
     {
+      "Kind": "tsproj.refresh-cpp-instance-tmc-desc",
+      "MethodName": "TwinCatTsprojMutationService.RefreshCppInstanceTmcDesc",
+      "Category": "tsproj",
+      "Summary": "Refreshes existing C\u002B\u002B instance TmcDesc metadata from the project .tmc while preserving instance context and value sections.",
+      "Preconditions": [
+        "The target C\u002B\u002B project instances must already exist in the .tsproj.",
+        "The project .tmc must contain the requested module class names."
+      ],
+      "Inputs": [
+        {
+          "Name": "CppProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Owning C\u002B\u002B project name in the .tsproj.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectTmcPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute path to the project .tmc file.",
+          "Example": null
+        },
+        {
+          "Name": "Instances",
+          "Type": "IReadOnlyList\u003CCppInstanceTmcDescRefreshItem\u003E",
+          "Required": true,
+          "Description": "InstanceName to ModuleClassName mapping entries.",
+          "Example": null
+        },
+        {
+          "Name": "PreserveValueSections",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Preserve existing ParameterValues, InterfacePointerValues, and DataPointerValues.",
+          "Example": "true"
+        },
+        {
+          "Name": "PreserveContextValues",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Preserve existing TmcDesc Contexts and task ManualConfig.",
+          "Example": "true"
+        },
+        {
+          "Name": "ImportDataTypesFromTmc",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Replace root .tsproj DataTypes from the project .tmc DataTypes.",
+          "Example": "true"
+        },
+        {
+          "Name": "FailIfMissingModule",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Fail when an instance mapping references a missing TMC module.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectPath",
+          "Type": "string",
+          "Description": "Mutated .tsproj path."
+        },
+        {
+          "Name": "refreshedCount",
+          "Type": "int",
+          "Description": "Number of instance TmcDesc sections refreshed."
+        },
+        {
+          "Name": "errorsJson",
+          "Type": "json",
+          "Description": "Detailed mismatch list when refresh fails."
+        }
+      ],
+      "VerificationNotes": [
+        "Re-open the .tsproj and confirm instance DataAreas/Parameters/Pointers match the project .tmc while prior values and task bindings remain."
+      ]
+    },
+    {
       "Kind": "tsproj.replace-data-types-section",
       "MethodName": "TwinCatTsprojMutationService.ReplaceDataTypesSection",
       "Category": "tsproj",
@@ -2988,7 +3910,7 @@
       "Category": "tsproj",
       "Summary": "Replaces System/Settings with a caller-provided Settings fragment while preserving other System children.",
       "Preconditions": [
-        "A System node must exist in the .tsproj.",
+        "The target .tsproj must already exist on disk.",
         "The fragment must be a valid Settings element."
       ],
       "Inputs": [
@@ -3010,6 +3932,56 @@
       "Outputs": [],
       "VerificationNotes": [
         "Re-open the .tsproj and verify System/Settings content and insertion position."
+      ]
+    },
+    {
+      "Kind": "tsproj.set-cpp-instance-metadata",
+      "MethodName": "TwinCatTsprojMutationService.SetCppInstanceMetadata",
+      "Category": "tsproj",
+      "Summary": "Updates C\u002B\u002B Instance metadata attributes such as Disabled, KeepUnrestoredLinks, ClassFactoryId, or ObjectId without replacing TmcDesc.",
+      "Preconditions": [
+        "The target C\u002B\u002B Instance must already exist in the .tsproj."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "C\u002B\u002B instance display name.",
+          "Example": null
+        },
+        {
+          "Name": "Disabled",
+          "Type": "bool?",
+          "Required": false,
+          "Description": "Optional Disabled attribute value. false removes the Disabled attribute.",
+          "Example": "true"
+        },
+        {
+          "Name": "KeepUnrestoredLinks",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional KeepUnrestoredLinks attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "ClassFactoryId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional ClassFactoryId attribute value.",
+          "Example": null
+        },
+        {
+          "Name": "ObjectId",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional instance Id/ObjectId attribute value, for example #x01010010.",
+          "Example": null
+        }
+      ],
+      "Outputs": [],
+      "VerificationNotes": [
+        "Re-open the .tsproj and verify the C\u002B\u002B Instance metadata attributes were applied while TmcDesc remains intact."
       ]
     },
     {
@@ -3137,7 +4109,7 @@
       "Kind": "tsproj.set-task-affinity",
       "MethodName": "TwinCatTsprojMutationService.SetTaskAffinity",
       "Category": "tsproj",
-      "Summary": "Sets Task Affinity and AdtTasks attributes for scheduler placement-sensitive workloads.",
+      "Summary": "Sets Task Affinity and/or AdtTasks attributes for scheduler placement-sensitive workloads.",
       "Preconditions": [
         "The target Task node must already exist in the .tsproj."
       ],
@@ -3152,8 +4124,8 @@
         {
           "Name": "Affinity",
           "Type": "string",
-          "Required": true,
-          "Description": "TwinCAT affinity mask or list, for example 1 or 0,2.",
+          "Required": false,
+          "Description": "Optional TwinCAT affinity mask or list, for example 1 or 0,2. Omit to update only AdtTasks.",
           "Example": null
         },
         {
@@ -3166,7 +4138,7 @@
       ],
       "Outputs": [],
       "VerificationNotes": [
-        "Re-open the .tsproj and confirm the Task node includes Affinity and AdtTasks attributes."
+        "Re-open the .tsproj and confirm the Task node includes the requested Affinity and/or AdtTasks attributes."
       ]
     },
     {

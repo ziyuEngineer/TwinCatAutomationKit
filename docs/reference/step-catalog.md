@@ -27,6 +27,7 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `cpp` | `cpp.write-project-item-content` | Writes source/resource/text payload into an existing C++ project item file and returns its content hash. |
 | `engineering` | `engineering.activate-configuration` | Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback. |
 | `engineering` | `engineering.add-module-instance` | Adds a TcCOM instance from a project TMC by resolving the module GUID and calling CreateChild on the project node. |
+| `engineering` | `engineering.apply-tmc-module-model` | Applies a structured JSON module model to a TwinCAT C++ project .tmc without copying a whole known-good TMC file. |
 | `engineering` | `engineering.build-solution` | Runs SolutionBuild.Build and waits until the DTE build state reaches done. |
 | `engineering` | `engineering.close-visual-studio` | Closes the current Visual Studio DTE session, optionally issuing SaveAll first. |
 | `engineering` | `engineering.create-cpp-project` | Creates a TwinCAT C++ project beneath TIXC using a specified Beckhoff wizard id. |
@@ -41,6 +42,8 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `engineering` | `engineering.open-xae-solution` | Re-opens an existing TwinCAT solution and re-attaches COM references after .tsproj file mutations. |
 | `engineering` | `engineering.publish-modules` | Invokes the TwinCAT C++ project PublishModules method so updated module source regenerates TMC metadata. |
 | `engineering` | `engineering.save-all` | Flushes pending Visual Studio document and solution changes before build, reopen, or .tsproj file mutation steps. |
+| `engineering` | `engineering.start-tmc-code-generator` | Invokes the TwinCAT C++ project StartTmcCodeGenerator method so source annotations regenerate TMC metadata. |
+| `engineering` | `engineering.verify-tmc-data-areas` | Reads a TwinCAT C++ .tmc file and verifies expected module DataAreas and symbols before instances are created. |
 | `signing` | `signing.grant-certificate` | Grants or removes local TcSignTool authorization for a TwinCAT signing certificate. |
 | `signing` | `signing.set-license` | Writes TwinCAT C++ project signing license settings used by MSBuild/TcSignTool. |
 | `signing` | `signing.sign-twincat-binary` | Signs one or more built TwinCAT C++ binaries with Beckhoff TcSignTool. |
@@ -48,6 +51,7 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `tsproj` | `tsproj.apply-instance-data-pointer-plan` | Applies a batch of instance data pointer writes in one deterministic .tsproj mutation pass. |
 | `tsproj` | `tsproj.apply-instance-interface-pointer-plan` | Applies a batch of instance interface pointer writes in one deterministic .tsproj mutation pass. |
 | `tsproj` | `tsproj.apply-instance-parameter-plan` | Applies a batch of instance parameter writes in one deterministic .tsproj mutation pass. |
+| `tsproj` | `tsproj.apply-io-topology-plan` | Applies a batch IO topology payload by orchestrating dedicated IO Device, Box, PDO, MappingInfo, and Link primitives. |
 | `tsproj` | `tsproj.apply-mutation-plan` | Applies generic element and fragment upserts in one deterministic .tsproj mutation pass. |
 | `tsproj` | `tsproj.bind-instance-context` | Writes Instance TmcDesc Context/ManualConfig binding with configurable context id/name and CyclicCaller behavior. |
 | `tsproj` | `tsproj.bind-instance-task` | Writes ManualConfig/OTCID and context timing values back into an instance TmcDesc, optionally also updating CyclicCaller. |
@@ -62,25 +66,35 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `tsproj` | `tsproj.clear-unrestored-var-links` | Removes stale UnrestoredVarLinks blocks so unresolved TwinCAT links do not survive into activation. |
 | `tsproj` | `tsproj.ensure-cpp-instance` | Ensures a named C++ Instance node exists under Cpp/Project and carries a minimal TmcDesc skeleton. |
 | `tsproj` | `tsproj.ensure-data-pointer` | Writes or updates a DataPointerValues entry beneath an instance TmcDesc. |
+| `tsproj` | `tsproj.ensure-ethercat-box` | Creates or updates an EtherCAT Box under a Device or parent Box, preserving nested topology. |
 | `tsproj` | `tsproj.ensure-init-symbol` | Ensures a PLC InitSymbol exists and writes Data from the provided ObjectId using TwinCAT little-endian encoding. |
 | `tsproj` | `tsproj.ensure-interface-pointer` | Writes or updates an InterfacePointerValues entry beneath an instance TmcDesc. |
+| `tsproj` | `tsproj.ensure-io-box-image` | Creates or updates a Box ImageId and optional image metadata without replacing the Box. |
+| `tsproj` | `tsproj.ensure-io-device` | Creates or updates a Project/Io Device with structured TwinCAT IO identity fields. |
+| `tsproj` | `tsproj.ensure-io-mapping-link` | Creates or updates a mapping OwnerA/OwnerB/Link with optional IO/TcCOM mapping attributes. |
+| `tsproj` | `tsproj.ensure-io-pdo` | Creates or updates a Box/EtherCAT Pdo and its Entry children using structured PDO fields. |
+| `tsproj` | `tsproj.ensure-io-section` | Ensures the root Project/Io section exists without replacing other Project children. |
 | `tsproj` | `tsproj.ensure-io-task-image` | Ensures IO Task Image structure on a task and binds the instance IoTaskImage pointer to the derived or specified Image ObjectId. |
+| `tsproj` | `tsproj.ensure-mapping-info` | Creates or updates a root Mappings/MappingInfo entry. |
 | `tsproj` | `tsproj.ensure-mapping-link` | Ensures a deterministic Mapping OwnerA/OwnerB/Link triple exists without replacing unrelated mappings. |
 | `tsproj` | `tsproj.ensure-parameter` | Upserts a parameter default under TmcDesc/ParameterValues for an instance. |
 | `tsproj` | `tsproj.ensure-plc-instance` | Ensures Plc/Project/Instance nodes exist for a named PLC project and instance. |
 | `tsproj` | `tsproj.ensure-plc-instance-vars-group` | Ensures a named Vars group exists under a PLC Instance with deterministic Var definitions. |
+| `tsproj` | `tsproj.ensure-system-settings` | Ensures typed System/Settings values such as Cpu and IoIdleTask without replacing the whole Settings section. |
 | `tsproj` | `tsproj.ensure-task` | Creates or updates the declarative task node inside a .tsproj generated by XAE. |
 | `tsproj` | `tsproj.ensure-task-image` | Ensures a Task Image entry exists with deterministic Id, size, and addressing attributes. |
 | `tsproj` | `tsproj.ensure-task-pou-oid` | Ensures a PLC TaskPouOid entry exists with the requested priority and optional OTCID. |
 | `tsproj` | `tsproj.ensure-task-vars-group` | Ensures a named Vars group exists under a Task with deterministic variable shape and addressing. |
 | `tsproj` | `tsproj.merge-fragment` | Merges a captured XML fragment into a named container, acting as the escape hatch only for remaining TwinCAT XML gaps without a dedicated primitive. |
+| `tsproj` | `tsproj.refresh-cpp-instance-tmc-desc` | Refreshes existing C++ instance TmcDesc metadata from the project .tmc while preserving instance context and value sections. |
 | `tsproj` | `tsproj.replace-data-types-section` | Replaces the root DataTypes section with a caller-provided fragment. |
 | `tsproj` | `tsproj.replace-mappings-section` | Replaces the root-level Mappings section with a caller-provided fragment. |
 | `tsproj` | `tsproj.replace-project-io-section` | Replaces the root Project/Io section with a caller-provided Io fragment. |
 | `tsproj` | `tsproj.replace-system-settings-section` | Replaces System/Settings with a caller-provided Settings fragment while preserving other System children. |
+| `tsproj` | `tsproj.set-cpp-instance-metadata` | Updates C++ Instance metadata attributes such as Disabled, KeepUnrestoredLinks, ClassFactoryId, or ObjectId without replacing TmcDesc. |
 | `tsproj` | `tsproj.set-plc-instance-metadata` | Updates Plc Instance metadata attributes and optional CLSID/ClassFactory fields without replacing unrelated nodes. |
 | `tsproj` | `tsproj.set-plc-project-properties` | Updates Plc/Project attribute-level properties such as project paths, reload behavior, AMS port, and archive settings. |
-| `tsproj` | `tsproj.set-task-affinity` | Sets Task Affinity and AdtTasks attributes for scheduler placement-sensitive workloads. |
+| `tsproj` | `tsproj.set-task-affinity` | Sets Task Affinity and/or AdtTasks attributes for scheduler placement-sensitive workloads. |
 | `tsproj` | `tsproj.upsert-element` | Upserts a generic XML element under a path-based .tsproj parent using a declared conflict policy. |
 | `tsproj` | `tsproj.upsert-fragment` | Upserts a generic XML fragment under a path-based .tsproj parent using a declared conflict policy. |
 | `validation` | `validation.ads-read` | Reads a PLC or TcCOM symbol over ADS so the engineering pipeline can close the loop with a runtime assertion. |
@@ -254,6 +268,30 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `objectId` (`string`): Resolved instance ObjectId / OTCID.
 - 验证 Verification:
   - Export the instance XML and confirm that the expected CLSID and Name are present.
+
+### `engineering.apply-tmc-module-model`
+
+- 方法 Method: `TwinCatEngineeringService.ApplyTmcModuleModel`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Applies a structured JSON module model to a TwinCAT C++ project .tmc without copying a whole known-good TMC file.
+- 前置条件 Preconditions:
+  - The target project .tmc must already exist.
+  - GeneratedServicesHeaderPath should point at the project Services.h; GeneratedHeaderPaths can add companion headers such as Interfaces.h for custom interface GUIDs.
+- 输入 Inputs:
+  - `ProjectTmcPath` (`string`): Absolute path to the project .tmc file.
+  - `ProjectName` (`string`): TwinCAT C++ project / class factory name.
+  - `Modules` (`IReadOnlyList<TmcModuleModel>`): Structured module definitions containing GUIDs, interfaces, parameters, DataAreas, interface pointers, data pointers, and event classes.
+  - `GeneratedServicesHeaderPath` (`string`): Optional generated Services.h path used to resolve custom type GUIDs and DataTypes.
+  - `GeneratedHeaderPaths` (`IReadOnlyList<string>`): Optional additional generated headers used to resolve companion custom type or interface GUIDs.
+  - `LibraryName` (`string`): Optional Library/Name override. Defaults to ProjectName.
+  - `LibraryVersion` (`string`): Library/Version value. Example: `0.0.0.1`.
+  - `RemoveUnexpectedModules` (`bool`): Whether module entries not present in Modules should be removed. Example: `false`.
+  - `ReplaceDataTypesFromGeneratedHeader` (`bool`): Whether generated header DataTypes should replace the .tmc DataTypes section. Example: `true`.
+- 输出 Outputs:
+  - `projectTmcPath` (`string`): Mutated project .tmc path.
+  - `moduleCount` (`int`): Number of module models applied.
+- 验证 Verification:
+  - Run engineering.verify-tmc-data-areas afterwards and inspect the .tmc DataTypes/Modules sections; this step must not receive raw module XML fragments.
 
 ### `engineering.build-solution`
 
@@ -470,6 +508,7 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `ProjectName` (`string`): TwinCAT C++ project name.
   - `PostPublishDelayMs` (`int`): Delay after triggering PublishModules. Example: `5000`.
   - `WaitForUpdatedTmcTimeoutMs` (`int`): Maximum wait for the project .tmc timestamp to update. Example: `30000`.
+  - `RunTmcCodeGeneratorFirst` (`bool`): Whether to invoke StartTmcCodeGenerator before PublishModules. Example: `false`.
 - 输出 Outputs:
   - `updatedTmcPath` (`string`): Project .tmc path observed after publish.
   - `succeeded` (`bool`): Whether publish left a readable project .tmc.
@@ -490,6 +529,43 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-check file timestamps or solution dirtiness after the command.
+
+### `engineering.start-tmc-code-generator`
+
+- 方法 Method: `TwinCatEngineeringService.StartTmcCodeGenerator`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Invokes the TwinCAT C++ project StartTmcCodeGenerator method so source annotations regenerate TMC metadata.
+- 前置条件 Preconditions:
+  - The target TwinCAT C++ project must exist and expose StartTmcCodeGenerator in its tree XML.
+- 输入 Inputs:
+  - `ProjectName` (`string`): TwinCAT C++ project name.
+  - `PostStartDelayMs` (`int`): Delay after triggering StartTmcCodeGenerator. Example: `500`.
+  - `WaitForUpdatedTmcTimeoutMs` (`int`): Maximum wait for the project .tmc timestamp to update. Example: `30000`.
+- 输出 Outputs:
+  - `updatedTmcPath` (`string`): Project .tmc path observed after code generation.
+  - `succeeded` (`bool`): Whether code generation left a readable project .tmc.
+  - `updated` (`bool`): Whether the .tmc timestamp or content changed during this code generation call.
+- 验证 Verification:
+  - Check that the .tmc is readable and contains source-derived DataAreas, Parameters, Interfaces, and module classes; updated=false can still be acceptable if content was already current.
+
+### `engineering.verify-tmc-data-areas`
+
+- 方法 Method: `TwinCatEngineeringService.VerifyTmcDataAreas`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Reads a TwinCAT C++ .tmc file and verifies expected module DataAreas and symbols before instances are created.
+- 前置条件 Preconditions:
+  - Run engineering.start-tmc-code-generator and engineering.publish-modules first when source annotations were just written.
+- 输入 Inputs:
+  - `ProjectTmcPath` (`string`): Absolute path to the project .tmc file.
+  - `Modules` (`IReadOnlyList<TmcModuleExpectation>`): Expected module names, DataAreas, AreaTypes, and symbols.
+  - `FailOnUnexpectedModule` (`bool`): Whether modules not listed in Modules should fail verification. Example: `false`.
+- 输出 Outputs:
+  - `projectTmcPath` (`string`): Verified project .tmc path.
+  - `expectedModuleCount` (`int`): Expected module count from the request.
+  - `matchedModuleCount` (`int`): Number of expected modules found.
+  - `errorsJson` (`json`): Detailed mismatch list when verification fails.
+- 验证 Verification:
+  - Use this after C++ code generation and before add-module-instance; a fallback skeleton TMC with Input/DataIn and Output/DataOut should fail this step.
 
 ### `signing.grant-certificate`
 
@@ -582,7 +658,7 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 前置条件 Preconditions:
   - Each referenced instance must already exist in the .tsproj.
 - 输入 Inputs:
-  - `Items` (`IReadOnlyList<InstanceDataPointerMutation>`): Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, and ByteSize.
+  - `Items` (`IReadOnlyList<InstanceDataPointerMutation>`): Batch entries containing InstanceName, PointerName, ObjectId, AreaNo, ByteOffset, ByteSize, and optional ArrayIndex for array DataPointerValues.
 - 输出 Outputs:
   - (none)
 - 验证 Verification:
@@ -615,6 +691,32 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-open the .tsproj and confirm each target instance received the expected ParameterValues updates.
+
+### `tsproj.apply-io-topology-plan`
+
+- 方法 Method: `TwinCatTsprojMutationService.ApplyIoTopologyPlan`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Applies a batch IO topology payload by orchestrating dedicated IO Device, Box, PDO, MappingInfo, and Link primitives.
+- 前置条件 Preconditions:
+  - The payload must use structured dedicated fields and may only use documented raw fragments for known-good XML gaps.
+  - Device entries must precede Boxes logically; the service applies Devices, Boxes, BoxImages, Pdos, MappingInfos, then Links.
+- 输入 Inputs:
+  - `Devices` (`IReadOnlyList<EnsureIoDeviceRequest>`): Device definitions to ensure.
+  - `Boxes` (`IReadOnlyList<EnsureEthercatBoxRequest>`): Box definitions to ensure.
+  - `Pdos` (`IReadOnlyList<EnsureIoPdoRequest>`): PDO definitions to ensure.
+  - `BoxImages` (`IReadOnlyList<EnsureIoBoxImageRequest>`): Box ImageId/image metadata updates.
+  - `MappingInfos` (`IReadOnlyList<EnsureMappingInfoRequest>`): MappingInfo entries to ensure.
+  - `Links` (`IReadOnlyList<EnsureIoMappingLinkRequest>`): Mapping links to ensure.
+  - `EnsureIoSection` (`bool`): Whether Project/Io should be created before applying the plan. Example: `true`.
+- 输出 Outputs:
+  - `deviceCount` (`int`): Number of Device entries applied from the payload.
+  - `boxCount` (`int`): Number of Box entries applied from the payload.
+  - `pdoCount` (`int`): Number of PDO entries applied from the payload.
+  - `boxImageCount` (`int`): Number of Box image updates applied from the payload.
+  - `mappingInfoCount` (`int`): Number of MappingInfo entries applied from the payload.
+  - `linkCount` (`int`): Number of Link entries applied from the payload.
+- 验证 Verification:
+  - Re-open XAE and compare normalized Project/Io and root Mappings snapshots; for disabled hardware topologies, build plus normalized XML is the first acceptance gate.
 
 ### `tsproj.apply-mutation-plan`
 
@@ -847,10 +949,36 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `AreaNo` (`int`): TwinCAT data area number.
   - `ByteOffset` (`int`): Offset inside the area.
   - `ByteSize` (`int`): Byte width of the pointed segment.
+  - `ArrayIndex` (`int?`): Optional array index. When set, writes a Data child with ArrayIndex under the named DataPointerValues entry. Example: `0`.
 - 输出 Outputs:
   - (none)
 - 验证 Verification:
   - Re-open the .tsproj and confirm the named DataPointerValues/Value entry matches the requested offsets.
+
+### `tsproj.ensure-ethercat-box`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureEthercatBox`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Creates or updates an EtherCAT Box under a Device or parent Box, preserving nested topology.
+- 前置条件 Preconditions:
+  - The target Device must already exist.
+  - ParentBoxId, when set, must identify exactly one existing Box under that Device.
+- 输入 Inputs:
+  - `DeviceId` (`int`): Owning Device Id.
+  - `ParentBoxId` (`int?`): Optional parent Box Id for nested terminals or safety modules.
+  - `BoxId` (`int`): Box Id attribute.
+  - `Name` (`string`): Box display name.
+  - `BoxType` (`int`): TwinCAT BoxType value.
+  - `Disabled` (`bool?`): Optional Disabled attribute. false removes the attribute.
+  - `BoxFlags` (`string`): Optional BoxFlags value.
+  - `ImageId` (`int?`): Optional ImageId child value.
+  - `EtherCatAttributes` (`IReadOnlyList<TsprojXmlAttribute>`): Structured attributes for the Box/EtherCAT child.
+  - `EtherCatChildValues` (`IReadOnlyList<TsprojXmlChildValue>`): Simple child values for Box/EtherCAT, such as SyncMan or Fmmu only when their meaning is known.
+  - `ExtraFragments` (`IReadOnlyList<IoRawXmlFragment>`): Known-good extra Box child fragments with required source/meaning/evidence metadata.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify the Box appears under the expected Device/parent Box with correct Id, Name, ImageId, and EtherCAT metadata.
 
 ### `tsproj.ensure-init-symbol`
 
@@ -888,6 +1016,114 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 验证 Verification:
   - Re-open the .tsproj and confirm the named InterfacePointerValues/Value entry contains the OTCID.
 
+### `tsproj.ensure-io-box-image`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureIoBoxImage`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Creates or updates a Box ImageId and optional image metadata without replacing the Box.
+- 前置条件 Preconditions:
+  - The target Device and Box must already exist.
+- 输入 Inputs:
+  - `DeviceId` (`int`): Owning Device Id.
+  - `BoxId` (`int`): Target Box Id.
+  - `ImageId` (`int`): ImageId child value.
+  - `MetadataValues` (`IReadOnlyList<TsprojXmlChildValue>`): Optional simple metadata child values written under the Box.
+  - `MetadataFragments` (`IReadOnlyList<IoRawXmlFragment>`): Known-good image metadata fragments with required source/meaning/evidence metadata.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify the target Box keeps its topology while ImageId and requested image metadata are present.
+
+### `tsproj.ensure-io-device`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureIoDevice`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Creates or updates a Project/Io Device with structured TwinCAT IO identity fields.
+- 前置条件 Preconditions:
+  - Project/Io will be created if missing.
+  - Raw AddressInfo or extra fragments require source, parent path, field meaning, and verification evidence.
+- 输入 Inputs:
+  - `DeviceId` (`int`): Device Id attribute under Project/Io.
+  - `Name` (`string`): Device display name.
+  - `DevType` (`int`): TwinCAT Device DevType, for example 109 for RT-Ethernet Adapter or 111 for EtherCAT.
+  - `Disabled` (`bool?`): Optional Disabled attribute. false removes the attribute.
+  - `DevFlags` (`string`): Optional DevFlags value such as #x0003.
+  - `AmsPort` (`int?`): Optional device AMS port.
+  - `AmsNetId` (`string`): Optional device AMS NetId.
+  - `RemoteName` (`string`): Optional RemoteName attribute.
+  - `InfoImageId` (`int?`): Optional InfoImageId attribute.
+  - `AddressInfo` (`IoAddressInfo`): Structured TcCom/Pnp AddressInfo or documented raw AddressInfo XML.
+  - `Images` (`IReadOnlyList<IoImageDefinition>`): Optional direct Image children for process images.
+  - `ExtraFragments` (`IReadOnlyList<IoRawXmlFragment>`): Known-good extra Device child fragments with required source/meaning/evidence metadata.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify the Device Id, Name, DevType, AMS fields, AddressInfo, and direct Image children match the requested topology.
+
+### `tsproj.ensure-io-mapping-link`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureIoMappingLink`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Creates or updates a mapping OwnerA/OwnerB/Link with optional IO/TcCOM mapping attributes.
+- 前置条件 Preconditions:
+  - Owner names and Var paths must match the IO/PDO or TcCOM paths visible to XAE.
+  - Use structured LinkAttributes for Size, RestoreInfo, GrpA, TypeA, InOutA, GuidA, and similar known mapping metadata.
+- 输入 Inputs:
+  - `OwnerAName` (`string`): OwnerA Name attribute, for example TIID^Device 3 (EtherCAT).
+  - `OwnerBName` (`string`): OwnerB Name attribute, for example TIXC^MotionControl^BeckhoffDriver1.
+  - `VarA` (`string`): Link VarA attribute.
+  - `VarB` (`string`): Link VarB attribute.
+  - `OwnerAPrefix` (`string`): Optional OwnerA Prefix attribute.
+  - `OwnerAType` (`string`): Optional OwnerA Type attribute.
+  - `OwnerBPrefix` (`string`): Optional OwnerB Prefix attribute.
+  - `OwnerBType` (`string`): Optional OwnerB Type attribute.
+  - `LinkAttributes` (`IReadOnlyList<TsprojXmlAttribute>`): Optional additional Link attributes such as Size, RestoreInfo, GrpA, TypeA, InOutA, or GuidA.
+  - `ReplaceExistingAttributes` (`bool`): Whether LinkAttributes overwrite existing attribute values. Example: `true`.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify Mappings contains the exact OwnerA/OwnerB/Link path and any requested Size/RestoreInfo/GuidA metadata.
+
+### `tsproj.ensure-io-pdo`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureIoPdo`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Creates or updates a Box/EtherCAT Pdo and its Entry children using structured PDO fields.
+- 前置条件 Preconditions:
+  - The target Device and Box must already exist.
+  - Use ExtraFragments only for known-good PDO child XML with documented field meanings and evidence.
+- 输入 Inputs:
+  - `DeviceId` (`int`): Owning Device Id.
+  - `BoxId` (`int`): Owning Box Id under the Device.
+  - `Name` (`string`): Pdo Name attribute.
+  - `Index` (`string`): Pdo Index attribute, for example #x1a00 or #x1600.
+  - `InOut` (`string`): Optional InOut attribute.
+  - `Flags` (`string`): Optional Flags attribute.
+  - `SyncMan` (`int?`): Optional SyncMan attribute.
+  - `Entries` (`IReadOnlyList<IoPdoEntry>`): PDO Entry definitions containing name/index/sub/type and optional attributes/child values.
+  - `ReplaceExistingEntries` (`bool`): Whether existing Entry children are replaced before Entries are applied. Example: `true`.
+  - `ExtraFragments` (`IReadOnlyList<IoRawXmlFragment>`): Known-good extra Pdo child fragments with required source/meaning/evidence metadata.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify the target Box/EtherCAT/Pdo entries have the expected Index/Sub/Type/BitLen fields and mapping-visible names.
+
+### `tsproj.ensure-io-section`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureIoSection`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Ensures the root Project/Io section exists without replacing other Project children.
+- 前置条件 Preconditions:
+  - A root-level Project node must exist in the .tsproj.
+- 输入 Inputs:
+  - (none)
+- 输出 Outputs:
+  - `created` (`bool`): Whether Project/Io was created by this call.
+  - `deviceCount` (`int`): Number of direct Device children currently under Project/Io.
+  - `projectPath` (`string`): Mutated .tsproj path.
+- 验证 Verification:
+  - Re-open the .tsproj and verify Project/Io exists and existing Project/System/Plc/Cpp children remain intact.
+
 ### `tsproj.ensure-io-task-image`
 
 - 方法 Method: `TwinCatTsprojMutationService.EnsureIoTaskImage`
@@ -911,6 +1147,23 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-open the .tsproj and confirm Task Image plus instance InterfacePointerValues/IoTaskImage were updated.
+
+### `tsproj.ensure-mapping-info`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureMappingInfo`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Creates or updates a root Mappings/MappingInfo entry.
+- 前置条件 Preconditions:
+  - Root Mappings will be created if missing.
+  - Identifier and Id must be known from TwinCAT-generated or documented topology.
+- 输入 Inputs:
+  - `Identifier` (`string`): MappingInfo Identifier attribute.
+  - `Id` (`string`): MappingInfo Id/ObjectId attribute, for example #x02030010.
+  - `Attributes` (`IReadOnlyList<TsprojXmlAttribute>`): Optional additional MappingInfo attributes; Identifier and Id are owned by dedicated fields.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify root Mappings contains the requested MappingInfo Identifier/Id pair exactly once.
 
 ### `tsproj.ensure-mapping-link`
 
@@ -982,6 +1235,23 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-open the .tsproj and verify the PLC instance Vars group attributes and Var entries.
+
+### `tsproj.ensure-system-settings`
+
+- 方法 Method: `TwinCatTsprojMutationService.EnsureSystemSettings`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Ensures typed System/Settings values such as Cpu and IoIdleTask without replacing the whole Settings section.
+- 前置条件 Preconditions:
+  - The target .tsproj must already exist on disk.
+  - At least one typed setting must be provided.
+- 输入 Inputs:
+  - `CpuId` (`int?`): Optional System/Settings/Cpu CpuId attribute.
+  - `IoIdleTaskPriority` (`int?`): Optional System/Settings/IoIdleTask Priority attribute.
+  - `InsertBeforeTasks` (`bool`): Whether to insert Settings before System/Tasks when Settings is created and Tasks exists. Example: `true`.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify System/Settings contains the requested Cpu and IoIdleTask attributes while existing Tasks remain intact.
 
 ### `tsproj.ensure-task`
 
@@ -1091,6 +1361,29 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - Re-open the .tsproj and compare the target container before/after the merge.
   - For engineering behavior, follow with XAE reopen/build/activation or a dated evidence note explaining why runtime proof is not available.
 
+### `tsproj.refresh-cpp-instance-tmc-desc`
+
+- 方法 Method: `TwinCatTsprojMutationService.RefreshCppInstanceTmcDesc`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Refreshes existing C++ instance TmcDesc metadata from the project .tmc while preserving instance context and value sections.
+- 前置条件 Preconditions:
+  - The target C++ project instances must already exist in the .tsproj.
+  - The project .tmc must contain the requested module class names.
+- 输入 Inputs:
+  - `CppProjectName` (`string`): Owning C++ project name in the .tsproj.
+  - `ProjectTmcPath` (`string`): Absolute path to the project .tmc file.
+  - `Instances` (`IReadOnlyList<CppInstanceTmcDescRefreshItem>`): InstanceName to ModuleClassName mapping entries.
+  - `PreserveValueSections` (`bool`): Preserve existing ParameterValues, InterfacePointerValues, and DataPointerValues. Example: `true`.
+  - `PreserveContextValues` (`bool`): Preserve existing TmcDesc Contexts and task ManualConfig. Example: `true`.
+  - `ImportDataTypesFromTmc` (`bool`): Replace root .tsproj DataTypes from the project .tmc DataTypes. Example: `true`.
+  - `FailIfMissingModule` (`bool`): Fail when an instance mapping references a missing TMC module. Example: `true`.
+- 输出 Outputs:
+  - `projectPath` (`string`): Mutated .tsproj path.
+  - `refreshedCount` (`int`): Number of instance TmcDesc sections refreshed.
+  - `errorsJson` (`json`): Detailed mismatch list when refresh fails.
+- 验证 Verification:
+  - Re-open the .tsproj and confirm instance DataAreas/Parameters/Pointers match the project .tmc while prior values and task bindings remain.
+
 ### `tsproj.replace-data-types-section`
 
 - 方法 Method: `TwinCatTsprojMutationService.ReplaceDataTypesSection`
@@ -1143,7 +1436,7 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 分类 Category: `tsproj`
 - 功能摘要 Summary: Replaces System/Settings with a caller-provided Settings fragment while preserving other System children.
 - 前置条件 Preconditions:
-  - A System node must exist in the .tsproj.
+  - The target .tsproj must already exist on disk.
   - The fragment must be a valid Settings element.
 - 输入 Inputs:
   - `SettingsXml` (`string`): Settings XML fragment to write, rooted at <Settings>.
@@ -1152,6 +1445,24 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-open the .tsproj and verify System/Settings content and insertion position.
+
+### `tsproj.set-cpp-instance-metadata`
+
+- 方法 Method: `TwinCatTsprojMutationService.SetCppInstanceMetadata`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Updates C++ Instance metadata attributes such as Disabled, KeepUnrestoredLinks, ClassFactoryId, or ObjectId without replacing TmcDesc.
+- 前置条件 Preconditions:
+  - The target C++ Instance must already exist in the .tsproj.
+- 输入 Inputs:
+  - `InstanceName` (`string`): C++ instance display name.
+  - `Disabled` (`bool?`): Optional Disabled attribute value. false removes the Disabled attribute. Example: `true`.
+  - `KeepUnrestoredLinks` (`string`): Optional KeepUnrestoredLinks attribute value.
+  - `ClassFactoryId` (`string`): Optional ClassFactoryId attribute value.
+  - `ObjectId` (`string`): Optional instance Id/ObjectId attribute value, for example #x01010010.
+- 输出 Outputs:
+  - (none)
+- 验证 Verification:
+  - Re-open the .tsproj and verify the C++ Instance metadata attributes were applied while TmcDesc remains intact.
 
 ### `tsproj.set-plc-instance-metadata`
 
@@ -1196,17 +1507,17 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 
 - 方法 Method: `TwinCatTsprojMutationService.SetTaskAffinity`
 - 分类 Category: `tsproj`
-- 功能摘要 Summary: Sets Task Affinity and AdtTasks attributes for scheduler placement-sensitive workloads.
+- 功能摘要 Summary: Sets Task Affinity and/or AdtTasks attributes for scheduler placement-sensitive workloads.
 - 前置条件 Preconditions:
   - The target Task node must already exist in the .tsproj.
 - 输入 Inputs:
   - `TaskName` (`string`): Task node name.
-  - `Affinity` (`string`): TwinCAT affinity mask or list, for example 1 or 0,2.
+  - `Affinity` (`string`): Optional TwinCAT affinity mask or list, for example 1 or 0,2. Omit to update only AdtTasks.
   - `EnableAdtTasks` (`bool`): Whether to force AdtTasks=true on the task. Example: `true`.
 - 输出 Outputs:
   - (none)
 - 验证 Verification:
-  - Re-open the .tsproj and confirm the Task node includes Affinity and AdtTasks attributes.
+  - Re-open the .tsproj and confirm the Task node includes the requested Affinity and/or AdtTasks attributes.
 
 ### `tsproj.upsert-element`
 

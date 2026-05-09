@@ -142,6 +142,9 @@ internal static partial class StepInvokeCommand
             "engineering.ensure-solution-project-dependency" => ExecuteEngineeringEnsureSolutionProjectDependency(options),
             "engineering.create-plc-project" => ExecuteEngineeringCreatePlcProject(options),
             "engineering.create-module" => ExecuteEngineeringCreateModule(options),
+            "engineering.start-tmc-code-generator" => ExecuteEngineeringStartTmcCodeGenerator(options),
+            "engineering.verify-tmc-data-areas" => ExecuteEngineeringVerifyTmcDataAreas(options),
+            "engineering.apply-tmc-module-model" => ExecuteEngineeringApplyTmcModuleModel(options),
             "engineering.publish-modules" => ExecuteEngineeringPublishModules(options),
             "engineering.add-module-instance" => ExecuteEngineeringAddModuleInstance(options),
             "engineering.ensure-task" => ExecuteEngineeringEnsureTask(options),
@@ -172,6 +175,7 @@ internal static partial class StepInvokeCommand
             "tsproj.set-task-affinity" => ExecuteTsprojSetTaskAffinity(options),
             "tsproj.set-plc-project-properties" => ExecuteTsprojSetPlcProjectProperties(options),
             "tsproj.set-plc-instance-metadata" => ExecuteTsprojSetPlcInstanceMetadata(options),
+            "tsproj.set-cpp-instance-metadata" => ExecuteTsprojSetCppInstanceMetadata(options),
             "tsproj.clear-plc-instance-vars" => ExecuteTsprojClearPlcInstanceVars(options),
             "tsproj.ensure-plc-instance-vars-group" => ExecuteTsprojEnsurePlcInstanceVarsGroup(options),
             "tsproj.clear-plc-init-symbols" => ExecuteTsprojClearPlcInitSymbols(options),
@@ -180,13 +184,23 @@ internal static partial class StepInvokeCommand
             "tsproj.clear-unrestored-var-links" => ExecuteTsprojClearUnrestoredVarLinks(options),
             "tsproj.replace-mappings-section" => ExecuteTsprojReplaceMappingsSection(options),
             "tsproj.replace-project-io-section" => ExecuteTsprojReplaceProjectIoSection(options),
+            "tsproj.ensure-io-section" => ExecuteTsprojEnsureIoSection(options),
+            "tsproj.ensure-io-device" => ExecuteTsprojEnsureIoDevice(options),
+            "tsproj.ensure-ethercat-box" => ExecuteTsprojEnsureEthercatBox(options),
+            "tsproj.ensure-io-pdo" => ExecuteTsprojEnsureIoPdo(options),
+            "tsproj.ensure-io-box-image" => ExecuteTsprojEnsureIoBoxImage(options),
+            "tsproj.ensure-mapping-info" => ExecuteTsprojEnsureMappingInfo(options),
+            "tsproj.ensure-io-mapping-link" => ExecuteTsprojEnsureIoMappingLink(options),
+            "tsproj.apply-io-topology-plan" => ExecuteTsprojApplyIoTopologyPlan(options),
             "tsproj.replace-data-types-section" => ExecuteTsprojReplaceDataTypesSection(options),
             "tsproj.replace-system-settings-section" => ExecuteTsprojReplaceSystemSettingsSection(options),
+            "tsproj.ensure-system-settings" => ExecuteTsprojEnsureSystemSettings(options),
             "tsproj.clear-instance-parameter-values" => ExecuteTsprojClearInstanceParameterValues(options),
             "tsproj.clear-instance-data-pointer-values" => ExecuteTsprojClearInstanceDataPointerValues(options),
             "tsproj.apply-instance-parameter-plan" => ExecuteTsprojApplyInstanceParameterPlan(options),
             "tsproj.apply-instance-interface-pointer-plan" => ExecuteTsprojApplyInstanceInterfacePointerPlan(options),
             "tsproj.apply-instance-data-pointer-plan" => ExecuteTsprojApplyInstanceDataPointerPlan(options),
+            "tsproj.refresh-cpp-instance-tmc-desc" => ExecuteTsprojRefreshCppInstanceTmcDesc(options),
             "tsproj.ensure-io-task-image" => ExecuteTsprojEnsureIoTaskImage(options),
             "tsproj.ensure-task-pou-oid" => ExecuteTsprojEnsureTaskPouOid(options),
             "tsproj.ensure-init-symbol" => ExecuteTsprojEnsureInitSymbol(options),
@@ -496,6 +510,40 @@ internal static partial class StepInvokeCommand
         return request;
     }
 
+    private static bool HasJsonPayload(IReadOnlyDictionary<string, string> options) =>
+        !string.IsNullOrWhiteSpace(CliOptionParser.GetOption(options, "json-file")) ||
+        !string.IsNullOrWhiteSpace(CliOptionParser.GetOption(options, "json"));
+
+    private static IReadOnlyList<IoPdoEntry>? ParseInlineIoPdoEntries(IReadOnlyDictionary<string, string> options)
+    {
+        string? raw = CliOptionParser.GetOption(options, "entries");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        List<IoPdoEntry> entries = [];
+        foreach (string entry in raw.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string[] parts = entry.Split(':', StringSplitOptions.None);
+            if (parts.Length < 1 || parts.Length > 4)
+            {
+                throw new InvalidOperationException("--entries must use 'Name[:Index[:Sub[:Type]]]' entries separated by ';'.");
+            }
+
+            entries.Add(new IoPdoEntry(
+                EmptyToNull(parts.ElementAtOrDefault(0)),
+                EmptyToNull(parts.ElementAtOrDefault(1)),
+                EmptyToNull(parts.ElementAtOrDefault(2)),
+                EmptyToNull(parts.ElementAtOrDefault(3))));
+        }
+
+        return entries;
+    }
+
+    private static string? EmptyToNull(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
+
     private static IReadOnlyList<AdsReadSymbolRequest> ParseAdsReadSymbols(IReadOnlyDictionary<string, string> options)
     {
         string? inlineSymbols = CliOptionParser.GetOption(options, "symbols");
@@ -648,13 +696,37 @@ internal static partial class StepInvokeCommand
                 ModuleName = CliOptionParser.GetOption(options, "module-name"),
                 WizardId = CliOptionParser.GetOption(options, "wizard-id") ?? "TcModuleClassWizard",
             },
+            "engineering.start-tmc-code-generator" => new
+            {
+                SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                CppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                PostStartDelayMs = CliOptionParser.GetOption(options, "post-start-delay-ms"),
+                WaitForUpdatedTmcTimeoutMs = CliOptionParser.GetOption(options, "wait-for-updated-tmc-timeout-ms")
+            },
+            "engineering.verify-tmc-data-areas" => new
+            {
+                ProjectTmcPath = CliOptionParser.GetOption(options, "project-tmc-path", "tmc-path"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "engineering.apply-tmc-module-model" => new
+            {
+                ProjectTmcPath = CliOptionParser.GetOption(options, "project-tmc-path", "tmc-path"),
+                ProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                GeneratedServicesHeaderPath = CliOptionParser.GetOption(options, "generated-services-header-path", "services-header-path"),
+                GeneratedHeaderPaths = CliOptionParser.GetOption(options, "generated-header-paths", "generated-header-path"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
             "engineering.publish-modules" => new
             {
                 SolutionPath = CliOptionParser.GetOption(options, "solution-path"),
                 ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
                 CppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
                 PostPublishDelayMs = CliOptionParser.GetOption(options, "post-publish-delay-ms"),
-                WaitForUpdatedTmcTimeoutMs = CliOptionParser.GetOption(options, "wait-for-updated-tmc-timeout-ms")
+                WaitForUpdatedTmcTimeoutMs = CliOptionParser.GetOption(options, "wait-for-updated-tmc-timeout-ms"),
+                RunTmcCodeGeneratorFirst = CliOptionParser.GetOption(options, "run-tmc-code-generator-first")
             },
             "engineering.add-module-instance" => new
             {
@@ -843,6 +915,75 @@ internal static partial class StepInvokeCommand
                 XmlFile = CliOptionParser.GetOption(options, "xml-file"),
                 InlineXml = CliOptionParser.GetOption(options, "io-xml", "xml")
             },
+            "tsproj.ensure-io-section" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path")
+            },
+            "tsproj.ensure-io-device" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                DeviceId = CliOptionParser.GetOption(options, "device-id"),
+                Name = CliOptionParser.GetOption(options, "name"),
+                DevType = CliOptionParser.GetOption(options, "dev-type"),
+                Disabled = CliOptionParser.GetOption(options, "disabled"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.ensure-ethercat-box" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                DeviceId = CliOptionParser.GetOption(options, "device-id"),
+                ParentBoxId = CliOptionParser.GetOption(options, "parent-box-id"),
+                BoxId = CliOptionParser.GetOption(options, "box-id"),
+                Name = CliOptionParser.GetOption(options, "name"),
+                BoxType = CliOptionParser.GetOption(options, "box-type"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.ensure-io-pdo" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                DeviceId = CliOptionParser.GetOption(options, "device-id"),
+                BoxId = CliOptionParser.GetOption(options, "box-id"),
+                Name = CliOptionParser.GetOption(options, "name"),
+                Index = CliOptionParser.GetOption(options, "index"),
+                Entries = CliOptionParser.GetOption(options, "entries"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.ensure-io-box-image" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                DeviceId = CliOptionParser.GetOption(options, "device-id"),
+                BoxId = CliOptionParser.GetOption(options, "box-id"),
+                ImageId = CliOptionParser.GetOption(options, "image-id"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.ensure-mapping-info" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                Identifier = CliOptionParser.GetOption(options, "identifier"),
+                Id = CliOptionParser.GetOption(options, "id"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.ensure-io-mapping-link" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                OwnerAName = CliOptionParser.GetOption(options, "owner-a-name"),
+                OwnerBName = CliOptionParser.GetOption(options, "owner-b-name"),
+                VarA = CliOptionParser.GetOption(options, "var-a"),
+                VarB = CliOptionParser.GetOption(options, "var-b"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.apply-io-topology-plan" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
             "tsproj.replace-data-types-section" => new
             {
                 ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
@@ -857,6 +998,13 @@ internal static partial class StepInvokeCommand
                 InlineXml = CliOptionParser.GetOption(options, "settings-xml", "xml"),
                 InsertBeforeTasks = CliOptionParser.GetOption(options, "insert-before-tasks")
             },
+            "tsproj.ensure-system-settings" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                CpuId = CliOptionParser.GetOption(options, "cpu-id"),
+                IoIdleTaskPriority = CliOptionParser.GetOption(options, "io-idle-task-priority"),
+                InsertBeforeTasks = CliOptionParser.GetOption(options, "insert-before-tasks")
+            },
             "tsproj.clear-instance-parameter-values" => new
             {
                 ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
@@ -868,6 +1016,15 @@ internal static partial class StepInvokeCommand
                 ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
                 InstanceName = CliOptionParser.GetOption(options, "instance-name"),
                 RemoveContainerWhenEmpty = CliOptionParser.GetOption(options, "remove-container-when-empty")
+            },
+            "tsproj.set-cpp-instance-metadata" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                InstanceName = CliOptionParser.GetOption(options, "instance-name"),
+                Disabled = CliOptionParser.GetOption(options, "disabled"),
+                KeepUnrestoredLinks = CliOptionParser.GetOption(options, "keep-unrestored-links"),
+                ClassFactoryId = CliOptionParser.GetOption(options, "class-factory-id"),
+                ObjectId = CliOptionParser.GetOption(options, "object-id")
             },
             "tsproj.clear-unrestored-var-links" => new
             {
@@ -888,6 +1045,14 @@ internal static partial class StepInvokeCommand
             "tsproj.apply-instance-data-pointer-plan" => new
             {
                 ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                JsonFile = CliOptionParser.GetOption(options, "json-file"),
+                InlineJson = CliOptionParser.GetOption(options, "json")
+            },
+            "tsproj.refresh-cpp-instance-tmc-desc" => new
+            {
+                ProjectPath = CliOptionParser.GetOption(options, "project-path", "tsproj-path"),
+                CppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name"),
+                ProjectTmcPath = CliOptionParser.GetOption(options, "project-tmc-path", "tmc-path"),
                 JsonFile = CliOptionParser.GetOption(options, "json-file"),
                 InlineJson = CliOptionParser.GetOption(options, "json")
             },

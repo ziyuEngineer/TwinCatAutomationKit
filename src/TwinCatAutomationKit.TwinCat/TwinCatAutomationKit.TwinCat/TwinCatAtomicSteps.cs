@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using TwinCatAutomationKit.Abstractions;
@@ -224,6 +225,80 @@ public static class TwinCatAtomicSteps
                             ["updated"] = result.Updated ? "true" : "false"
                         })
                     : StepExecutionOutcome.Failed("TwinCAT C++ module publish did not produce a readable project TMC.");
+            });
+
+    public static IAutomationStep StartTmcCodeGenerator(
+        string stepId,
+        TwinCatEngineeringService service,
+        StartTmcCodeGeneratorRequest request,
+        string sessionStateKey = TwinCatStateKeys.Session) =>
+        Create(
+            stepId,
+            "Start TMC Code Generator",
+            "engineering.start-tmc-code-generator",
+            context =>
+            {
+                TwinCatEngineeringSession session = context.State.GetRequired<TwinCatEngineeringSession>(sessionStateKey);
+                StartTmcCodeGeneratorResult result = service.StartTmcCodeGenerator(session, request);
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(
+                        "TwinCAT C++ TMC code generator completed.",
+                        new Dictionary<string, string?>
+                        {
+                            ["updatedTmcPath"] = result.UpdatedTmcPath,
+                            ["succeeded"] = result.Succeeded ? "true" : "false",
+                            ["updated"] = result.Updated ? "true" : "false"
+                        })
+                    : StepExecutionOutcome.Failed("TwinCAT C++ TMC code generator did not produce a readable project TMC.");
+            });
+
+    public static IAutomationStep VerifyTmcDataAreas(
+        string stepId,
+        TwinCatEngineeringService service,
+        VerifyTmcDataAreasRequest request) =>
+        Create(
+            stepId,
+            "Verify TMC Data Areas",
+            "engineering.verify-tmc-data-areas",
+            _ =>
+            {
+                VerifyTmcDataAreasResult result = service.VerifyTmcDataAreas(request);
+                Dictionary<string, string?> outputs = new()
+                {
+                    ["projectTmcPath"] = result.ProjectTmcPath,
+                    ["expectedModuleCount"] = result.ExpectedModuleCount.ToString(CultureInfo.InvariantCulture),
+                    ["matchedModuleCount"] = result.MatchedModuleCount.ToString(CultureInfo.InvariantCulture),
+                    ["errorsJson"] = JsonSerializer.Serialize(result.Errors)
+                };
+
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(result.Summary, outputs)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary,
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+            });
+
+    public static IAutomationStep ApplyTmcModuleModel(
+        string stepId,
+        TwinCatEngineeringService service,
+        ApplyTmcModuleModelRequest request) =>
+        Create(
+            stepId,
+            "Apply TMC Module Model",
+            "engineering.apply-tmc-module-model",
+            _ =>
+            {
+                ApplyTmcModuleModelResult result = service.ApplyTmcModuleModel(request);
+                return StepExecutionOutcome.Success(
+                    result.Summary,
+                    new Dictionary<string, string?>
+                    {
+                        ["projectTmcPath"] = result.ProjectTmcPath,
+                        ["moduleCount"] = result.ModuleCount.ToString(CultureInfo.InvariantCulture)
+                    },
+                    [new EvidenceArtifact("project-tmc", result.ProjectTmcPath, "tmc")]);
             });
 
     public static IAutomationStep AddModuleInstance(
@@ -806,6 +881,137 @@ public static class TwinCatAtomicSteps
                 return StepExecutionOutcome.Indirect("Project Io section replaced in tsproj.");
             });
 
+    public static IAutomationStep EnsureIoSectionInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureIoSectionRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure IO Section In Tsproj",
+            "tsproj.ensure-io-section",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                EnsureIoSectionResult result = service.EnsureIoSection(tsprojPath, request);
+                return StepExecutionOutcome.Indirect(
+                    result.Created
+                        ? "Project Io section created in tsproj."
+                        : "Project Io section already existed in tsproj.");
+            });
+
+    public static IAutomationStep EnsureIoDeviceInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureIoDeviceRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure IO Device In Tsproj",
+            "tsproj.ensure-io-device",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureIoDevice(tsprojPath, request);
+                return StepExecutionOutcome.Indirect($"IO Device {request.DeviceId} updated in tsproj.");
+            });
+
+    public static IAutomationStep EnsureEthercatBoxInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureEthercatBoxRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure EtherCAT Box In Tsproj",
+            "tsproj.ensure-ethercat-box",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureEthercatBox(tsprojPath, request);
+                return StepExecutionOutcome.Indirect($"EtherCAT Box {request.BoxId} updated in tsproj.");
+            });
+
+    public static IAutomationStep EnsureIoPdoInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureIoPdoRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure IO PDO In Tsproj",
+            "tsproj.ensure-io-pdo",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureIoPdo(tsprojPath, request);
+                return StepExecutionOutcome.Indirect($"IO PDO {request.Name} updated in tsproj.");
+            });
+
+    public static IAutomationStep EnsureIoBoxImageInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureIoBoxImageRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure IO Box Image In Tsproj",
+            "tsproj.ensure-io-box-image",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureIoBoxImage(tsprojPath, request);
+                return StepExecutionOutcome.Indirect($"IO Box {request.BoxId} image metadata updated in tsproj.");
+            });
+
+    public static IAutomationStep EnsureMappingInfoInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureMappingInfoRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure MappingInfo In Tsproj",
+            "tsproj.ensure-mapping-info",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureMappingInfo(tsprojPath, request);
+                return StepExecutionOutcome.Indirect($"MappingInfo {request.Id} updated in tsproj.");
+            });
+
+    public static IAutomationStep EnsureIoMappingLinkInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureIoMappingLinkRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure IO Mapping Link In Tsproj",
+            "tsproj.ensure-io-mapping-link",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureIoMappingLink(tsprojPath, request);
+                return StepExecutionOutcome.Indirect("IO mapping link updated in tsproj.");
+            });
+
+    public static IAutomationStep ApplyIoTopologyPlanInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        ApplyIoTopologyPlanRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Apply IO Topology Plan In Tsproj",
+            "tsproj.apply-io-topology-plan",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                ApplyIoTopologyPlanResult result = service.ApplyIoTopologyPlan(tsprojPath, request);
+                return StepExecutionOutcome.Indirect(result.Summary);
+            });
+
     public static IAutomationStep ReplaceDataTypesSectionInTsproj(
         string stepId,
         TwinCatTsprojMutationService service,
@@ -836,6 +1042,22 @@ public static class TwinCatAtomicSteps
                 string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
                 service.ReplaceSystemSettingsSection(tsprojPath, request);
                 return StepExecutionOutcome.Indirect("System Settings section replaced in tsproj.");
+            });
+
+    public static IAutomationStep EnsureSystemSettingsInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        EnsureSystemSettingsRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Ensure System Settings In Tsproj",
+            "tsproj.ensure-system-settings",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.EnsureSystemSettings(tsprojPath, request);
+                return StepExecutionOutcome.Indirect("System Settings ensured in tsproj.");
             });
 
     public static IAutomationStep ApplyInstanceParameterPlanInTsproj(
@@ -916,6 +1138,49 @@ public static class TwinCatAtomicSteps
                 string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
                 service.ApplyInstanceDataPointerPlan(tsprojPath, request);
                 return StepExecutionOutcome.Indirect("Instance data pointer plan applied in tsproj.");
+            });
+
+    public static IAutomationStep RefreshCppInstanceTmcDescInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        RefreshCppInstanceTmcDescRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Refresh C++ Instance TmcDesc In Tsproj",
+            "tsproj.refresh-cpp-instance-tmc-desc",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                RefreshCppInstanceTmcDescResult result = service.RefreshCppInstanceTmcDesc(tsprojPath, request);
+                return result.Succeeded
+                    ? StepExecutionOutcome.Indirect(result.Summary)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary,
+                        new Dictionary<string, string?>
+                        {
+                            ["projectPath"] = result.ProjectPath,
+                            ["refreshedCount"] = result.RefreshedCount.ToString(CultureInfo.InvariantCulture),
+                            ["errorsJson"] = JsonSerializer.Serialize(result.Errors)
+                        },
+                        Array.Empty<EvidenceArtifact>());
+            });
+
+    public static IAutomationStep SetCppInstanceMetadataInTsproj(
+        string stepId,
+        TwinCatTsprojMutationService service,
+        SetCppInstanceMetadataRequest request,
+        string projectPathStateKey = TwinCatStateKeys.ProjectPath) =>
+        Create(
+            stepId,
+            "Set C++ Instance Metadata In Tsproj",
+            "tsproj.set-cpp-instance-metadata",
+            context =>
+            {
+                string tsprojPath = context.State.GetRequired<string>(projectPathStateKey);
+                service.SetCppInstanceMetadata(tsprojPath, request);
+                return StepExecutionOutcome.Indirect($"C++ instance metadata {request.InstanceName} updated in tsproj.");
             });
 
     public static IAutomationStep EnsureIoTaskImageInTsproj(

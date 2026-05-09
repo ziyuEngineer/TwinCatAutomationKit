@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
 using System.Security;
 using System.Security.Cryptography;
 using System.Text;
@@ -20,6 +21,37 @@ public sealed class TwinCatEngineeringService
     private const int RpcCallFailed = unchecked((int)0x800706BE);
     private const int RpcServerUnavailable = unchecked((int)0x800706BA);
     private const int ComServerExecFailure = unchecked((int)0x80080005);
+    private const string TcModuleClassSchema = "http://www.beckhoff.com/schemas/2009/05/TcModuleClass";
+    private const string TcCppLicenseId = "{304D006A-8299-4560-AB79-438534B50288}";
+
+    private static readonly IReadOnlyDictionary<string, TmcTypeInfo> BuiltInTmcTypes =
+        new Dictionary<string, TmcTypeInfo>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["BIT"] = new("BIT", "{18071995-0000-0000-0000-000000000010}", 1),
+            ["BOOL"] = new("BOOL", "{18071995-0000-0000-0000-000000000030}", 8),
+            ["SINT"] = new("SINT", "{18071995-0000-0000-0000-000000000003}", 8),
+            ["USINT"] = new("USINT", "{18071995-0000-0000-0000-000000000004}", 8),
+            ["BYTE"] = new("USINT", "{18071995-0000-0000-0000-000000000004}", 8),
+            ["INT"] = new("INT", "{18071995-0000-0000-0000-000000000006}", 16),
+            ["SHORT"] = new("INT", "{18071995-0000-0000-0000-000000000006}", 16),
+            ["UINT"] = new("UINT", "{18071995-0000-0000-0000-000000000005}", 16),
+            ["USHORT"] = new("UINT", "{18071995-0000-0000-0000-000000000005}", 16),
+            ["DINT"] = new("DINT", "{18071995-0000-0000-0000-000000000009}", 32),
+            ["LONG"] = new("DINT", "{18071995-0000-0000-0000-000000000009}", 32),
+            ["UDINT"] = new("UDINT", "{18071995-0000-0000-0000-000000000008}", 32),
+            ["ULONG"] = new("UDINT", "{18071995-0000-0000-0000-000000000008}", 32),
+            ["LREAL"] = new("LREAL", "{18071995-0000-0000-0000-00000000000E}", 64),
+            ["DOUBLE"] = new("LREAL", "{18071995-0000-0000-0000-00000000000E}", 64),
+            ["HRESULT"] = new("HRESULT", "{18071995-0000-0000-0000-000000000019}", 32),
+            ["OTCID"] = new("OTCID", "{18071995-0000-0000-0000-00000000000F}", 32),
+            ["TcTraceLevel"] = new("TcTraceLevel", "{8007AE3B-86BB-40F2-B385-EF87FCC239A4}", 32),
+            ["ITcUnknown"] = new("ITcUnknown", "{00000001-0000-0000-E000-000000000064}", 32),
+            ["ITComObject"] = new("ITComObject", "{00000012-0000-0000-E000-000000000064}", 32),
+            ["ITcCyclic"] = new("ITcCyclic", "{03000010-0000-0000-E000-000000000064}", 32),
+            ["ITcADI"] = new("ITcADI", "{03000012-0000-0000-E000-000000000064}", 32),
+            ["ITcWatchSource"] = new("ITcWatchSource", "{03000018-0000-0000-E000-000000000064}", 32),
+            ["ITcCyclicCaller"] = new("ITcCyclicCaller", "{0300001E-0000-0000-E000-000000000064}", 32),
+        };
 
     public TwinCatEngineeringSession LaunchVisualStudio(LaunchVisualStudioRequest request)
     {
@@ -802,6 +834,16 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(request);
 
+        if (request.RunTmcCodeGeneratorFirst)
+        {
+            StartTmcCodeGenerator(
+                session,
+                new StartTmcCodeGeneratorRequest(
+                    request.ProjectName,
+                    PostStartDelayMs: 0,
+                    WaitForUpdatedTmcTimeoutMs: request.WaitForUpdatedTmcTimeoutMs));
+        }
+
         ITcSysManager sysManager = RequireSysManager(session);
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
         string tmcPath = Path.Combine(paths.ProjectDirectory, request.ProjectName + ".tmc");
@@ -829,6 +871,195 @@ public sealed class TwinCatEngineeringService
         bool updated = WaitForTmcUpdate(tmcPath, previousWrite, previousHash, request.WaitForUpdatedTmcTimeoutMs);
         bool hasReadableTmc = TryReadTmc(tmcPath, out _);
         return new PublishModulesResult(hasReadableTmc, File.Exists(tmcPath) ? tmcPath : null, updated);
+    }
+
+    public StartTmcCodeGeneratorResult StartTmcCodeGenerator(TwinCatEngineeringSession session, StartTmcCodeGeneratorRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        ITcSysManager sysManager = RequireSysManager(session);
+        CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        string tmcPath = Path.Combine(paths.ProjectDirectory, request.ProjectName + ".tmc");
+        DateTime previousWrite = File.Exists(tmcPath) ? File.GetLastWriteTimeUtc(tmcPath) : DateTime.MinValue;
+        string? previousHash = File.Exists(tmcPath) ? ComputeFileSha256(tmcPath) : null;
+
+        ITcSmTreeItem? projectItem = null;
+        try
+        {
+            projectItem = GetTreeItem(sysManager, $"TIXC^{request.ProjectName}");
+            XDocument document = XDocument.Parse(RetryComCall(() => projectItem.ProduceXml(true)));
+            XElement method = document.Descendants()
+                .FirstOrDefault(element => element.Name.LocalName == "StartTmcCodeGenerator")
+                ?? throw new InvalidOperationException($"StartTmcCodeGenerator method is not exposed for C++ project '{request.ProjectName}'.");
+            SetOrCreateChildElementValue(method, "Active", "true");
+            RetryComCall(() => projectItem.ConsumeXml(document.ToString(SaveOptions.DisableFormatting)), 20, 500);
+            SaveAll(session);
+        }
+        finally
+        {
+            ReleaseComObjectIfNeeded(projectItem);
+        }
+
+        ThreadingThread.Sleep(Math.Max(0, request.PostStartDelayMs));
+        bool updated = WaitForTmcUpdate(tmcPath, previousWrite, previousHash, request.WaitForUpdatedTmcTimeoutMs);
+        bool hasReadableTmc = TryReadTmc(tmcPath, out _);
+        return new StartTmcCodeGeneratorResult(hasReadableTmc, File.Exists(tmcPath) ? tmcPath : null, updated);
+    }
+
+    public VerifyTmcDataAreasResult VerifyTmcDataAreas(VerifyTmcDataAreasRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        string tmcPath = Path.GetFullPath(request.ProjectTmcPath);
+        if (!File.Exists(tmcPath))
+        {
+            return new VerifyTmcDataAreasResult(
+                false,
+                tmcPath,
+                request.Modules.Count,
+                0,
+                "Project TMC file does not exist.",
+                [$"Project TMC file does not exist: {tmcPath}"]);
+        }
+
+        XDocument document = XDocument.Load(tmcPath);
+        Dictionary<string, TmcModuleShape> actualModules = ReadTmcModuleShapes(document);
+        List<string> errors = [];
+        int matchedModules = 0;
+
+        foreach (TmcModuleExpectation expectedModule in request.Modules)
+        {
+            if (string.IsNullOrWhiteSpace(expectedModule.ModuleName))
+            {
+                errors.Add("Expected module name must not be empty.");
+                continue;
+            }
+
+            if (!actualModules.TryGetValue(expectedModule.ModuleName, out TmcModuleShape? actualModule))
+            {
+                errors.Add($"Missing module '{expectedModule.ModuleName}'.");
+                continue;
+            }
+
+            matchedModules++;
+            ValidateExpectedDataAreas(expectedModule, actualModule, errors);
+        }
+
+        if (request.FailOnUnexpectedModule)
+        {
+            HashSet<string> expectedNames = request.Modules
+                .Select(module => module.ModuleName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (string actualName in actualModules.Keys.Where(name => !expectedNames.Contains(name)).OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                errors.Add($"Unexpected module '{actualName}'.");
+            }
+        }
+
+        bool succeeded = errors.Count == 0;
+        string summary = succeeded
+            ? $"TMC data areas matched {matchedModules}/{request.Modules.Count} expected module(s)."
+            : $"TMC data area verification failed with {errors.Count} error(s).";
+        return new VerifyTmcDataAreasResult(
+            succeeded,
+            tmcPath,
+            request.Modules.Count,
+            matchedModules,
+            summary,
+            errors);
+    }
+
+    public ApplyTmcModuleModelResult ApplyTmcModuleModel(ApplyTmcModuleModelRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequiredText(request.ProjectTmcPath, nameof(request.ProjectTmcPath));
+        ValidateRequiredText(request.ProjectName, nameof(request.ProjectName));
+        if (request.Modules is null || request.Modules.Count == 0)
+        {
+            throw new InvalidOperationException("ApplyTmcModuleModel requires at least one module.");
+        }
+
+        string tmcPath = Path.GetFullPath(request.ProjectTmcPath);
+        if (!File.Exists(tmcPath))
+        {
+            throw new FileNotFoundException("Project TMC file was not found.", tmcPath);
+        }
+
+        foreach (TmcModuleModel module in request.Modules)
+        {
+            ValidateRequiredText(module.Name, nameof(module.Name));
+            _ = NormalizeGuidText(module.Guid);
+        }
+
+        TmcGeneratedModel generatedModel = ReadGeneratedTmcModel(request.GeneratedServicesHeaderPath, request.GeneratedHeaderPaths);
+        XDocument document = XDocument.Load(tmcPath, LoadOptions.PreserveWhitespace);
+        XElement root = document.Root ?? throw new InvalidOperationException("Project TMC root element is missing.");
+
+        EnsureVendorElement(root);
+        if (request.ReplaceDataTypesFromGeneratedHeader && generatedModel.DataTypes.Count > 0)
+        {
+            ReplaceTopLevelSection(root, "DataTypes", new XElement("DataTypes", generatedModel.DataTypes.Select(item => new XElement(item))));
+        }
+
+        EnsureCppGroupElement(root);
+        XElement modulesElement = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Modules")
+            ?? new XElement("Modules");
+        if (modulesElement.Parent is null)
+        {
+            root.Add(modulesElement);
+        }
+
+        HashSet<string> requestedModuleNames = request.Modules
+            .Select(module => module.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (request.RemoveUnexpectedModules)
+        {
+            foreach (XElement module in modulesElement.Elements().Where(element =>
+                         element.Name.LocalName == "Module" &&
+                         !requestedModuleNames.Contains(GetChildElementValue(element, "Name") ?? element.Attribute("ClassName")?.Value ?? string.Empty)).ToList())
+            {
+                module.Remove();
+            }
+        }
+
+        foreach (TmcModuleModel module in request.Modules)
+        {
+            XElement moduleElement = CreateTmcModuleElement(module, request.ProjectName, generatedModel.TypeGuids);
+            XElement? existingModule = modulesElement.Elements()
+                .FirstOrDefault(element =>
+                    element.Name.LocalName == "Module" &&
+                    string.Equals(
+                        GetChildElementValue(element, "Name") ?? element.Attribute("ClassName")?.Value,
+                        module.Name,
+                        StringComparison.OrdinalIgnoreCase));
+
+            if (existingModule is null)
+            {
+                modulesElement.Add(moduleElement);
+            }
+            else
+            {
+                existingModule.ReplaceWith(moduleElement);
+            }
+        }
+
+        string libraryName = string.IsNullOrWhiteSpace(request.LibraryName) ? request.ProjectName : request.LibraryName;
+        ReplaceTopLevelSection(
+            root,
+            "Library",
+            new XElement(
+                "Library",
+                new XElement("Name", libraryName),
+                new XElement("Version", string.IsNullOrWhiteSpace(request.LibraryVersion) ? "0.0.0.1" : request.LibraryVersion)));
+
+        document.Save(tmcPath);
+        return new ApplyTmcModuleModelResult(
+            true,
+            tmcPath,
+            request.Modules.Count,
+            $"Applied {request.Modules.Count} TMC module model(s) to {tmcPath}.");
     }
 
     public TwinCatNodeInfo AddModuleInstance(TwinCatEngineeringSession session, AddModuleInstanceRequest request)
@@ -2005,7 +2236,11 @@ public sealed class TwinCatEngineeringService
                 group.SetAttributeValue("Condition", condition);
             }
 
-            document.Root?.Add(group);
+            InsertCppItemDefinitionGroup(document, group, ns);
+        }
+        else
+        {
+            EnsureCppItemDefinitionGroupBeforeProjectItems(document, group, ns);
         }
 
         XElement tool = group.Elements(ns + toolName).FirstOrDefault() ?? new XElement(ns + toolName);
@@ -2016,6 +2251,59 @@ public sealed class TwinCatEngineeringService
 
         SetOrCreateChildElementValue(tool, propertyName, value);
         document.Save(projectFilePath, SaveOptions.DisableFormatting);
+    }
+
+    private static void InsertCppItemDefinitionGroup(XDocument document, XElement group, XNamespace ns)
+    {
+        XElement? firstProjectItemsGroup = FindFirstCppProjectItemsGroup(document, ns);
+        if (firstProjectItemsGroup is not null)
+        {
+            firstProjectItemsGroup.AddBeforeSelf(group);
+            return;
+        }
+
+        XElement? targetsImport = FindCppTargetsImport(document, ns);
+        if (targetsImport is not null)
+        {
+            targetsImport.AddBeforeSelf(group);
+            return;
+        }
+
+        document.Root?.Add(group);
+    }
+
+    private static void EnsureCppItemDefinitionGroupBeforeProjectItems(XDocument document, XElement group, XNamespace ns)
+    {
+        XElement? firstProjectItemsGroup = FindFirstCppProjectItemsGroup(document, ns);
+        if (firstProjectItemsGroup is not null && group.IsAfter(firstProjectItemsGroup))
+        {
+            group.Remove();
+            firstProjectItemsGroup.AddBeforeSelf(group);
+            return;
+        }
+
+        XElement? targetsImport = FindCppTargetsImport(document, ns);
+        if (targetsImport is not null && group.IsAfter(targetsImport))
+        {
+            group.Remove();
+            targetsImport.AddBeforeSelf(group);
+        }
+    }
+
+    private static XElement? FindFirstCppProjectItemsGroup(XDocument document, XNamespace ns)
+    {
+        return document.Root?.Elements(ns + "ItemGroup")
+            .FirstOrDefault(itemGroup => !itemGroup.Elements(ns + "ProjectConfiguration").Any());
+    }
+
+    private static XElement? FindCppTargetsImport(XDocument document, XNamespace ns)
+    {
+        return document.Root?.Elements(ns + "Import")
+            .FirstOrDefault(element =>
+            {
+                string? project = (string?)element.Attribute("Project");
+                return project?.Contains("Microsoft.Cpp.targets", StringComparison.OrdinalIgnoreCase) == true;
+            });
     }
 
     private static void UpsertCppProjectItemMetadata(
@@ -2253,6 +2541,18 @@ public sealed class TwinCatEngineeringService
     private static (DTE Dte, bool AttachedToExisting) CreateOrAttachVisualStudioDte(Type dteType, string progId)
     {
         Exception? lastException = null;
+        try
+        {
+            if (TryGetActiveVisualStudioDte(progId) is DTE activeDte)
+            {
+                return (activeDte, true);
+            }
+        }
+        catch (COMException ex)
+        {
+            lastException = ex;
+        }
+
         for (int attempt = 0; attempt < 3; attempt++)
         {
             try
@@ -2268,7 +2568,7 @@ public sealed class TwinCatEngineeringService
 
         try
         {
-            if (TryGetActiveComObject(progId) is DTE activeDte)
+            if (TryGetActiveVisualStudioDte(progId) is DTE activeDte)
             {
                 return (activeDte, true);
             }
@@ -2313,8 +2613,94 @@ public sealed class TwinCatEngineeringService
         }
     }
 
+    private static DTE? TryGetActiveVisualStudioDte(string progId)
+    {
+        if (TryGetActiveComObject(progId) is DTE activeDte)
+        {
+            return activeDte;
+        }
+
+        foreach (object candidate in EnumerateRunningVisualStudioDteObjects(progId))
+        {
+            if (candidate is DTE dte)
+            {
+                return dte;
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<object> EnumerateRunningVisualStudioDteObjects(string progId)
+    {
+        List<object> result = [];
+        IRunningObjectTable? rot = null;
+        IEnumMoniker? enumMoniker = null;
+        IBindCtx? bindCtx = null;
+        try
+        {
+            GetRunningObjectTable(0, out rot);
+            rot.EnumRunning(out enumMoniker);
+            CreateBindCtx(0, out bindCtx);
+
+            IMoniker[] monikers = new IMoniker[1];
+            while (enumMoniker.Next(1, monikers, IntPtr.Zero) == 0)
+            {
+                string? displayName = null;
+                try
+                {
+                    monikers[0].GetDisplayName(bindCtx, null, out displayName);
+                }
+                catch (COMException)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(displayName) ||
+                    !displayName.Contains(progId, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    rot.GetObject(monikers[0], out object runningObject);
+                    result.Add(runningObject);
+                }
+                catch (COMException)
+                {
+                }
+            }
+        }
+        finally
+        {
+            if (bindCtx is not null)
+            {
+                Marshal.ReleaseComObject(bindCtx);
+            }
+
+            if (enumMoniker is not null)
+            {
+                Marshal.ReleaseComObject(enumMoniker);
+            }
+
+            if (rot is not null)
+            {
+                Marshal.ReleaseComObject(rot);
+            }
+        }
+
+        return result;
+    }
+
     [DllImport("oleaut32.dll", PreserveSig = false)]
     private static extern void GetActiveObject(ref Guid rclsid, IntPtr reserved, [MarshalAs(UnmanagedType.Interface)] out object activeObject);
+
+    [DllImport("ole32.dll", PreserveSig = false)]
+    private static extern void GetRunningObjectTable(int reserved, out IRunningObjectTable runningObjectTable);
+
+    [DllImport("ole32.dll", PreserveSig = false)]
+    private static extern void CreateBindCtx(int reserved, out IBindCtx bindCtx);
 
     [DllImport("ole32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
     private static extern void CLSIDFromProgIDEx(string progId, out Guid clsid);
@@ -2704,6 +3090,908 @@ public sealed class TwinCatEngineeringService
 
     private static string? GetChildElementValue(XElement parent, string childLocalName) =>
         parent.Elements().FirstOrDefault(element => element.Name.LocalName == childLocalName)?.Value;
+
+    private static void EnsureVendorElement(XElement root)
+    {
+        XElement vendor = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Vendor")
+            ?? new XElement("Vendor");
+        if (vendor.Parent is null)
+        {
+            root.AddFirst(vendor);
+        }
+
+        XElement name = vendor.Elements().FirstOrDefault(element => element.Name.LocalName == "Name")
+            ?? new XElement("Name");
+        if (name.Parent is null)
+        {
+            vendor.Add(name);
+        }
+
+        if (string.IsNullOrWhiteSpace(name.Value))
+        {
+            name.Value = "C++ Module Vendor";
+        }
+    }
+
+    private static void EnsureCppGroupElement(XElement root)
+    {
+        XElement groups = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Groups")
+            ?? new XElement("Groups");
+        if (groups.Parent is null)
+        {
+            XElement? modules = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Modules");
+            if (modules is not null)
+            {
+                modules.AddBeforeSelf(groups);
+            }
+            else
+            {
+                root.Add(groups);
+            }
+        }
+
+        XElement group = groups.Elements().FirstOrDefault(element =>
+            element.Name.LocalName == "Group" &&
+            string.Equals(GetChildElementValue(element, "Name"), "C++", StringComparison.OrdinalIgnoreCase))
+            ?? new XElement("Group");
+        if (group.Parent is null)
+        {
+            groups.Add(group);
+        }
+
+        group.SetAttributeValue("SortOrder", "701");
+        SetOrCreateChildElementValue(group, "Name", "C++");
+        SetOrCreateChildElementValue(group, "DisplayName", "C++ Modules");
+    }
+
+    private static void ReplaceTopLevelSection(XElement root, string localName, XElement replacement)
+    {
+        XElement normalized = CloneWithoutNamespace(replacement);
+        XElement? existing = root.Elements().FirstOrDefault(element => element.Name.LocalName == localName);
+        if (existing is null)
+        {
+            root.Add(normalized);
+        }
+        else
+        {
+            existing.ReplaceWith(normalized);
+        }
+    }
+
+    private static XElement CreateTmcModuleElement(
+        TmcModuleModel model,
+        string projectName,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        string moduleGuid = NormalizeGuidText(model.Guid);
+        XElement module = new(
+            "Module",
+            new XAttribute("ClassName", model.Name),
+            new XAttribute("GUID", moduleGuid),
+            new XAttribute("Group", "C++"),
+            new XElement("Name", model.Name),
+            new XElement("CLSID", new XAttribute("ClassFactory", projectName), moduleGuid),
+            new XElement(
+                "Licenses",
+                new XElement(
+                    "License",
+                    new XElement("LicenseId", TcCppLicenseId),
+                    new XElement("Comment", "TC3 C++"))),
+            new XElement("InitSequence", "PSO"),
+            new XElement("Contexts", new XElement("Context", new XElement("Id", "1"))),
+            CreateModeledInterfaces(model, typeGuids),
+            CreateModeledParameters(model.Parameters, typeGuids),
+            CreateModeledDataAreas(model.DataAreas, typeGuids),
+            CreateModeledPointers("InterfacePointers", "InterfacePointer", model.InterfacePointers, typeGuids),
+            CreateModeledPointers("DataPointers", "DataPointer", model.DataPointers, typeGuids),
+            new XElement("Deployment"));
+
+        if (model.EventClasses is not null && model.EventClasses.Count > 0)
+        {
+            XElement eventClasses = new("EventClasses");
+            foreach (TmcTypeReference eventClass in model.EventClasses)
+            {
+                TmcTypeInfo type = ResolveTmcType(eventClass.TypeName, eventClass.TypeGuid, typeGuids);
+                eventClasses.Add(
+                    new XElement(
+                        "EventClass",
+                        new XElement("Type", new XAttribute("GUID", type.Guid), type.Name)));
+            }
+
+            module.Add(eventClasses);
+        }
+
+        return module;
+    }
+
+    private static XElement CreateModeledInterfaces(TmcModuleModel model, IReadOnlyDictionary<string, string> typeGuids)
+    {
+        List<TmcInterfaceModel> interfaces =
+        [
+            new("ITComObject", DisableCodeGeneration: true),
+            new("ITcCyclic"),
+            new("ITcADI", DisableCodeGeneration: true),
+            new("ITcWatchSource", DisableCodeGeneration: true)
+        ];
+
+        if (model.Interfaces is not null)
+        {
+            foreach (TmcInterfaceModel item in model.Interfaces)
+            {
+                if (!interfaces.Any(existing => string.Equals(existing.TypeName, item.TypeName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    interfaces.Add(item);
+                }
+            }
+        }
+
+        XElement container = new("Interfaces");
+        foreach (TmcInterfaceModel item in interfaces)
+        {
+            TmcTypeInfo type = ResolveTmcType(item.TypeName, item.TypeGuid, typeGuids);
+            XElement element = new("Interface");
+            if (item.DisableCodeGeneration)
+            {
+                element.SetAttributeValue("DisableCodeGeneration", "true");
+            }
+
+            element.Add(new XElement("Type", new XAttribute("GUID", type.Guid), type.Name));
+            if (item.ContextId.HasValue)
+            {
+                element.Add(new XElement("ContextId", item.ContextId.Value.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            container.Add(element);
+        }
+
+        return container;
+    }
+
+    private static XElement CreateModeledParameters(
+        IReadOnlyList<TmcParameterModel>? parameters,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        XElement container = new("Parameters");
+        foreach (TmcParameterModel item in parameters ?? Array.Empty<TmcParameterModel>())
+        {
+            ValidateRequiredText(item.Name, nameof(item.Name));
+            ValidateRequiredText(item.PtcId, nameof(item.PtcId));
+            XElement parameter = new("Parameter");
+            if (item.HideParameter)
+            {
+                parameter.SetAttributeValue("HideParameter", "true");
+            }
+
+            if (item.CreateSymbol)
+            {
+                parameter.SetAttributeValue("CreateSymbol", "true");
+            }
+
+            if (item.ShowSubItems)
+            {
+                parameter.SetAttributeValue("ShowSubItems", "true");
+            }
+
+            parameter.Add(new XElement("Name", item.Name));
+            if (!string.IsNullOrWhiteSpace(item.Comment))
+            {
+                parameter.Add(new XElement("Comment", item.Comment));
+            }
+
+            if (item.BitSize.HasValue)
+            {
+                parameter.Add(new XElement("BitSize", item.BitSize.Value.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.TypeName))
+            {
+                TmcTypeInfo type = ResolveTmcType(item.TypeName, item.TypeGuid, typeGuids);
+                parameter.Add(new XElement("BaseType", new XAttribute("GUID", type.Guid), type.Name));
+            }
+
+            foreach (TmcSubItemModel subItem in item.SubItems ?? Array.Empty<TmcSubItemModel>())
+            {
+                parameter.Add(CreateModeledSubItem(subItem, typeGuids));
+            }
+
+            parameter.Add(new XElement("PTCID", item.PtcId));
+            parameter.Add(new XElement("ContextId", item.ContextId.ToString(CultureInfo.InvariantCulture)));
+            container.Add(parameter);
+        }
+
+        return container;
+    }
+
+    private static XElement CreateModeledDataAreas(
+        IReadOnlyList<TmcDataAreaModel>? dataAreas,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        XElement container = new("DataAreas");
+        foreach (TmcDataAreaModel item in dataAreas ?? Array.Empty<TmcDataAreaModel>())
+        {
+            ValidateRequiredText(item.Name, nameof(item.Name));
+            ValidateRequiredText(item.AreaType, nameof(item.AreaType));
+            XElement dataArea = new(
+                "DataArea",
+                new XElement("AreaNo", new XAttribute("AreaType", item.AreaType), item.AreaNo.ToString(CultureInfo.InvariantCulture)),
+                new XElement("Name", item.Name),
+                new XElement("ContextId", item.ContextId.ToString(CultureInfo.InvariantCulture)));
+
+            if (item.ByteSize.HasValue)
+            {
+                dataArea.Add(new XElement("ByteSize", item.ByteSize.Value.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            foreach (TmcSymbolModel symbol in item.Symbols ?? Array.Empty<TmcSymbolModel>())
+            {
+                dataArea.Add(CreateModeledSymbol(symbol, typeGuids));
+            }
+
+            container.Add(dataArea);
+        }
+
+        return container;
+    }
+
+    private static XElement CreateModeledSymbol(TmcSymbolModel symbol, IReadOnlyDictionary<string, string> typeGuids)
+    {
+        ValidateRequiredText(symbol.Name, nameof(symbol.Name));
+        ValidateRequiredText(symbol.TypeName, nameof(symbol.TypeName));
+        TmcTypeInfo type = ResolveTmcType(symbol.TypeName, symbol.TypeGuid, typeGuids);
+        XElement element = new("Symbol");
+        if (symbol.CreateSymbol)
+        {
+            element.SetAttributeValue("CreateSymbol", "true");
+        }
+
+        element.Add(new XElement("Name", symbol.Name));
+        if (symbol.BitSize.HasValue)
+        {
+            element.Add(new XElement("BitSize", symbol.BitSize.Value.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        element.Add(new XElement("BaseType", new XAttribute("GUID", type.Guid), type.Name));
+        if (symbol.ArrayElements.HasValue)
+        {
+            element.Add(CreateArrayInfo(symbol.ArrayElements.Value));
+        }
+
+        if (symbol.Properties is not null && symbol.Properties.Count > 0)
+        {
+            element.Add(CreateProperties(symbol.Properties));
+        }
+
+        if (symbol.BitOffset.HasValue)
+        {
+            element.Add(new XElement("BitOffs", symbol.BitOffset.Value.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return element;
+    }
+
+    private static XElement CreateModeledSubItem(TmcSubItemModel subItem, IReadOnlyDictionary<string, string> typeGuids)
+    {
+        ValidateRequiredText(subItem.Name, nameof(subItem.Name));
+        ValidateRequiredText(subItem.TypeName, nameof(subItem.TypeName));
+        TmcTypeInfo type = ResolveTmcType(subItem.TypeName, subItem.TypeGuid, typeGuids);
+        XElement element = new(
+            "SubItem",
+            new XElement("Name", subItem.Name),
+            new XElement("Type", new XAttribute("GUID", type.Guid), type.Name));
+
+        if (subItem.ArrayElements.HasValue)
+        {
+            element.Add(CreateArrayInfo(subItem.ArrayElements.Value));
+        }
+
+        if (subItem.BitSize.HasValue)
+        {
+            element.Add(new XElement("BitSize", subItem.BitSize.Value.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        if (subItem.Properties is not null && subItem.Properties.Count > 0)
+        {
+            element.Add(CreateProperties(subItem.Properties));
+        }
+
+        if (subItem.BitOffset.HasValue)
+        {
+            element.Add(new XElement("BitOffs", subItem.BitOffset.Value.ToString(CultureInfo.InvariantCulture)));
+        }
+
+        return element;
+    }
+
+    private static XElement CreateModeledPointers(
+        string containerName,
+        string pointerElementName,
+        IReadOnlyList<TmcPointerModel>? pointers,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        XElement container = new(containerName);
+        foreach (TmcPointerModel item in pointers ?? Array.Empty<TmcPointerModel>())
+        {
+            ValidateRequiredText(item.Name, nameof(item.Name));
+            ValidateRequiredText(item.PtcId, nameof(item.PtcId));
+            ValidateRequiredText(item.TypeName, nameof(item.TypeName));
+            TmcTypeInfo type = ResolveTmcType(item.TypeName, item.TypeGuid, typeGuids);
+            XElement pointer = new(
+                pointerElementName,
+                new XElement("PTCID", item.PtcId),
+                new XElement("Name", item.Name),
+                new XElement("Type", new XAttribute("GUID", type.Guid), type.Name));
+
+            if (item.ArrayElements.HasValue)
+            {
+                pointer.Add(CreateArrayInfo(item.ArrayElements.Value));
+            }
+
+            if (item.ContextId.HasValue)
+            {
+                pointer.Add(new XElement("ContextId", item.ContextId.Value.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            container.Add(pointer);
+        }
+
+        return container;
+    }
+
+    private static XElement CreateArrayInfo(int elements)
+    {
+        if (elements <= 0)
+        {
+            throw new InvalidOperationException("ArrayElements must be greater than zero.");
+        }
+
+        return new XElement(
+            "ArrayInfo",
+            new XElement("LBound", "0"),
+            new XElement("Elements", elements.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    private static XElement CreateProperties(IReadOnlyList<TmcPropertyModel> properties) =>
+        new(
+            "Properties",
+            properties.Select(property =>
+                new XElement(
+                    "Property",
+                    new XElement("Name", property.Name),
+                    new XElement("Value", property.Value))));
+
+    private static TmcGeneratedModel ReadGeneratedTmcModel(
+        string? servicesHeaderPath,
+        IReadOnlyList<string>? generatedHeaderPaths)
+    {
+        Dictionary<string, string> typeGuids = BuiltInTmcTypes.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Guid,
+            StringComparer.OrdinalIgnoreCase);
+        List<XElement> dataTypes = [];
+
+        string[] headerPaths = EnumerateGeneratedHeaderPaths(servicesHeaderPath, generatedHeaderPaths).ToArray();
+        if (headerPaths.Length == 0)
+        {
+            return new TmcGeneratedModel(typeGuids, dataTypes);
+        }
+
+        List<string> headerTexts = [];
+        foreach (string headerPath in headerPaths)
+        {
+            string resolvedPath = Path.GetFullPath(headerPath);
+            if (!File.Exists(resolvedPath))
+            {
+                throw new FileNotFoundException("Generated header was not found.", resolvedPath);
+            }
+
+            string headerText = File.ReadAllText(resolvedPath);
+            headerTexts.Add(headerText);
+            foreach ((string TypeName, string GuidText) item in ReadCppGuidConstants(headerText))
+            {
+                typeGuids[item.TypeName] = item.GuidText;
+            }
+
+            foreach ((string TypeName, string GuidText) item in ReadTcTypeGuardGuids(headerText))
+            {
+                typeGuids.TryAdd(item.TypeName, item.GuidText);
+            }
+        }
+
+        foreach (string headerText in headerTexts)
+        {
+            dataTypes.AddRange(ReadTmcDataTypesFromGeneratedHeader(headerText, typeGuids));
+        }
+
+        return new TmcGeneratedModel(typeGuids, dataTypes);
+    }
+
+    private static IEnumerable<string> EnumerateGeneratedHeaderPaths(
+        string? servicesHeaderPath,
+        IReadOnlyList<string>? generatedHeaderPaths)
+    {
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(servicesHeaderPath) && seen.Add(servicesHeaderPath))
+        {
+            yield return servicesHeaderPath;
+        }
+
+        foreach (string headerPath in generatedHeaderPaths ?? Array.Empty<string>())
+        {
+            if (!string.IsNullOrWhiteSpace(headerPath) && seen.Add(headerPath))
+            {
+                yield return headerPath;
+            }
+        }
+    }
+
+    private static IEnumerable<(string TypeName, string GuidText)> ReadCppGuidConstants(string headerText)
+    {
+        Regex guidPattern = new(
+            @"const\s+GUID\s+GUID_(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*\{0x(?<d1>[0-9A-Fa-f]{8}),\s*0x(?<d2>[0-9A-Fa-f]{4}),\s*0x(?<d3>[0-9A-Fa-f]{4}),\s*\{(?<bytes>[^}]*)\}\s*\}\s*;",
+            RegexOptions.Compiled);
+
+        foreach (Match match in guidPattern.Matches(headerText))
+        {
+            string[] bytes = match.Groups["bytes"].Value
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value)
+                .ToArray();
+            if (bytes.Length != 8)
+            {
+                continue;
+            }
+
+            string guidText = "{" +
+                match.Groups["d1"].Value + "-" +
+                match.Groups["d2"].Value + "-" +
+                match.Groups["d3"].Value + "-" +
+                bytes[0] + bytes[1] + "-" +
+                string.Concat(bytes.Skip(2)) +
+                "}";
+            if (TryNormalizeGuid(guidText, out string normalized))
+            {
+                yield return (match.Groups["name"].Value, normalized);
+            }
+        }
+    }
+
+    private static IEnumerable<(string TypeName, string GuidText)> ReadTcTypeGuardGuids(string headerText)
+    {
+        foreach (Match match in Regex.Matches(
+                     headerText,
+                     @"^[ \t]*#define[ \t]+_TC_TYPE_(?<guid>[0-9A-Fa-f_]{36})_INCLUDED_[^\r\n]*\r?\n[ \t]*struct\s+__declspec\(novtable\)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*:",
+                     RegexOptions.Multiline))
+        {
+            string guidText = "{" + match.Groups["guid"].Value.Replace('_', '-') + "}";
+            if (TryNormalizeGuid(guidText, out string normalized))
+            {
+                yield return (match.Groups["name"].Value, normalized);
+            }
+        }
+    }
+
+    private static IReadOnlyList<XElement> ReadTmcDataTypesFromGeneratedHeader(
+        string headerText,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        string? dataTypeRegion = ExtractAutoGeneratedRegion(headerText, "DataTypes");
+        if (string.IsNullOrWhiteSpace(dataTypeRegion))
+        {
+            return Array.Empty<XElement>();
+        }
+
+        Dictionary<string, ParsedCppType> parsedTypes = new(StringComparer.OrdinalIgnoreCase);
+        foreach (ParsedCppType parsed in ParseCppDataTypes(dataTypeRegion))
+        {
+            parsedTypes[parsed.Name] = parsed;
+        }
+
+        List<XElement> elements = [];
+        foreach (ParsedCppType parsed in parsedTypes.Values)
+        {
+            if (!typeGuids.TryGetValue(parsed.Name, out string? guid))
+            {
+                continue;
+            }
+
+            XElement dataType = new(
+                "DataType",
+                new XElement("Name", new XAttribute("GUID", guid), parsed.Name));
+
+            if (parsed.Kind == CppTypeKind.Enum || parsed.Kind == CppTypeKind.Alias)
+            {
+                TmcTypeInfo baseType = ResolveTmcType(parsed.BaseTypeName ?? "INT", null, typeGuids);
+                int aliasBitSize = checked((baseType.BitSize ?? 0) * (parsed.ArrayElements ?? 1));
+                dataType.Add(new XElement("BitSize", aliasBitSize.ToString(CultureInfo.InvariantCulture)));
+                dataType.Add(new XElement("BaseType", new XAttribute("GUID", baseType.Guid), baseType.Name));
+                if (parsed.ArrayElements.HasValue)
+                {
+                    dataType.Add(CreateArrayInfo(parsed.ArrayElements.Value));
+                }
+
+                foreach ((string Name, string Value) enumValue in parsed.EnumValues)
+                {
+                    dataType.Add(
+                        new XElement(
+                            "EnumInfo",
+                            new XElement("Text", new XCData(enumValue.Name)),
+                            new XElement("Enum", enumValue.Value)));
+                }
+            }
+            else
+            {
+                int bitOffset = 0;
+                foreach (ParsedCppField field in parsed.Fields)
+                {
+                    if (IsPaddingField(field))
+                    {
+                        bitOffset += ResolveCppFieldBitSize(field, parsedTypes, typeGuids);
+                        continue;
+                    }
+
+                    TmcTypeInfo fieldType = ResolveTmcType(field.TypeName, null, typeGuids);
+                    int bitSize = ResolveCppFieldBitSize(field, parsedTypes, typeGuids);
+                    XElement subItem = new(
+                        "SubItem",
+                        new XElement("Name", field.Name),
+                        new XElement("Type", new XAttribute("GUID", fieldType.Guid), fieldType.Name));
+                    if (field.ArrayElements.HasValue)
+                    {
+                        subItem.Add(CreateArrayInfo(field.ArrayElements.Value));
+                    }
+
+                    subItem.Add(new XElement("BitSize", bitSize.ToString(CultureInfo.InvariantCulture)));
+                    subItem.Add(new XElement("BitOffs", bitOffset.ToString(CultureInfo.InvariantCulture)));
+                    dataType.Add(subItem);
+                    bitOffset += bitSize;
+                }
+
+                dataType.AddFirst(new XElement("BitSize", bitOffset.ToString(CultureInfo.InvariantCulture)));
+            }
+
+            elements.Add(dataType);
+        }
+
+        return elements;
+    }
+
+    private static IEnumerable<ParsedCppType> ParseCppDataTypes(string dataTypeRegion)
+    {
+        foreach (Match match in Regex.Matches(
+                     dataTypeRegion,
+                     @"enum\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?<base>[A-Za-z_][A-Za-z0-9_]*)\s*\{(?<body>.*?)\};",
+                     RegexOptions.Singleline))
+        {
+            List<(string Name, string Value)> values = [];
+            foreach (string rawLine in match.Groups["body"].Value.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                string line = StripCppLineComment(rawLine).Trim().TrimEnd(',');
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                string[] parts = line.Split('=', 2, StringSplitOptions.TrimEntries);
+                if (parts.Length == 2)
+                {
+                    values.Add((parts[0], parts[1]));
+                }
+            }
+
+            yield return new ParsedCppType(match.Groups["name"].Value, CppTypeKind.Enum, match.Groups["base"].Value, [], values);
+        }
+
+        foreach (Match match in Regex.Matches(
+                     dataTypeRegion,
+                     @"typedef\s+(?<base>[A-Za-z_][A-Za-z0-9_]*)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[(?<count>\d+)\])?\s*;",
+                     RegexOptions.Singleline))
+        {
+            int? arrayElements = int.TryParse(match.Groups["count"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedCount)
+                ? parsedCount
+                : null;
+            yield return new ParsedCppType(match.Groups["name"].Value, CppTypeKind.Alias, match.Groups["base"].Value, [], [], arrayElements);
+        }
+
+        foreach (Match match in Regex.Matches(
+                     dataTypeRegion,
+                     @"typedef\s+struct\s+_[A-Za-z_][A-Za-z0-9_]*\s*\{(?<body>.*?)\}\s*(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*\*P[A-Za-z_][A-Za-z0-9_]*\s*;",
+                     RegexOptions.Singleline))
+        {
+            yield return new ParsedCppType(match.Groups["name"].Value, CppTypeKind.Struct, null, ParseCppFields(match.Groups["body"].Value), []);
+        }
+    }
+
+    private static IReadOnlyList<ParsedCppField> ParseCppFields(string body)
+    {
+        List<ParsedCppField> fields = [];
+        foreach (string rawLine in body.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string line = StripCppLineComment(rawLine).Trim();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("enum :", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (line.StartsWith("}", StringComparison.Ordinal))
+            {
+                string? enumFieldName = line.TrimStart('}', ' ', '\t').Trim().TrimEnd(';');
+                if (!string.IsNullOrWhiteSpace(enumFieldName))
+                {
+                    fields.Add(new ParsedCppField("INT", enumFieldName, null, null));
+                }
+
+                continue;
+            }
+
+            if (!line.EndsWith(';'))
+            {
+                continue;
+            }
+
+            Match bitField = Regex.Match(line, @"^(?<type>.+?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?<bits>\d+)\s*;");
+            if (bitField.Success)
+            {
+                fields.Add(new ParsedCppField(
+                    NormalizeCppTypeName(bitField.Groups["type"].Value),
+                    bitField.Groups["name"].Value,
+                    null,
+                    int.Parse(bitField.Groups["bits"].Value, CultureInfo.InvariantCulture)));
+                continue;
+            }
+
+            Match field = Regex.Match(line, @"^(?<type>.+?)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[(?<count>\d+)\])?\s*;");
+            if (!field.Success)
+            {
+                continue;
+            }
+
+            int? arrayElements = int.TryParse(field.Groups["count"].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsedCount)
+                ? parsedCount
+                : null;
+            fields.Add(new ParsedCppField(
+                NormalizeCppTypeName(field.Groups["type"].Value),
+                field.Groups["name"].Value,
+                arrayElements,
+                null));
+        }
+
+        return fields;
+    }
+
+    private static string? ExtractAutoGeneratedRegion(string text, string id)
+    {
+        string startMarker = "///<AutoGeneratedContent id=\"" + id + "\">";
+        int start = text.IndexOf(startMarker, StringComparison.OrdinalIgnoreCase);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        start += startMarker.Length;
+        int end = text.IndexOf("///</AutoGeneratedContent>", start, StringComparison.OrdinalIgnoreCase);
+        return end > start ? text[start..end] : null;
+    }
+
+    private static string StripCppLineComment(string line)
+    {
+        int commentIndex = line.IndexOf("//", StringComparison.Ordinal);
+        return commentIndex < 0 ? line : line[..commentIndex];
+    }
+
+    private static string NormalizeCppTypeName(string rawType)
+    {
+        string normalized = rawType.Trim();
+        normalized = normalized.Replace("unsigned char", "USINT", StringComparison.OrdinalIgnoreCase);
+        normalized = normalized.Replace("char", "SINT", StringComparison.OrdinalIgnoreCase);
+        normalized = normalized.Replace("bool", "BOOL", StringComparison.OrdinalIgnoreCase);
+        normalized = normalized.Replace("double", "LREAL", StringComparison.OrdinalIgnoreCase);
+        return normalized.Trim();
+    }
+
+    private static bool IsPaddingField(ParsedCppField field) =>
+        field.Name.StartsWith("reserved", StringComparison.OrdinalIgnoreCase);
+
+    private static int ResolveCppFieldBitSize(
+        ParsedCppField field,
+        IReadOnlyDictionary<string, ParsedCppType> parsedTypes,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        int baseSize = field.BitFieldSize ??
+            ResolveCppTypeBitSize(field.TypeName, parsedTypes, typeGuids);
+        return checked(baseSize * (field.ArrayElements ?? 1));
+    }
+
+    private static int ResolveCppTypeBitSize(
+        string typeName,
+        IReadOnlyDictionary<string, ParsedCppType> parsedTypes,
+        IReadOnlyDictionary<string, string> typeGuids)
+    {
+        TmcTypeInfo type = ResolveTmcType(typeName, null, typeGuids, throwOnMissing: false);
+        if (type.BitSize.HasValue)
+        {
+            return type.BitSize.Value;
+        }
+
+        if (parsedTypes.TryGetValue(typeName, out ParsedCppType? parsedType))
+        {
+            if (parsedType.Kind == CppTypeKind.Alias && !string.IsNullOrWhiteSpace(parsedType.BaseTypeName))
+            {
+                int baseSize = ResolveCppTypeBitSize(parsedType.BaseTypeName, parsedTypes, typeGuids);
+                return checked(baseSize * (parsedType.ArrayElements ?? 1));
+            }
+
+            if (parsedType.Kind == CppTypeKind.Enum)
+            {
+                return 16;
+            }
+
+            return parsedType.Fields.Sum(field => ResolveCppFieldBitSize(field, parsedTypes, typeGuids));
+        }
+
+        throw new InvalidOperationException($"Unable to resolve bit size for generated C++ type '{typeName}'.");
+    }
+
+    private static TmcTypeInfo ResolveTmcType(
+        string typeName,
+        string? explicitGuid,
+        IReadOnlyDictionary<string, string> typeGuids,
+        bool throwOnMissing = true)
+    {
+        ValidateRequiredText(typeName, nameof(typeName));
+        if (!string.IsNullOrWhiteSpace(explicitGuid))
+        {
+            return new TmcTypeInfo(typeName, NormalizeGuidText(explicitGuid), BuiltInTmcTypes.TryGetValue(typeName, out TmcTypeInfo? builtIn) ? builtIn.BitSize : null);
+        }
+
+        if (BuiltInTmcTypes.TryGetValue(typeName, out TmcTypeInfo? builtInType))
+        {
+            return builtInType;
+        }
+
+        if (typeGuids.TryGetValue(typeName, out string? guid))
+        {
+            return new TmcTypeInfo(typeName, NormalizeGuidText(guid), null);
+        }
+
+        if (throwOnMissing)
+        {
+            throw new InvalidOperationException($"Type GUID was not found for '{typeName}'. Provide TypeGuid or a GeneratedServicesHeaderPath containing GUID_{typeName}.");
+        }
+
+        return new TmcTypeInfo(typeName, string.Empty, null);
+    }
+
+    private static XElement CloneWithoutNamespace(XElement source)
+    {
+        XElement clone = new(source.Name.LocalName);
+        foreach (XAttribute attribute in source.Attributes())
+        {
+            if (!attribute.IsNamespaceDeclaration)
+            {
+                clone.SetAttributeValue(attribute.Name, attribute.Value);
+            }
+        }
+
+        foreach (XNode node in source.Nodes())
+        {
+            clone.Add(node is XElement child ? CloneWithoutNamespace(child) : node);
+        }
+
+        return clone;
+    }
+
+    private static void ValidateRequiredText(string? value, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"{fieldName} must not be empty.");
+        }
+    }
+
+    private static Dictionary<string, TmcModuleShape> ReadTmcModuleShapes(XDocument document)
+    {
+        Dictionary<string, TmcModuleShape> modules = new(StringComparer.OrdinalIgnoreCase);
+        XElement? modulesElement = document.Root?.Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "Modules");
+        if (modulesElement is null)
+        {
+            return modules;
+        }
+
+        foreach (XElement module in modulesElement.Elements().Where(element => element.Name.LocalName == "Module"))
+        {
+            string? moduleName = module.Attribute("ClassName")?.Value ?? GetChildElementValue(module, "Name");
+            if (string.IsNullOrWhiteSpace(moduleName))
+            {
+                continue;
+            }
+
+            Dictionary<string, TmcDataAreaShape> dataAreas = new(StringComparer.OrdinalIgnoreCase);
+            XElement? dataAreasElement = module.Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "DataAreas");
+            if (dataAreasElement is not null)
+            {
+                foreach (XElement dataArea in dataAreasElement.Elements().Where(element => element.Name.LocalName == "DataArea"))
+                {
+                    string? dataAreaName = GetChildElementValue(dataArea, "Name");
+                    if (string.IsNullOrWhiteSpace(dataAreaName))
+                    {
+                        continue;
+                    }
+
+                    XElement? areaNo = dataArea.Elements()
+                        .FirstOrDefault(element => element.Name.LocalName == "AreaNo");
+                    string? areaType = areaNo?.Attribute("AreaType")?.Value;
+                    List<TmcSymbolShape> symbols = dataArea.Elements()
+                        .Where(element => element.Name.LocalName == "Symbol")
+                        .Select(symbol => new TmcSymbolShape(
+                            GetChildElementValue(symbol, "Name") ?? string.Empty,
+                            GetChildElementValue(symbol, "BaseType")))
+                        .Where(symbol => !string.IsNullOrWhiteSpace(symbol.Name))
+                        .ToList();
+
+                    dataAreas[dataAreaName] = new TmcDataAreaShape(dataAreaName, areaType, symbols);
+                }
+            }
+
+            modules[moduleName] = new TmcModuleShape(moduleName, dataAreas);
+        }
+
+        return modules;
+    }
+
+    private static void ValidateExpectedDataAreas(
+        TmcModuleExpectation expectedModule,
+        TmcModuleShape actualModule,
+        ICollection<string> errors)
+    {
+        foreach (TmcDataAreaExpectation expectedArea in expectedModule.DataAreas)
+        {
+            if (string.IsNullOrWhiteSpace(expectedArea.Name))
+            {
+                errors.Add($"Module '{expectedModule.ModuleName}' has an expected data area with an empty name.");
+                continue;
+            }
+
+            if (!actualModule.DataAreas.TryGetValue(expectedArea.Name, out TmcDataAreaShape? actualArea))
+            {
+                errors.Add($"Module '{expectedModule.ModuleName}' is missing data area '{expectedArea.Name}'.");
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(expectedArea.AreaType) &&
+                !string.Equals(actualArea.AreaType, expectedArea.AreaType, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add(
+                    $"Module '{expectedModule.ModuleName}' data area '{expectedArea.Name}' AreaType mismatch. Expected '{expectedArea.AreaType}', actual '{actualArea.AreaType ?? string.Empty}'.");
+            }
+
+            IReadOnlyList<TmcSymbolExpectation> expectedSymbols = expectedArea.Symbols ?? Array.Empty<TmcSymbolExpectation>();
+            if (actualArea.Symbols.Count != expectedSymbols.Count)
+            {
+                errors.Add(
+                    $"Module '{expectedModule.ModuleName}' data area '{expectedArea.Name}' symbol count mismatch. Expected {expectedSymbols.Count}, actual {actualArea.Symbols.Count}.");
+            }
+
+            foreach (TmcSymbolExpectation expectedSymbol in expectedSymbols)
+            {
+                TmcSymbolShape? actualSymbol = actualArea.Symbols
+                    .FirstOrDefault(symbol => string.Equals(symbol.Name, expectedSymbol.Name, StringComparison.OrdinalIgnoreCase));
+                if (actualSymbol is null)
+                {
+                    errors.Add($"Module '{expectedModule.ModuleName}' data area '{expectedArea.Name}' is missing symbol '{expectedSymbol.Name}'.");
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(expectedSymbol.TypeName) &&
+                    !string.Equals(actualSymbol.TypeName, expectedSymbol.TypeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add(
+                        $"Module '{expectedModule.ModuleName}' data area '{expectedArea.Name}' symbol '{expectedSymbol.Name}' type mismatch. Expected '{expectedSymbol.TypeName}', actual '{actualSymbol.TypeName ?? string.Empty}'.");
+                }
+            }
+        }
+    }
 
     private static string ResolveXaeTemplatePath()
     {
@@ -4310,6 +5598,49 @@ public sealed class TwinCatEngineeringService
         string ProjectDirectory,
         string ProjectFilePath,
         string FiltersFilePath);
+
+    private sealed record TmcModuleShape(
+        string Name,
+        IReadOnlyDictionary<string, TmcDataAreaShape> DataAreas);
+
+    private sealed record TmcDataAreaShape(
+        string Name,
+        string? AreaType,
+        IReadOnlyList<TmcSymbolShape> Symbols);
+
+    private sealed record TmcSymbolShape(
+        string Name,
+        string? TypeName);
+
+    private sealed record TmcTypeInfo(
+        string Name,
+        string Guid,
+        int? BitSize = null);
+
+    private sealed record TmcGeneratedModel(
+        IReadOnlyDictionary<string, string> TypeGuids,
+        IReadOnlyList<XElement> DataTypes);
+
+    private enum CppTypeKind
+    {
+        Struct,
+        Enum,
+        Alias
+    }
+
+    private sealed record ParsedCppType(
+        string Name,
+        CppTypeKind Kind,
+        string? BaseTypeName,
+        IReadOnlyList<ParsedCppField> Fields,
+        IReadOnlyList<(string Name, string Value)> EnumValues,
+        int? ArrayElements = null);
+
+    private sealed record ParsedCppField(
+        string TypeName,
+        string Name,
+        int? ArrayElements,
+        int? BitFieldSize);
 
     private sealed record SlnProjectEntry(
         string Name,

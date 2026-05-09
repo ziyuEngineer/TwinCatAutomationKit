@@ -19,6 +19,115 @@ public sealed class TwinCatTsprojMutationService
         Save(document, tsprojPath);
     }
 
+    public RefreshCppInstanceTmcDescResult RefreshCppInstanceTmcDesc(string tsprojPath, RefreshCppInstanceTmcDescRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        ValidateRequiredText(request.CppProjectName, nameof(request.CppProjectName));
+        ValidateRequiredText(request.ProjectTmcPath, nameof(request.ProjectTmcPath));
+        if (request.Instances is null || request.Instances.Count == 0)
+        {
+            throw new InvalidOperationException("RefreshCppInstanceTmcDesc requires at least one instance item.");
+        }
+
+        foreach (CppInstanceTmcDescRefreshItem item in request.Instances)
+        {
+            ValidateRequiredText(item.InstanceName, nameof(item.InstanceName));
+            ValidateRequiredText(item.ModuleClassName, nameof(item.ModuleClassName));
+        }
+
+        string resolvedTmcPath = Path.GetFullPath(request.ProjectTmcPath);
+        if (!File.Exists(resolvedTmcPath))
+        {
+            throw new FileNotFoundException("Project TMC file was not found.", resolvedTmcPath);
+        }
+
+        XDocument document = Load(tsprojPath);
+        XDocument tmcDocument = XDocument.Load(resolvedTmcPath);
+        Dictionary<string, XElement> moduleByName = ReadTmcModulesByName(tmcDocument);
+        XElement cppProject = FindCppProject(document, request.CppProjectName);
+        List<string> errors = [];
+        int refreshedCount = 0;
+
+        foreach (CppInstanceTmcDescRefreshItem item in request.Instances)
+        {
+            if (!moduleByName.TryGetValue(item.ModuleClassName, out XElement? module))
+            {
+                string error = $"Module '{item.ModuleClassName}' was not found inside '{resolvedTmcPath}'.";
+                if (request.FailIfMissingModule)
+                {
+                    errors.Add(error);
+                    continue;
+                }
+
+                continue;
+            }
+
+            XElement? instance = cppProject.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Instance" &&
+                string.Equals(GetChildElementValue(element, "Name"), item.InstanceName, StringComparison.OrdinalIgnoreCase));
+            if (instance is null)
+            {
+                errors.Add($"Instance '{item.InstanceName}' was not found in C++ project '{request.CppProjectName}'.");
+                continue;
+            }
+
+            XElement? oldTmcDesc = instance.Elements().FirstOrDefault(element => element.Name.LocalName == "TmcDesc");
+            XElement newTmcDesc = CreateTmcDescFromModule(
+                module,
+                oldTmcDesc,
+                item,
+                request.PreserveValueSections,
+                request.PreserveContextValues);
+
+            if (oldTmcDesc is null)
+            {
+                instance.Add(newTmcDesc);
+            }
+            else
+            {
+                oldTmcDesc.ReplaceWith(newTmcDesc);
+            }
+
+            if (!string.IsNullOrWhiteSpace(item.ClassFactoryId))
+            {
+                instance.SetAttributeValue("ClassFactoryId", item.ClassFactoryId);
+            }
+            else if (newTmcDesc.Attribute("ClassFactoryId") is XAttribute classFactoryId)
+            {
+                instance.SetAttributeValue("ClassFactoryId", classFactoryId.Value);
+            }
+
+            refreshedCount++;
+        }
+
+        if (request.ImportDataTypesFromTmc)
+        {
+            ImportDataTypesFromTmc(document, tmcDocument);
+        }
+
+        if (errors.Count > 0)
+        {
+            return new RefreshCppInstanceTmcDescResult(
+                false,
+                Path.GetFullPath(tsprojPath),
+                refreshedCount,
+                errors,
+                $"C++ instance TmcDesc refresh failed with {errors.Count} error(s).");
+        }
+
+        Save(document, tsprojPath);
+        return new RefreshCppInstanceTmcDescResult(
+            true,
+            Path.GetFullPath(tsprojPath),
+            refreshedCount,
+            Array.Empty<string>(),
+            $"Refreshed {refreshedCount} C++ instance TmcDesc item(s).");
+    }
+
     public void UpsertElement(string tsprojPath, TsprojElementUpsertRequest request)
     {
         if (request is null)
@@ -373,11 +482,15 @@ public sealed class TwinCatTsprojMutationService
     public void SetTaskAffinity(string tsprojPath, SetTaskAffinityRequest request)
     {
         ValidateRequiredText(request.TaskName, nameof(request.TaskName));
-        ValidateRequiredText(request.Affinity, nameof(request.Affinity));
 
         XDocument document = Load(tsprojPath);
         XElement task = FindTaskByName(document, request.TaskName);
-        task.SetAttributeValue("Affinity", request.Affinity);
+        if (request.Affinity is not null)
+        {
+            ValidateRequiredText(request.Affinity, nameof(request.Affinity));
+            task.SetAttributeValue("Affinity", request.Affinity);
+        }
+
         task.SetAttributeValue("AdtTasks", request.EnableAdtTasks ? "true" : "false");
         Save(document, tsprojPath);
     }
@@ -456,6 +569,40 @@ public sealed class TwinCatTsprojMutationService
             {
                 clsid.Value = request.Clsid;
             }
+        }
+
+        Save(document, tsprojPath);
+    }
+
+    public void SetCppInstanceMetadata(string tsprojPath, SetCppInstanceMetadataRequest request)
+    {
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        if (!string.IsNullOrWhiteSpace(request.ObjectId))
+        {
+            ValidateObjectIdText(request.ObjectId, nameof(request.ObjectId));
+        }
+
+        XDocument document = Load(tsprojPath);
+        XElement instance = FindInstance(document, request.InstanceName);
+
+        if (request.Disabled.HasValue)
+        {
+            instance.SetAttributeValue("Disabled", request.Disabled.Value ? "true" : null);
+        }
+
+        if (request.KeepUnrestoredLinks is not null)
+        {
+            instance.SetAttributeValue("KeepUnrestoredLinks", string.IsNullOrWhiteSpace(request.KeepUnrestoredLinks) ? null : request.KeepUnrestoredLinks);
+        }
+
+        if (request.ClassFactoryId is not null)
+        {
+            instance.SetAttributeValue("ClassFactoryId", string.IsNullOrWhiteSpace(request.ClassFactoryId) ? null : request.ClassFactoryId);
+        }
+
+        if (request.ObjectId is not null)
+        {
+            instance.SetAttributeValue("Id", string.IsNullOrWhiteSpace(request.ObjectId) ? null : request.ObjectId);
         }
 
         Save(document, tsprojPath);
@@ -663,6 +810,127 @@ public sealed class TwinCatTsprojMutationService
         Save(document, tsprojPath);
     }
 
+    public EnsureIoSectionResult EnsureIoSection(string tsprojPath, EnsureIoSectionRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        XElement project = FindTopLevelProject(document);
+        XElement? io = project.Elements().FirstOrDefault(element => element.Name.LocalName == "Io");
+        bool created = false;
+        if (io is null)
+        {
+            io = AddChild(project, "Io");
+            created = true;
+        }
+
+        int deviceCount = io.Elements().Count(element => element.Name.LocalName == "Device");
+        Save(document, tsprojPath);
+        return new EnsureIoSectionResult(created, deviceCount, Path.GetFullPath(tsprojPath));
+    }
+
+    public void EnsureIoDevice(string tsprojPath, EnsureIoDeviceRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        EnsureIoDeviceInDocument(document, request);
+        Save(document, tsprojPath);
+    }
+
+    public void EnsureEthercatBox(string tsprojPath, EnsureEthercatBoxRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        EnsureEthercatBoxInDocument(document, request);
+        Save(document, tsprojPath);
+    }
+
+    public void EnsureIoPdo(string tsprojPath, EnsureIoPdoRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        EnsureIoPdoInDocument(document, request);
+        Save(document, tsprojPath);
+    }
+
+    public void EnsureIoBoxImage(string tsprojPath, EnsureIoBoxImageRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        EnsureIoBoxImageInDocument(document, request);
+        Save(document, tsprojPath);
+    }
+
+    public void EnsureMappingInfo(string tsprojPath, EnsureMappingInfoRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        EnsureMappingInfoInDocument(document, request);
+        Save(document, tsprojPath);
+    }
+
+    public void EnsureIoMappingLink(string tsprojPath, EnsureIoMappingLinkRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        EnsureIoMappingLinkInDocument(document, request);
+        Save(document, tsprojPath);
+    }
+
+    public ApplyIoTopologyPlanResult ApplyIoTopologyPlan(string tsprojPath, ApplyIoTopologyPlanRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        XDocument document = Load(tsprojPath);
+        if (request.EnsureIoSection)
+        {
+            _ = FindOrCreateProjectIo(document);
+        }
+
+        foreach (EnsureIoDeviceRequest item in request.Devices ?? Array.Empty<EnsureIoDeviceRequest>())
+        {
+            EnsureIoDeviceInDocument(document, item);
+        }
+
+        foreach (EnsureEthercatBoxRequest item in request.Boxes ?? Array.Empty<EnsureEthercatBoxRequest>())
+        {
+            EnsureEthercatBoxInDocument(document, item);
+        }
+
+        foreach (EnsureIoBoxImageRequest item in request.BoxImages ?? Array.Empty<EnsureIoBoxImageRequest>())
+        {
+            EnsureIoBoxImageInDocument(document, item);
+        }
+
+        foreach (EnsureIoPdoRequest item in request.Pdos ?? Array.Empty<EnsureIoPdoRequest>())
+        {
+            EnsureIoPdoInDocument(document, item);
+        }
+
+        foreach (EnsureMappingInfoRequest item in request.MappingInfos ?? Array.Empty<EnsureMappingInfoRequest>())
+        {
+            EnsureMappingInfoInDocument(document, item);
+        }
+
+        foreach (EnsureIoMappingLinkRequest item in request.Links ?? Array.Empty<EnsureIoMappingLinkRequest>())
+        {
+            EnsureIoMappingLinkInDocument(document, item);
+        }
+
+        Save(document, tsprojPath);
+        int deviceCount = request.Devices?.Count ?? 0;
+        int boxCount = request.Boxes?.Count ?? 0;
+        int pdoCount = request.Pdos?.Count ?? 0;
+        int boxImageCount = request.BoxImages?.Count ?? 0;
+        int mappingInfoCount = request.MappingInfos?.Count ?? 0;
+        int linkCount = request.Links?.Count ?? 0;
+        return new ApplyIoTopologyPlanResult(
+            true,
+            Path.GetFullPath(tsprojPath),
+            deviceCount,
+            boxCount,
+            pdoCount,
+            boxImageCount,
+            mappingInfoCount,
+            linkCount,
+            $"Applied IO topology plan: {deviceCount} device(s), {boxCount} box(es), {pdoCount} PDO(s), {mappingInfoCount} MappingInfo item(s), {linkCount} link(s).");
+    }
+
     public void ReplaceDataTypesSection(string tsprojPath, ReplaceDataTypesSectionRequest request)
     {
         XDocument document = Load(tsprojPath);
@@ -691,8 +959,7 @@ public sealed class TwinCatTsprojMutationService
     {
         XDocument document = Load(tsprojPath);
         XElement root = document.Root ?? throw new InvalidOperationException("The .tsproj XML root element is missing.");
-        XElement system = document.Descendants().FirstOrDefault(element => element.Name.LocalName == "System")
-            ?? AddChild(root, "System");
+        XElement system = FindOrCreateProjectSystem(document);
 
         foreach (XElement settings in system.Elements().Where(element => element.Name.LocalName == "Settings").ToList())
         {
@@ -708,6 +975,52 @@ public sealed class TwinCatTsprojMutationService
         else
         {
             system.Add(settingsFragment);
+        }
+
+        Save(document, tsprojPath);
+    }
+
+    public void EnsureSystemSettings(string tsprojPath, EnsureSystemSettingsRequest request)
+    {
+        XDocument document = Load(tsprojPath);
+        XElement system = FindOrCreateProjectSystem(document);
+        XElement settings = system.Elements().FirstOrDefault(element => element.Name.LocalName == "Settings")
+            ?? new XElement(system.GetDefaultNamespace() + "Settings");
+        if (settings.Parent is null)
+        {
+            XElement? tasks = system.Elements().FirstOrDefault(element => element.Name.LocalName == "Tasks");
+            if (request.InsertBeforeTasks && tasks is not null)
+            {
+                tasks.AddBeforeSelf(settings);
+            }
+            else
+            {
+                system.Add(settings);
+            }
+        }
+
+        if (request.CpuId.HasValue)
+        {
+            if (request.CpuId.Value < 0)
+            {
+                throw new InvalidOperationException("CpuId must be greater than or equal to zero.");
+            }
+
+            XElement cpu = settings.Elements().FirstOrDefault(element => element.Name.LocalName == "Cpu")
+                ?? AddChild(settings, "Cpu");
+            cpu.SetAttributeValue("CpuId", request.CpuId.Value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if (request.IoIdleTaskPriority.HasValue)
+        {
+            if (request.IoIdleTaskPriority.Value <= 0)
+            {
+                throw new InvalidOperationException("IoIdleTaskPriority must be greater than zero.");
+            }
+
+            XElement ioIdleTask = settings.Elements().FirstOrDefault(element => element.Name.LocalName == "IoIdleTask")
+                ?? AddChild(settings, "IoIdleTask");
+            ioIdleTask.SetAttributeValue("Priority", request.IoIdleTaskPriority.Value.ToString(CultureInfo.InvariantCulture));
         }
 
         Save(document, tsprojPath);
@@ -841,7 +1154,8 @@ public sealed class TwinCatTsprojMutationService
                 item.ObjectId,
                 item.AreaNo,
                 item.ByteOffset,
-                item.ByteSize));
+                item.ByteSize,
+                item.ArrayIndex));
         }
 
         XDocument document = Load(tsprojPath);
@@ -855,7 +1169,8 @@ public sealed class TwinCatTsprojMutationService
                     item.ObjectId,
                     item.AreaNo,
                     item.ByteOffset,
-                    item.ByteSize));
+                    item.ByteSize,
+                    item.ArrayIndex));
         }
 
         Save(document, tsprojPath);
@@ -929,32 +1244,13 @@ public sealed class TwinCatTsprojMutationService
     {
         ValidateMappingLinkRequest(request);
         XDocument document = Load(tsprojPath);
-        XElement root = document.Root ?? throw new InvalidOperationException("The .tsproj XML root element is missing.");
-        XElement mappings = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Mappings")
-            ?? AddChild(root, "Mappings");
-
-        XElement ownerA = mappings.Elements().FirstOrDefault(element =>
-                element.Name.LocalName == "OwnerA" &&
-                string.Equals(GetAttributeValue(element, "Name"), request.OwnerAName, StringComparison.OrdinalIgnoreCase))
-            ?? AddOwnerElement(mappings, "OwnerA", request.OwnerAName);
-
-        XElement ownerB = ownerA.Elements().FirstOrDefault(element =>
-                element.Name.LocalName == "OwnerB" &&
-                string.Equals(GetAttributeValue(element, "Name"), request.OwnerBName, StringComparison.OrdinalIgnoreCase))
-            ?? AddOwnerElement(ownerA, "OwnerB", request.OwnerBName);
-
-        XElement? existingLink = ownerB.Elements().FirstOrDefault(element =>
-            element.Name.LocalName == "Link" &&
-            string.Equals(GetAttributeValue(element, "VarA"), request.VarA, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(GetAttributeValue(element, "VarB"), request.VarB, StringComparison.OrdinalIgnoreCase));
-
-        if (existingLink is null)
-        {
-            XElement link = AddChild(ownerB, "Link");
-            link.SetAttributeValue("VarA", request.VarA);
-            link.SetAttributeValue("VarB", request.VarB);
-        }
-
+        EnsureIoMappingLinkInDocument(
+            document,
+            new EnsureIoMappingLinkRequest(
+                request.OwnerAName,
+                request.OwnerBName,
+                request.VarA,
+                request.VarB));
         Save(document, tsprojPath);
     }
 
@@ -978,6 +1274,530 @@ public sealed class TwinCatTsprojMutationService
         if (string.IsNullOrWhiteSpace(request.VarB))
         {
             throw new InvalidOperationException("Mapping VarB must not be empty.");
+        }
+    }
+
+    private static void EnsureIoDeviceInDocument(XDocument document, EnsureIoDeviceRequest request)
+    {
+        ValidateIoDeviceRequest(request);
+        XElement io = FindOrCreateProjectIo(document);
+        string deviceIdText = request.DeviceId.ToString(CultureInfo.InvariantCulture);
+        XElement device = io.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Device" &&
+                string.Equals(GetAttributeValue(element, "Id"), deviceIdText, StringComparison.OrdinalIgnoreCase))
+            ?? AddChild(io, "Device");
+
+        device.SetAttributeValue("Id", deviceIdText);
+        SetOptionalBoolAttribute(device, "Disabled", request.Disabled, removeWhenFalse: true);
+        device.SetAttributeValue("DevType", request.DevType.ToString(CultureInfo.InvariantCulture));
+        SetOptionalStringAttribute(device, "DevFlags", request.DevFlags);
+        SetOptionalIntAttribute(device, "AmsPort", request.AmsPort);
+        SetOptionalStringAttribute(device, "AmsNetId", request.AmsNetId);
+        SetOptionalStringAttribute(device, "RemoteName", request.RemoteName);
+        SetOptionalIntAttribute(device, "InfoImageId", request.InfoImageId);
+        SetOrCreateChildElementValue(device, "Name", request.Name);
+
+        if (request.AddressInfo is not null)
+        {
+            ApplyIoAddressInfo(device, request.AddressInfo);
+        }
+
+        foreach (IoImageDefinition image in request.Images ?? Array.Empty<IoImageDefinition>())
+        {
+            ApplyIoImageDefinition(device, image);
+        }
+
+        ApplyIoRawFragments(device, request.ExtraFragments, $"Project/Io/Device[@Id='{deviceIdText}']");
+    }
+
+    private static void EnsureEthercatBoxInDocument(XDocument document, EnsureEthercatBoxRequest request)
+    {
+        ValidateEthercatBoxRequest(request);
+        XElement device = FindIoDevice(document, request.DeviceId);
+        XElement parent = request.ParentBoxId.HasValue
+            ? FindIoBoxUnderDevice(device, request.ParentBoxId.Value)
+            : device;
+
+        string boxIdText = request.BoxId.ToString(CultureInfo.InvariantCulture);
+        XElement box = parent.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Box" &&
+                string.Equals(GetAttributeValue(element, "Id"), boxIdText, StringComparison.OrdinalIgnoreCase))
+            ?? AddChild(parent, "Box");
+
+        box.SetAttributeValue("Id", boxIdText);
+        SetOptionalBoolAttribute(box, "Disabled", request.Disabled, removeWhenFalse: true);
+        box.SetAttributeValue("BoxType", request.BoxType.ToString(CultureInfo.InvariantCulture));
+        SetOptionalStringAttribute(box, "BoxFlags", request.BoxFlags);
+        SetOrCreateChildElementValue(box, "Name", request.Name);
+        if (request.ImageId.HasValue)
+        {
+            SetOrCreateChildElementValue(box, "ImageId", request.ImageId.Value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        if ((request.EtherCatAttributes?.Count ?? 0) > 0 || (request.EtherCatChildValues?.Count ?? 0) > 0)
+        {
+            XElement etherCat = GetOrCreateChildElement(box, "EtherCAT");
+            ApplyXmlAttributes(etherCat, request.EtherCatAttributes, replaceExisting: true);
+            ApplyXmlChildValues(etherCat, request.EtherCatChildValues);
+        }
+
+        ApplyIoRawFragments(box, request.ExtraFragments, $"Project/Io/Device[@Id='{request.DeviceId}']/Box[@Id='{boxIdText}']");
+    }
+
+    private static void EnsureIoPdoInDocument(XDocument document, EnsureIoPdoRequest request)
+    {
+        ValidateIoPdoRequest(request);
+        XElement device = FindIoDevice(document, request.DeviceId);
+        XElement box = FindIoBoxUnderDevice(device, request.BoxId);
+        XElement etherCat = GetOrCreateChildElement(box, "EtherCAT");
+
+        XElement pdo = etherCat.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Pdo" &&
+                string.Equals(GetAttributeValue(element, "Name"), request.Name, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(GetAttributeValue(element, "Index"), request.Index, StringComparison.OrdinalIgnoreCase))
+            ?? AddChild(etherCat, "Pdo");
+
+        pdo.SetAttributeValue("Name", request.Name);
+        pdo.SetAttributeValue("Index", request.Index);
+        SetOptionalStringAttribute(pdo, "InOut", request.InOut);
+        SetOptionalStringAttribute(pdo, "Flags", request.Flags);
+        SetOptionalIntAttribute(pdo, "SyncMan", request.SyncMan);
+
+        if (request.ReplaceExistingEntries)
+        {
+            foreach (XElement entry in pdo.Elements().Where(element => element.Name.LocalName == "Entry").ToList())
+            {
+                entry.Remove();
+            }
+        }
+
+        foreach (IoPdoEntry entryRequest in request.Entries ?? Array.Empty<IoPdoEntry>())
+        {
+            ApplyIoPdoEntry(pdo, entryRequest, request.ReplaceExistingEntries);
+        }
+
+        ApplyIoRawFragments(pdo, request.ExtraFragments, $"Project/Io/Device[@Id='{request.DeviceId}']/Box[@Id='{request.BoxId}']/EtherCAT/Pdo[@Name='{request.Name}']");
+    }
+
+    private static void EnsureIoBoxImageInDocument(XDocument document, EnsureIoBoxImageRequest request)
+    {
+        ValidatePositive(request.DeviceId, nameof(request.DeviceId));
+        ValidatePositive(request.BoxId, nameof(request.BoxId));
+        ValidatePositive(request.ImageId, nameof(request.ImageId));
+        XElement device = FindIoDevice(document, request.DeviceId);
+        XElement box = FindIoBoxUnderDevice(device, request.BoxId);
+        SetOrCreateChildElementValue(box, "ImageId", request.ImageId.ToString(CultureInfo.InvariantCulture));
+        ApplyXmlChildValues(box, request.MetadataValues);
+        ApplyIoRawFragments(box, request.MetadataFragments, $"Project/Io/Device[@Id='{request.DeviceId}']/Box[@Id='{request.BoxId}']");
+    }
+
+    private static void EnsureMappingInfoInDocument(XDocument document, EnsureMappingInfoRequest request)
+    {
+        ValidateRequiredText(request.Identifier, nameof(request.Identifier));
+        ValidateObjectIdText(request.Id, nameof(request.Id));
+        XElement mappings = FindOrCreateRootMappings(document);
+        XElement mappingInfo = mappings.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "MappingInfo" &&
+                (string.Equals(GetAttributeValue(element, "Identifier"), request.Identifier, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(GetAttributeValue(element, "Id"), request.Id, StringComparison.OrdinalIgnoreCase)))
+            ?? AddChild(mappings, "MappingInfo");
+
+        mappingInfo.SetAttributeValue("Identifier", request.Identifier);
+        mappingInfo.SetAttributeValue("Id", request.Id);
+        ApplyXmlAttributes(mappingInfo, request.Attributes, replaceExisting: true, ignoredNames: ["Identifier", "Id"]);
+    }
+
+    private static void EnsureIoMappingLinkInDocument(XDocument document, EnsureIoMappingLinkRequest request)
+    {
+        ValidateIoMappingLinkRequest(request);
+        XElement mappings = FindOrCreateRootMappings(document);
+        XElement ownerA = FindOrCreateMappingOwner(mappings, "OwnerA", request.OwnerAName, request.OwnerAPrefix, request.OwnerAType);
+        XElement ownerB = FindOrCreateMappingOwner(ownerA, "OwnerB", request.OwnerBName, request.OwnerBPrefix, request.OwnerBType);
+
+        XElement link = ownerB.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Link" &&
+                string.Equals(GetAttributeValue(element, "VarA"), request.VarA, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(GetAttributeValue(element, "VarB"), request.VarB, StringComparison.OrdinalIgnoreCase))
+            ?? AddChild(ownerB, "Link");
+
+        link.SetAttributeValue("VarA", request.VarA);
+        link.SetAttributeValue("VarB", request.VarB);
+        ApplyXmlAttributes(
+            link,
+            request.LinkAttributes,
+            request.ReplaceExistingAttributes,
+            ignoredNames: ["VarA", "VarB"]);
+    }
+
+    private static XElement FindOrCreateProjectIo(XDocument document)
+    {
+        XElement project = FindTopLevelProject(document);
+        return project.Elements().FirstOrDefault(element => element.Name.LocalName == "Io")
+            ?? AddChild(project, "Io");
+    }
+
+    private static XElement FindOrCreateRootMappings(XDocument document)
+    {
+        XElement root = document.Root ?? throw new InvalidOperationException("The .tsproj XML root element is missing.");
+        return root.Elements().FirstOrDefault(element => element.Name.LocalName == "Mappings")
+            ?? AddChild(root, "Mappings");
+    }
+
+    private static XElement FindIoDevice(XDocument document, int deviceId)
+    {
+        ValidatePositive(deviceId, nameof(deviceId));
+        XElement io = FindOrCreateProjectIo(document);
+        string deviceIdText = deviceId.ToString(CultureInfo.InvariantCulture);
+        return io.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Device" &&
+                string.Equals(GetAttributeValue(element, "Id"), deviceIdText, StringComparison.OrdinalIgnoreCase))
+            ?? throw new InvalidOperationException($"IO Device Id='{deviceIdText}' was not found in Project/Io.");
+    }
+
+    private static XElement FindIoBoxUnderDevice(XElement device, int boxId)
+    {
+        ValidatePositive(boxId, nameof(boxId));
+        string boxIdText = boxId.ToString(CultureInfo.InvariantCulture);
+        List<XElement> matches = device.Descendants().Where(element =>
+                element.Name.LocalName == "Box" &&
+                string.Equals(GetAttributeValue(element, "Id"), boxIdText, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        return matches.Count switch
+        {
+            1 => matches[0],
+            0 => throw new InvalidOperationException($"IO Box Id='{boxIdText}' was not found under Device Id='{GetAttributeValue(device, "Id") ?? "<unknown>"}'."),
+            _ => throw new InvalidOperationException($"IO Box Id='{boxIdText}' is ambiguous under Device Id='{GetAttributeValue(device, "Id") ?? "<unknown>"}'.")
+        };
+    }
+
+    private static void ApplyIoAddressInfo(XElement device, IoAddressInfo addressInfo)
+    {
+        if (!string.IsNullOrWhiteSpace(addressInfo.RawXml))
+        {
+            ValidateDocumentedRawXml(
+                addressInfo.RawXml,
+                addressInfo.FragmentSource,
+                addressInfo.TargetParentPath,
+                addressInfo.FieldMeaning,
+                addressInfo.VerificationEvidence,
+                "AddressInfo",
+                "Project/Io/Device/AddressInfo");
+            XElement parsed = ParseAndNormalizeSectionFragment(addressInfo.RawXml, device.GetDefaultNamespace(), "AddressInfo");
+            foreach (XElement existing in device.Elements().Where(element => element.Name.LocalName == "AddressInfo").ToList())
+            {
+                existing.Remove();
+            }
+
+            device.Add(parsed);
+        }
+
+        if (addressInfo.TcComObjectId is null &&
+            addressInfo.PnpDeviceDesc is null &&
+            addressInfo.PnpDeviceName is null &&
+            addressInfo.PnpDeviceData is null)
+        {
+            return;
+        }
+
+        XElement address = GetOrCreateChildElement(device, "AddressInfo");
+        if (addressInfo.TcComObjectId is not null)
+        {
+            ValidateObjectIdText(addressInfo.TcComObjectId, nameof(addressInfo.TcComObjectId));
+            XElement tcCom = GetOrCreateChildElement(address, "TcCom");
+            SetOrCreateChildElementValue(tcCom, "ObjectId", addressInfo.TcComObjectId);
+        }
+
+        if (addressInfo.PnpDeviceDesc is not null ||
+            addressInfo.PnpDeviceName is not null ||
+            addressInfo.PnpDeviceData is not null)
+        {
+            XElement pnp = GetOrCreateChildElement(address, "Pnp");
+            SetOptionalChildValue(pnp, "DeviceDesc", addressInfo.PnpDeviceDesc);
+            SetOptionalChildValue(pnp, "DeviceName", addressInfo.PnpDeviceName);
+            SetOptionalChildValue(pnp, "DeviceData", addressInfo.PnpDeviceData);
+        }
+    }
+
+    private static void ApplyIoImageDefinition(XElement device, IoImageDefinition image)
+    {
+        ValidatePositive(image.Id, nameof(image.Id));
+        ValidatePositive(image.AddrType, nameof(image.AddrType));
+        ValidatePositive(image.ImageType, nameof(image.ImageType));
+        ValidateRequiredText(image.Name, nameof(image.Name));
+
+        string imageIdText = image.Id.ToString(CultureInfo.InvariantCulture);
+        XElement imageElement = device.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Image" &&
+                string.Equals(GetAttributeValue(element, "Id"), imageIdText, StringComparison.OrdinalIgnoreCase))
+            ?? AddChild(device, "Image");
+
+        imageElement.SetAttributeValue("Id", imageIdText);
+        imageElement.SetAttributeValue("AddrType", image.AddrType.ToString(CultureInfo.InvariantCulture));
+        imageElement.SetAttributeValue("ImageType", image.ImageType.ToString(CultureInfo.InvariantCulture));
+        SetOptionalIntAttribute(imageElement, "SizeIn", image.SizeIn);
+        SetOptionalIntAttribute(imageElement, "SizeOut", image.SizeOut);
+        SetOrCreateChildElementValue(imageElement, "Name", image.Name);
+    }
+
+    private static void ApplyIoPdoEntry(XElement pdo, IoPdoEntry entryRequest, bool entriesWereReplaced)
+    {
+        if (entryRequest.Name is null &&
+            entryRequest.Index is null &&
+            entryRequest.Sub is null &&
+            entryRequest.Type is null &&
+            (entryRequest.Attributes?.Count ?? 0) == 0 &&
+            (entryRequest.ChildValues?.Count ?? 0) == 0)
+        {
+            throw new InvalidOperationException("IO PDO entry must contain at least one name, index, subindex, type, attribute, or child value.");
+        }
+
+        XElement entry;
+        if (entriesWereReplaced)
+        {
+            entry = AddChild(pdo, "Entry");
+        }
+        else
+        {
+            entry = pdo.Elements().FirstOrDefault(element =>
+                    element.Name.LocalName == "Entry" &&
+                    (entryRequest.Name is null || string.Equals(GetAttributeValue(element, "Name"), entryRequest.Name, StringComparison.OrdinalIgnoreCase)) &&
+                    (entryRequest.Index is null || string.Equals(GetAttributeValue(element, "Index"), entryRequest.Index, StringComparison.OrdinalIgnoreCase)) &&
+                    (entryRequest.Sub is null || string.Equals(GetAttributeValue(element, "Sub"), entryRequest.Sub, StringComparison.OrdinalIgnoreCase)))
+                ?? AddChild(pdo, "Entry");
+        }
+
+        SetOptionalStringAttribute(entry, "Name", entryRequest.Name);
+        SetOptionalStringAttribute(entry, "Index", entryRequest.Index);
+        SetOptionalStringAttribute(entry, "Sub", entryRequest.Sub);
+        ApplyXmlAttributes(entry, entryRequest.Attributes, replaceExisting: true, ignoredNames: ["Name", "Index", "Sub"]);
+        SetOptionalChildValue(entry, "Type", entryRequest.Type);
+        ApplyXmlChildValues(entry, entryRequest.ChildValues, ignoredNames: ["Type"]);
+    }
+
+    private static XElement FindOrCreateMappingOwner(XElement parent, string localName, string name, string? prefix, string? type)
+    {
+        IEnumerable<XElement> matches = parent.Elements().Where(element =>
+            element.Name.LocalName == localName &&
+            string.Equals(GetAttributeValue(element, "Name"), name, StringComparison.OrdinalIgnoreCase));
+
+        if (!string.IsNullOrWhiteSpace(prefix))
+        {
+            matches = matches.Where(element => string.Equals(GetAttributeValue(element, "Prefix"), prefix, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(type))
+        {
+            matches = matches.Where(element => string.Equals(GetAttributeValue(element, "Type"), type, StringComparison.OrdinalIgnoreCase));
+        }
+
+        XElement? owner = matches.FirstOrDefault();
+        owner ??= AddOwnerElement(parent, localName, name);
+        SetOptionalStringAttribute(owner, "Prefix", prefix);
+        SetOptionalStringAttribute(owner, "Type", type);
+        return owner;
+    }
+
+    private static void ApplyIoRawFragments(XElement parent, IReadOnlyList<IoRawXmlFragment>? fragments, string defaultTargetParentPath)
+    {
+        foreach (IoRawXmlFragment fragment in fragments ?? Array.Empty<IoRawXmlFragment>())
+        {
+            ValidateDocumentedRawXml(
+                fragment.FragmentXml,
+                fragment.FragmentSource,
+                fragment.TargetParentPath,
+                fragment.FieldMeaning,
+                fragment.VerificationEvidence,
+                expectedElementName: null,
+                defaultTargetParentPath);
+
+            XElement parsed = CloneWithNamespace(XElement.Parse(fragment.FragmentXml), parent.GetDefaultNamespace());
+            string matchElementName = string.IsNullOrWhiteSpace(fragment.MatchElementName)
+                ? parsed.Name.LocalName
+                : fragment.MatchElementName!;
+            string? matchNameValue = string.IsNullOrWhiteSpace(fragment.MatchNameValue)
+                ? GetChildElementValue(parsed, "Name") ?? GetAttributeValue(parsed, "Name")
+                : fragment.MatchNameValue;
+            XElement? existing = parent.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == matchElementName &&
+                (matchNameValue is null ||
+                 string.Equals(GetChildElementValue(element, "Name") ?? GetAttributeValue(element, "Name"), matchNameValue, StringComparison.OrdinalIgnoreCase)));
+
+            if (existing is null)
+            {
+                parent.Add(parsed);
+            }
+            else if (fragment.ReplaceExisting)
+            {
+                existing.ReplaceWith(parsed);
+            }
+        }
+    }
+
+    private static void ApplyXmlAttributes(
+        XElement target,
+        IReadOnlyList<TsprojXmlAttribute>? attributes,
+        bool replaceExisting,
+        IReadOnlyList<string>? ignoredNames = null)
+    {
+        HashSet<string> ignored = ignoredNames is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : ignoredNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (TsprojXmlAttribute attribute in attributes ?? Array.Empty<TsprojXmlAttribute>())
+        {
+            ValidateRequiredText(attribute.Name, nameof(attribute.Name));
+            if (ignored.Contains(attribute.Name))
+            {
+                continue;
+            }
+
+            XAttribute? existing = target.Attributes().FirstOrDefault(item => item.Name.LocalName == attribute.Name);
+            if (existing is null || replaceExisting)
+            {
+                target.SetAttributeValue(attribute.Name, attribute.Value);
+            }
+        }
+    }
+
+    private static void ApplyXmlChildValues(
+        XElement target,
+        IReadOnlyList<TsprojXmlChildValue>? values,
+        IReadOnlyList<string>? ignoredNames = null)
+    {
+        HashSet<string> ignored = ignoredNames is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : ignoredNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (TsprojXmlChildValue value in values ?? Array.Empty<TsprojXmlChildValue>())
+        {
+            ValidateRequiredText(value.ElementName, nameof(value.ElementName));
+            if (ignored.Contains(value.ElementName))
+            {
+                continue;
+            }
+
+            SetOrCreateChildElementValue(target, value.ElementName, value.Value);
+        }
+    }
+
+    private static void SetOptionalStringAttribute(XElement element, string attributeName, string? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        element.SetAttributeValue(attributeName, string.IsNullOrWhiteSpace(value) ? null : value);
+    }
+
+    private static void SetOptionalIntAttribute(XElement element, string attributeName, int? value)
+    {
+        if (value.HasValue)
+        {
+            element.SetAttributeValue(attributeName, value.Value.ToString(CultureInfo.InvariantCulture));
+        }
+    }
+
+    private static void SetOptionalBoolAttribute(XElement element, string attributeName, bool? value, bool removeWhenFalse)
+    {
+        if (!value.HasValue)
+        {
+            return;
+        }
+
+        element.SetAttributeValue(attributeName, !value.Value && removeWhenFalse ? null : value.Value ? "true" : "false");
+    }
+
+    private static void SetOptionalChildValue(XElement parent, string localName, string? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            parent.Elements().Where(element => element.Name.LocalName == localName).Remove();
+            return;
+        }
+
+        SetOrCreateChildElementValue(parent, localName, value);
+    }
+
+    private static void ValidateIoDeviceRequest(EnsureIoDeviceRequest request)
+    {
+        ValidatePositive(request.DeviceId, nameof(request.DeviceId));
+        ValidateRequiredText(request.Name, nameof(request.Name));
+        ValidatePositive(request.DevType, nameof(request.DevType));
+    }
+
+    private static void ValidateEthercatBoxRequest(EnsureEthercatBoxRequest request)
+    {
+        ValidatePositive(request.DeviceId, nameof(request.DeviceId));
+        ValidatePositive(request.BoxId, nameof(request.BoxId));
+        ValidateRequiredText(request.Name, nameof(request.Name));
+        ValidatePositive(request.BoxType, nameof(request.BoxType));
+        if (request.ParentBoxId.HasValue && request.ParentBoxId.Value <= 0)
+        {
+            throw new InvalidOperationException("ParentBoxId must be greater than zero when provided.");
+        }
+    }
+
+    private static void ValidateIoPdoRequest(EnsureIoPdoRequest request)
+    {
+        ValidatePositive(request.DeviceId, nameof(request.DeviceId));
+        ValidatePositive(request.BoxId, nameof(request.BoxId));
+        ValidateRequiredText(request.Name, nameof(request.Name));
+        ValidateRequiredText(request.Index, nameof(request.Index));
+    }
+
+    private static void ValidateIoMappingLinkRequest(EnsureIoMappingLinkRequest request)
+    {
+        ValidateRequiredText(request.OwnerAName, nameof(request.OwnerAName));
+        ValidateRequiredText(request.OwnerBName, nameof(request.OwnerBName));
+        ValidateRequiredText(request.VarA, nameof(request.VarA));
+        ValidateRequiredText(request.VarB, nameof(request.VarB));
+    }
+
+    private static void ValidatePositive(int value, string fieldName)
+    {
+        if (value <= 0)
+        {
+            throw new InvalidOperationException($"{fieldName} must be greater than zero.");
+        }
+    }
+
+    private static void ValidateDocumentedRawXml(
+        string? fragmentXml,
+        string? fragmentSource,
+        string? targetParentPath,
+        string? fieldMeaning,
+        string? verificationEvidence,
+        string? expectedElementName,
+        string defaultTargetParentPath)
+    {
+        ValidateRequiredText(fragmentXml, nameof(fragmentXml));
+        if (string.IsNullOrWhiteSpace(fragmentSource) ||
+            string.IsNullOrWhiteSpace(fieldMeaning) ||
+            string.IsNullOrWhiteSpace(verificationEvidence))
+        {
+            throw new InvalidOperationException(
+                "IO raw XML fragments require FragmentSource, FieldMeaning, and VerificationEvidence. Use structured IO fields when the XML field meaning is not documented.");
+        }
+
+        if (string.IsNullOrWhiteSpace(targetParentPath) && string.IsNullOrWhiteSpace(defaultTargetParentPath))
+        {
+            throw new InvalidOperationException("IO raw XML fragments require TargetParentPath or a dedicated API supplied parent path.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(expectedElementName))
+        {
+            XElement parsed = XElement.Parse(fragmentXml!);
+            if (!string.Equals(parsed.Name.LocalName, expectedElementName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException($"Expected an IO '{expectedElementName}' fragment but received '{parsed.Name.LocalName}'.");
+            }
         }
     }
 
@@ -1350,14 +2170,19 @@ public sealed class TwinCatTsprojMutationService
 
     private static XElement FindOrCreateCanonicalTasksContainer(XDocument document)
     {
-        XElement root = document.Root ?? throw new InvalidOperationException("The .tsproj XML root element is missing.");
-        XElement project = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Project")
-            ?? AddChild(root, "Project");
-        XElement system = project.Elements().FirstOrDefault(element => element.Name.LocalName == "System")
-            ?? AddChild(project, "System");
+        XElement system = FindOrCreateProjectSystem(document);
         XElement tasks = system.Elements().FirstOrDefault(element => element.Name.LocalName == "Tasks")
             ?? AddChild(system, "Tasks");
         return tasks;
+    }
+
+    private static XElement FindOrCreateProjectSystem(XDocument document)
+    {
+        XElement root = document.Root ?? throw new InvalidOperationException("The .tsproj XML root element is missing.");
+        XElement project = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Project")
+            ?? AddChild(root, "Project");
+        return project.Elements().FirstOrDefault(element => element.Name.LocalName == "System")
+            ?? AddChild(project, "System");
     }
 
     private static void EnsureParameterValueInDocument(XDocument document, EnsureParameterValueRequest request)
@@ -1403,10 +2228,26 @@ public sealed class TwinCatTsprojMutationService
         XElement instance = FindInstance(document, request.InstanceName);
         XElement pointers = GetOrCreateChildElement(GetOrCreateTmcDesc(instance), "DataPointerValues");
         XElement value = FindNamedValue(pointers, request.PointerName) ?? CreateNamedValue(pointers, request.PointerName);
-        SetOrCreateChildElementValue(value, "OTCID", request.ObjectId);
-        SetOrCreateChildElementValue(value, "AreaNo", request.AreaNo.ToString(CultureInfo.InvariantCulture));
-        SetOrCreateChildElementValue(value, "ByteOffs", request.ByteOffset.ToString(CultureInfo.InvariantCulture));
-        SetOrCreateChildElementValue(value, "ByteSize", request.ByteSize.ToString(CultureInfo.InvariantCulture));
+        XElement target = value;
+        if (request.ArrayIndex.HasValue)
+        {
+            target.Elements()
+                .Where(element => element.Name.LocalName is "OTCID" or "AreaNo" or "ByteOffs" or "ByteSize")
+                .Remove();
+            target = FindDataPointerArrayEntry(value, request.ArrayIndex.Value) ?? AddChild(value, "Data");
+            target.SetAttributeValue("ArrayIndex", request.ArrayIndex.Value.ToString(CultureInfo.InvariantCulture));
+        }
+        else
+        {
+            target.Elements()
+                .Where(element => element.Name.LocalName == "Data")
+                .Remove();
+        }
+
+        SetOrCreateChildElementValue(target, "OTCID", request.ObjectId);
+        SetOrCreateChildElementValue(target, "AreaNo", request.AreaNo.ToString(CultureInfo.InvariantCulture));
+        SetOrCreateChildElementValue(target, "ByteOffs", request.ByteOffset.ToString(CultureInfo.InvariantCulture));
+        SetOrCreateChildElementValue(target, "ByteSize", request.ByteSize.ToString(CultureInfo.InvariantCulture));
     }
 
     private static void ValidateDataPointerRequest(EnsureDataPointerValueRequest request)
@@ -1441,6 +2282,11 @@ public sealed class TwinCatTsprojMutationService
         if (request.ByteSize <= 0)
         {
             throw new InvalidOperationException("Data pointer ByteSize must be greater than 0.");
+        }
+
+        if (request.ArrayIndex < 0)
+        {
+            throw new InvalidOperationException("Data pointer ArrayIndex must be greater than or equal to 0.");
         }
     }
 
@@ -1510,6 +2356,131 @@ public sealed class TwinCatTsprojMutationService
             element.Name.LocalName == "Instance" &&
             string.Equals(GetChildElementValue(element, "Name"), instanceName, StringComparison.OrdinalIgnoreCase))
         ?? throw new InvalidOperationException($"Instance '{instanceName}' was not found in the .tsproj.");
+
+    private static Dictionary<string, XElement> ReadTmcModulesByName(XDocument tmcDocument)
+    {
+        XElement? modules = tmcDocument.Root?.Elements().FirstOrDefault(element => element.Name.LocalName == "Modules");
+        if (modules is null)
+        {
+            return new Dictionary<string, XElement>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        Dictionary<string, XElement> result = new(StringComparer.OrdinalIgnoreCase);
+        foreach (XElement module in modules.Elements().Where(element => element.Name.LocalName == "Module"))
+        {
+            string? name = GetChildElementValue(module, "Name") ?? GetAttributeValue(module, "ClassName");
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                result[name] = module;
+            }
+        }
+
+        return result;
+    }
+
+    private static XElement CreateTmcDescFromModule(
+        XElement module,
+        XElement? oldTmcDesc,
+        CppInstanceTmcDescRefreshItem item,
+        bool preserveValueSections,
+        bool preserveContextValues)
+    {
+        string moduleGuid = GetAttributeValue(module, "GUID")
+            ?? GetChildElementValue(module, "CLSID")
+            ?? throw new InvalidOperationException($"Module '{item.ModuleClassName}' does not expose a GUID.");
+        string classFactory = GetAttributeValue(module.Elements().FirstOrDefault(element => element.Name.LocalName == "CLSID") ?? module, "ClassFactory")
+            ?? "MotionControl";
+        string classFactoryId = item.ClassFactoryId
+            ?? GetAttributeValue(oldTmcDesc ?? module, "ClassFactoryId")
+            ?? $"C++ Module Vendor|{classFactory}|0.0.0.1";
+
+        XElement desc = new("TmcDesc");
+        desc.SetAttributeValue("GUID", NormalizeGuidAttribute(moduleGuid));
+        desc.SetAttributeValue("ClassFactoryId", classFactoryId);
+
+        foreach (XElement child in module.Elements())
+        {
+            if (child.Name.LocalName is "Deployment" or "Properties")
+            {
+                continue;
+            }
+
+            if (preserveContextValues &&
+                child.Name.LocalName == "Contexts" &&
+                oldTmcDesc?.Elements().FirstOrDefault(element => element.Name.LocalName == "Contexts") is XElement oldContexts)
+            {
+                desc.Add(CloneWithoutNamespace(oldContexts));
+                continue;
+            }
+
+            desc.Add(CloneWithoutNamespace(child));
+        }
+
+        if (preserveValueSections)
+        {
+            RemoveTmcDescValueSections(desc);
+            AddPreservedOrEmptyValueSection(desc, oldTmcDesc, "ParameterValues");
+            AddPreservedOrEmptyValueSection(desc, oldTmcDesc, "InterfacePointerValues");
+            AddPreservedOrEmptyValueSection(desc, oldTmcDesc, "DataPointerValues");
+        }
+
+        return desc;
+    }
+
+    private static void RemoveTmcDescValueSections(XElement tmcDesc)
+    {
+        foreach (XElement section in tmcDesc.Elements()
+                     .Where(element => element.Name.LocalName is "ParameterValues" or "InterfacePointerValues" or "DataPointerValues")
+                     .ToList())
+        {
+            section.Remove();
+        }
+    }
+
+    private static void AddPreservedOrEmptyValueSection(XElement tmcDesc, XElement? oldTmcDesc, string localName)
+    {
+        XElement? oldSection = oldTmcDesc?.Elements().FirstOrDefault(element => element.Name.LocalName == localName);
+        tmcDesc.Add(oldSection is null ? new XElement(localName) : CloneWithoutNamespace(oldSection));
+    }
+
+    private static void ImportDataTypesFromTmc(XDocument document, XDocument tmcDocument)
+    {
+        XElement? sourceDataTypes = tmcDocument.Root?.Elements().FirstOrDefault(element => element.Name.LocalName == "DataTypes");
+        if (sourceDataTypes is null || !sourceDataTypes.Elements().Any(element => element.Name.LocalName == "DataType"))
+        {
+            return;
+        }
+
+        XElement root = document.Root ?? throw new InvalidOperationException("The .tsproj XML root element is missing.");
+        XElement imported = CloneWithoutNamespace(sourceDataTypes);
+        XElement? existing = root.Elements().FirstOrDefault(element => element.Name.LocalName == "DataTypes");
+        if (existing is null)
+        {
+            XElement? project = root.Elements().FirstOrDefault(element => element.Name.LocalName == "Project");
+            if (project is null)
+            {
+                root.Add(imported);
+            }
+            else
+            {
+                project.AddBeforeSelf(imported);
+            }
+        }
+        else
+        {
+            existing.ReplaceWith(imported);
+        }
+    }
+
+    private static string NormalizeGuidAttribute(string value)
+    {
+        if (!Guid.TryParse(value, out Guid guid))
+        {
+            throw new InvalidOperationException($"Invalid GUID text: '{value}'.");
+        }
+
+        return guid.ToString("B").ToUpperInvariant();
+    }
 
     private static XElement GetOrCreateTmcDesc(XElement instance) =>
         instance.Elements().FirstOrDefault(element => element.Name.LocalName == "TmcDesc")
@@ -1585,6 +2556,12 @@ public sealed class TwinCatTsprojMutationService
         container.Elements().FirstOrDefault(element =>
             element.Name.LocalName == "Value" &&
             string.Equals(GetChildElementValue(element, "Name"), name, StringComparison.OrdinalIgnoreCase));
+
+    private static XElement? FindDataPointerArrayEntry(XElement value, int arrayIndex) =>
+        value.Elements().FirstOrDefault(element =>
+            element.Name.LocalName == "Data" &&
+            int.TryParse(GetAttributeValue(element, "ArrayIndex"), out int existingIndex) &&
+            existingIndex == arrayIndex);
 
     private static XElement CreateNamedValue(XElement container, string name)
     {
@@ -1730,6 +2707,33 @@ public sealed class TwinCatTsprojMutationService
             {
                 case XElement childElement:
                     clone.Add(CloneWithNamespace(childElement, targetNamespace));
+                    break;
+                default:
+                    clone.Add(node);
+                    break;
+            }
+        }
+
+        return clone;
+    }
+
+    private static XElement CloneWithoutNamespace(XElement source)
+    {
+        XElement clone = new(source.Name.LocalName);
+        foreach (XAttribute attribute in source.Attributes())
+        {
+            if (!attribute.IsNamespaceDeclaration)
+            {
+                clone.SetAttributeValue(attribute.Name, attribute.Value);
+            }
+        }
+
+        foreach (XNode node in source.Nodes())
+        {
+            switch (node)
+            {
+                case XElement childElement:
+                    clone.Add(CloneWithoutNamespace(childElement));
                     break;
                 default:
                     clone.Add(node);

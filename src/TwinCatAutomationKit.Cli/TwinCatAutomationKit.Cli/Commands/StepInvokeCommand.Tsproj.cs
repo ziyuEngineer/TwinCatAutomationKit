@@ -204,7 +204,7 @@ internal static partial class StepInvokeCommand
     private static StepExecutionOutcome ExecuteTsprojSetTaskAffinity(IReadOnlyDictionary<string, string> options)
     {
         string taskName = CliOptionParser.RequireOption(options, "task-name");
-        string affinity = CliOptionParser.RequireOption(options, "affinity");
+        string? affinity = CliOptionParser.GetOption(options, "affinity");
         bool enableAdtTasks = CliOptionParser.GetBoolOption(options, "enable-adt-tasks", true);
 
         return RunTsprojOperation(
@@ -267,6 +267,30 @@ internal static partial class StepInvokeCommand
                         clsid,
                         classFactory));
                 return StepExecutionOutcome.Success($"PLC instance metadata {plcInstanceName} updated.", CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojSetCppInstanceMetadata(IReadOnlyDictionary<string, string> options)
+    {
+        string instanceName = CliOptionParser.RequireOption(options, "instance-name");
+        bool? disabled = TryGetNullableBool(options, "disabled");
+        string? keepUnrestoredLinks = CliOptionParser.GetOption(options, "keep-unrestored-links");
+        string? classFactoryId = CliOptionParser.GetOption(options, "class-factory-id");
+        string? objectId = CliOptionParser.GetOption(options, "object-id");
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.SetCppInstanceMetadata(
+                    projectPath,
+                    new SetCppInstanceMetadataRequest(
+                        instanceName,
+                        disabled,
+                        keepUnrestoredLinks,
+                        classFactoryId,
+                        objectId));
+                return StepExecutionOutcome.Success($"C++ instance metadata {instanceName} updated.", CreateOutputs(("projectPath", projectPath)));
             });
     }
 
@@ -396,6 +420,185 @@ internal static partial class StepInvokeCommand
             });
     }
 
+    private static StepExecutionOutcome ExecuteTsprojEnsureIoSection(IReadOnlyDictionary<string, string> options)
+    {
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                EnsureIoSectionResult result = tsproj.EnsureIoSection(projectPath, new EnsureIoSectionRequest());
+                return StepExecutionOutcome.Success(
+                    result.Created ? "Project Io section created in tsproj." : "Project Io section already existed in tsproj.",
+                    CreateOutputs(
+                        ("projectPath", result.ProjectPath),
+                        ("created", result.Created ? "true" : "false"),
+                        ("deviceCount", result.DeviceCount.ToString())));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureIoDevice(IReadOnlyDictionary<string, string> options)
+    {
+        EnsureIoDeviceRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureIoDeviceRequest>(options)
+            : new EnsureIoDeviceRequest(
+                CliOptionParser.GetIntOption(options, "device-id", 0),
+                CliOptionParser.RequireOption(options, "name"),
+                CliOptionParser.GetIntOption(options, "dev-type", 0),
+                Disabled: TryGetNullableBool(options, "disabled"),
+                DevFlags: CliOptionParser.GetOption(options, "dev-flags"),
+                AmsPort: TryGetNullableInt(options, "ams-port"),
+                AmsNetId: CliOptionParser.GetOption(options, "ams-net-id"),
+                RemoteName: CliOptionParser.GetOption(options, "remote-name"),
+                InfoImageId: TryGetNullableInt(options, "info-image-id"));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureIoDevice(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    $"IO Device {request.DeviceId} updated in tsproj.",
+                    CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureEthercatBox(IReadOnlyDictionary<string, string> options)
+    {
+        EnsureEthercatBoxRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureEthercatBoxRequest>(options)
+            : new EnsureEthercatBoxRequest(
+                CliOptionParser.GetIntOption(options, "device-id", 0),
+                TryGetNullableInt(options, "parent-box-id"),
+                CliOptionParser.GetIntOption(options, "box-id", 0),
+                CliOptionParser.RequireOption(options, "name"),
+                CliOptionParser.GetIntOption(options, "box-type", 0),
+                Disabled: TryGetNullableBool(options, "disabled"),
+                BoxFlags: CliOptionParser.GetOption(options, "box-flags"),
+                ImageId: TryGetNullableInt(options, "image-id"));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureEthercatBox(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    $"EtherCAT Box {request.BoxId} updated in tsproj.",
+                    CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureIoPdo(IReadOnlyDictionary<string, string> options)
+    {
+        EnsureIoPdoRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureIoPdoRequest>(options)
+            : new EnsureIoPdoRequest(
+                CliOptionParser.GetIntOption(options, "device-id", 0),
+                CliOptionParser.GetIntOption(options, "box-id", 0),
+                CliOptionParser.RequireOption(options, "name"),
+                CliOptionParser.RequireOption(options, "index"),
+                InOut: CliOptionParser.GetOption(options, "in-out"),
+                Flags: CliOptionParser.GetOption(options, "flags"),
+                SyncMan: TryGetNullableInt(options, "sync-man"),
+                Entries: ParseInlineIoPdoEntries(options),
+                ReplaceExistingEntries: CliOptionParser.GetBoolOption(options, "replace-existing-entries", true));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureIoPdo(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    $"IO PDO {request.Name} on Box {request.BoxId} updated in tsproj.",
+                    CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureIoBoxImage(IReadOnlyDictionary<string, string> options)
+    {
+        EnsureIoBoxImageRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureIoBoxImageRequest>(options)
+            : new EnsureIoBoxImageRequest(
+                CliOptionParser.GetIntOption(options, "device-id", 0),
+                CliOptionParser.GetIntOption(options, "box-id", 0),
+                CliOptionParser.GetIntOption(options, "image-id", 0));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureIoBoxImage(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    $"IO Box {request.BoxId} ImageId updated in tsproj.",
+                    CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureMappingInfo(IReadOnlyDictionary<string, string> options)
+    {
+        EnsureMappingInfoRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureMappingInfoRequest>(options)
+            : new EnsureMappingInfoRequest(
+                CliOptionParser.RequireOption(options, "identifier"),
+                CliOptionParser.RequireOption(options, "id"));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureMappingInfo(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    $"MappingInfo {request.Id} updated in tsproj.",
+                    CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureIoMappingLink(IReadOnlyDictionary<string, string> options)
+    {
+        EnsureIoMappingLinkRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureIoMappingLinkRequest>(options)
+            : new EnsureIoMappingLinkRequest(
+                CliOptionParser.RequireOption(options, "owner-a-name"),
+                CliOptionParser.RequireOption(options, "owner-b-name"),
+                CliOptionParser.RequireOption(options, "var-a"),
+                CliOptionParser.RequireOption(options, "var-b"),
+                OwnerAPrefix: CliOptionParser.GetOption(options, "owner-a-prefix"),
+                OwnerAType: CliOptionParser.GetOption(options, "owner-a-type"),
+                OwnerBPrefix: CliOptionParser.GetOption(options, "owner-b-prefix"),
+                OwnerBType: CliOptionParser.GetOption(options, "owner-b-type"));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureIoMappingLink(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    $"IO mapping link {request.OwnerAName}:{request.VarA} -> {request.OwnerBName}:{request.VarB} updated.",
+                    CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojApplyIoTopologyPlan(IReadOnlyDictionary<string, string> options)
+    {
+        ApplyIoTopologyPlanRequest request = ReadJsonPayload<ApplyIoTopologyPlanRequest>(options);
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                ApplyIoTopologyPlanResult result = tsproj.ApplyIoTopologyPlan(projectPath, request);
+                return StepExecutionOutcome.Success(
+                    result.Summary,
+                    CreateOutputs(
+                        ("projectPath", result.ProjectPath),
+                        ("deviceCount", result.DeviceCount.ToString()),
+                        ("boxCount", result.BoxCount.ToString()),
+                        ("pdoCount", result.PdoCount.ToString()),
+                        ("boxImageCount", result.BoxImageCount.ToString()),
+                        ("mappingInfoCount", result.MappingInfoCount.ToString()),
+                        ("linkCount", result.LinkCount.ToString())));
+            });
+    }
+
     private static StepExecutionOutcome ExecuteTsprojReplaceDataTypesSection(IReadOnlyDictionary<string, string> options)
     {
         string dataTypesXml = ReadTextPayload(options, "data-types-xml", "xml", "xml-file");
@@ -421,6 +624,26 @@ internal static partial class StepInvokeCommand
             {
                 tsproj.ReplaceSystemSettingsSection(projectPath, new ReplaceSystemSettingsSectionRequest(settingsXml, insertBeforeTasks));
                 return StepExecutionOutcome.Success("System Settings section replaced in tsproj.", CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojEnsureSystemSettings(IReadOnlyDictionary<string, string> options)
+    {
+        int? cpuId = TryGetNullableInt(options, "cpu-id");
+        int? ioIdleTaskPriority = TryGetNullableInt(options, "io-idle-task-priority");
+        bool insertBeforeTasks = CliOptionParser.GetBoolOption(options, "insert-before-tasks", true);
+
+        if (!cpuId.HasValue && !ioIdleTaskPriority.HasValue)
+        {
+            throw new InvalidOperationException("tsproj.ensure-system-settings requires at least --cpu-id or --io-idle-task-priority.");
+        }
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                tsproj.EnsureSystemSettings(projectPath, new EnsureSystemSettingsRequest(cpuId, ioIdleTaskPriority, insertBeforeTasks));
+                return StepExecutionOutcome.Success("System Settings ensured in tsproj.", CreateOutputs(("projectPath", projectPath)));
             });
     }
 
@@ -500,6 +723,41 @@ internal static partial class StepInvokeCommand
             {
                 tsproj.ApplyInstanceDataPointerPlan(projectPath, request);
                 return StepExecutionOutcome.Success($"Instance data pointer plan applied with {request.Items.Count} item(s).", CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojRefreshCppInstanceTmcDesc(IReadOnlyDictionary<string, string> options)
+    {
+        RefreshCppInstanceTmcDescRequest request = ReadJsonPayload<RefreshCppInstanceTmcDescRequest>(options);
+        string? projectTmcPath = CliOptionParser.GetOption(options, "project-tmc-path", "tmc-path");
+        if (!string.IsNullOrWhiteSpace(projectTmcPath))
+        {
+            request = request with { ProjectTmcPath = projectTmcPath };
+        }
+
+        string? cppProjectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name");
+        if (!string.IsNullOrWhiteSpace(cppProjectName))
+        {
+            request = request with { CppProjectName = cppProjectName };
+        }
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                RefreshCppInstanceTmcDescResult result = tsproj.RefreshCppInstanceTmcDesc(projectPath, request);
+                IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+                    ("projectPath", result.ProjectPath),
+                    ("refreshedCount", result.RefreshedCount.ToString()),
+                    ("errorsJson", System.Text.Json.JsonSerializer.Serialize(result.Errors, JsonOptions)));
+
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(result.Summary, outputs)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary,
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
             });
     }
 
@@ -616,12 +874,13 @@ internal static partial class StepInvokeCommand
         int areaNo = CliOptionParser.GetIntOption(options, "area-no", 0);
         int byteOffset = CliOptionParser.GetIntOption(options, "byte-offset", 0);
         int byteSize = CliOptionParser.GetIntOption(options, "byte-size", 0);
+        int? arrayIndex = TryGetNullableInt(options, "array-index");
 
         return RunTsprojOperation(
             options,
             (tsproj, projectPath) =>
             {
-                tsproj.EnsureDataPointerValue(projectPath, new EnsureDataPointerValueRequest(instanceName, pointerName, objectId, areaNo, byteOffset, byteSize));
+                tsproj.EnsureDataPointerValue(projectPath, new EnsureDataPointerValueRequest(instanceName, pointerName, objectId, areaNo, byteOffset, byteSize, arrayIndex));
                 return StepExecutionOutcome.Success($"Data pointer {pointerName} on {instanceName} updated.", CreateOutputs(("projectPath", projectPath)));
             });
     }

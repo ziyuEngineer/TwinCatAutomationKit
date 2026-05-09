@@ -87,6 +87,7 @@ $allKinds = @(
     "tsproj.set-task-affinity",
     "tsproj.set-plc-project-properties",
     "tsproj.set-plc-instance-metadata",
+    "tsproj.set-cpp-instance-metadata",
     "tsproj.clear-plc-instance-vars",
     "tsproj.ensure-plc-instance-vars-group",
     "tsproj.clear-plc-init-symbols",
@@ -94,8 +95,17 @@ $allKinds = @(
     "tsproj.clear-mappings",
     "tsproj.replace-mappings-section",
     "tsproj.replace-project-io-section",
+    "tsproj.ensure-io-section",
+    "tsproj.ensure-io-device",
+    "tsproj.ensure-ethercat-box",
+    "tsproj.ensure-io-pdo",
+    "tsproj.ensure-io-box-image",
+    "tsproj.ensure-mapping-info",
+    "tsproj.ensure-io-mapping-link",
+    "tsproj.apply-io-topology-plan",
     "tsproj.replace-data-types-section",
     "tsproj.replace-system-settings-section",
+    "tsproj.ensure-system-settings",
     "tsproj.clear-instance-parameter-values",
     "tsproj.clear-instance-data-pointer-values",
     "tsproj.apply-instance-parameter-plan",
@@ -244,11 +254,79 @@ function Write-PayloadFiles {
 
     @"
 <Io>
-  <Device Name="CliVerifyIo">
+  <Device Id="30" Disabled="true" DevType="111" DevFlags="#x0003">
+    <Name>CliVerifyIo</Name>
     <Comment>created by verify-all-invoke-steps.ps1</Comment>
   </Device>
 </Io>
 "@ | Set-Content -LiteralPath (Join-Path $payloadDir "io.xml") -Encoding UTF8
+
+    @"
+{
+  "devices": [
+    {
+      "deviceId": 32,
+      "name": "Cli Device 32 (EtherCAT)",
+      "devType": 111,
+      "disabled": true,
+      "devFlags": "#x0003",
+      "amsPort": 28632,
+      "amsNetId": "127.0.0.1.32.1",
+      "addressInfo": {
+        "tcComObjectId": "#x03010032"
+      }
+    }
+  ],
+  "boxes": [
+    {
+      "deviceId": 32,
+      "boxId": 3201,
+      "name": "Cli Box 3201 (EK1100)",
+      "boxType": 9099,
+      "imageId": 1002,
+      "etherCatAttributes": [
+        { "name": "SlaveType", "value": "1" },
+        { "name": "Desc", "value": "EK1100" }
+      ]
+    }
+  ],
+  "pdos": [
+    {
+      "deviceId": 32,
+      "boxId": 3201,
+      "name": "PLC_Inputs",
+      "index": "#x1a00",
+      "flags": "#x0000",
+      "syncMan": 3,
+      "entries": [
+        {
+          "name": "Input",
+          "index": "#x6000",
+          "sub": "#x01",
+          "type": "BIT"
+        }
+      ]
+    }
+  ],
+  "mappingInfos": [
+    {
+      "identifier": "{00000000-0020-0201-4000-010132000101}",
+      "id": "#x02030040"
+    }
+  ],
+  "links": [
+    {
+      "ownerAName": "TIID^Cli Device 32 (EtherCAT)",
+      "ownerBName": "TIPC^$plcProjectName^$plcInstanceName",
+      "varA": "Cli Box 3201 (EK1100)^PLC_Inputs^Input",
+      "varB": "PlcTask Inputs^MAIN.nValue",
+      "linkAttributes": [
+        { "name": "Size", "value": "1" }
+      ]
+    }
+  ]
+}
+"@ | Set-Content -LiteralPath (Join-Path $payloadDir "io-topology-plan.json") -Encoding UTF8
 
     @"
 <DataTypes>
@@ -317,6 +395,15 @@ function Write-PayloadFiles {
     "areaNo": 0,
     "byteOffset": 16,
     "byteSize": 4
+  },
+  {
+    "instanceName": "$($script:cppInstanceName)",
+    "pointerName": "IndexedData",
+    "objectId": "$($script:taskObjectId)",
+    "areaNo": 3,
+    "byteOffset": 24,
+    "byteSize": 8,
+    "arrayIndex": 1
   }
 ]
 "@ | Set-Content -LiteralPath (Join-Path $payloadDir "data-pointer-plan.json") -Encoding UTF8
@@ -480,6 +567,7 @@ Invoke-DotnetCli "tsproj.bind-plc-instance-task" @("--project-path=$projectPath"
 Invoke-DotnetCli "tsproj.set-task-affinity" @("--project-path=$projectPath", "--task-name=Task1", "--affinity=#x1", "--enable-adt-tasks=true")
 Invoke-DotnetCli "tsproj.set-plc-project-properties" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--ams-port=851", "--reload-tmc=true")
 Invoke-DotnetCli "tsproj.set-plc-instance-metadata" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--plc-instance-name=$plcInstanceName", "--tc-sm-class=PlcTask", "--keep-unrestored-links=2", "--class-factory=$plcProjectName")
+Invoke-DotnetCli "tsproj.set-cpp-instance-metadata" @("--project-path=$projectPath", "--instance-name=$($script:cppInstanceName)", "--disabled=true", "--keep-unrestored-links=2")
 Invoke-DotnetCli "tsproj.ensure-plc-instance-vars-group" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--plc-instance-name=$plcInstanceName", "--group-name=PlcTask Outputs", "--var-grp-type=2", "--area-no=1", "--variables=MAIN.nValue:DINT:0:0;MAIN.rValue:REAL:32:4")
 Invoke-DotnetCli "tsproj.clear-plc-instance-vars" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--plc-instance-name=$plcInstanceName")
 Invoke-DotnetCli "tsproj.ensure-plc-instance-vars-group" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--plc-instance-name=$plcInstanceName", "--group-name=PlcTask Outputs", "--var-grp-type=2", "--area-no=1", "--variables=MAIN.nValue:DINT:0:0;MAIN.rValue:REAL:32:4")
@@ -488,8 +576,17 @@ Invoke-DotnetCli "tsproj.clear-plc-task-pou-oids" @("--project-path=$projectPath
 Invoke-DotnetCli "tsproj.clear-mappings" @("--project-path=$projectPath")
 Invoke-DotnetCli "tsproj.replace-mappings-section" @("--project-path=$projectPath", "--xml-file=$(Join-Path $payloadDir 'mappings.xml')")
 Invoke-DotnetCli "tsproj.replace-project-io-section" @("--project-path=$projectPath", "--xml-file=$(Join-Path $payloadDir 'io.xml')")
+Invoke-DotnetCli "tsproj.ensure-io-section" @("--project-path=$projectPath")
+Invoke-DotnetCli "tsproj.ensure-io-device" @("--project-path=$projectPath", "--device-id=31", "--name=Cli Device 31 (EtherCAT)", "--dev-type=111", "--disabled=true", "--dev-flags=#x0003", "--ams-port=28631", "--ams-net-id=127.0.0.1.31.1", "--remote-name=Cli Device 31 (EtherCAT)")
+Invoke-DotnetCli "tsproj.ensure-ethercat-box" @("--project-path=$projectPath", "--device-id=31", "--box-id=3101", "--name=Cli Box 3101 (EK1100)", "--box-type=9099", "--image-id=1000")
+Invoke-DotnetCli "tsproj.ensure-io-box-image" @("--project-path=$projectPath", "--device-id=31", "--box-id=3101", "--image-id=1001")
+Invoke-DotnetCli "tsproj.ensure-io-pdo" @("--project-path=$projectPath", "--device-id=31", "--box-id=3101", "--name=Channel 1", "--index=#x1600", "--in-out=1", "--flags=#x0011", "--sync-man=0", "--entries=Output:#x7000:#x01:BIT")
+Invoke-DotnetCli "tsproj.ensure-mapping-info" @("--project-path=$projectPath", "--identifier={00000000-0020-0201-3000-010131000101}", "--id=#x02030030")
+Invoke-DotnetCli "tsproj.ensure-io-mapping-link" @("--project-path=$projectPath", "--owner-a-name=TIID^Cli Device 31 (EtherCAT)", "--owner-b-name=TIXC^$cppProjectName^FileMutationCpp01", "--var-a=Cli Box 3101 (EK1100)^Channel 1^Output", "--var-b=Outputs^Power")
+Invoke-DotnetCli "tsproj.apply-io-topology-plan" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'io-topology-plan.json')")
 Invoke-DotnetCli "tsproj.replace-data-types-section" @("--project-path=$projectPath", "--xml-file=$(Join-Path $payloadDir 'datatypes.xml')", "--insert-before-project=true")
 Invoke-DotnetCli "tsproj.replace-system-settings-section" @("--project-path=$projectPath", "--xml-file=$(Join-Path $payloadDir 'settings.xml')", "--insert-before-tasks=true")
+Invoke-DotnetCli "tsproj.ensure-system-settings" @("--project-path=$projectPath", "--cpu-id=1", "--io-idle-task-priority=6", "--insert-before-tasks=true")
 Invoke-DotnetCli "tsproj.clear-instance-parameter-values" @("--project-path=$projectPath", "--instance-name=FileMutationCpp01")
 Invoke-DotnetCli "tsproj.apply-instance-parameter-plan" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'parameter-plan.json')")
 Invoke-DotnetCli "tsproj.apply-instance-interface-pointer-plan" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'interface-pointer-plan.json')")
@@ -499,7 +596,7 @@ Invoke-DotnetCli "tsproj.ensure-io-task-image" @("--project-path=$projectPath", 
 Invoke-DotnetCli "tsproj.ensure-task-pou-oid" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--plc-instance-name=$plcInstanceName", "--priority=15", "--object-id=$($script:taskObjectId)")
 Invoke-DotnetCli "tsproj.ensure-init-symbol" @("--project-path=$projectPath", "--plc-project-name=$plcProjectName", "--plc-instance-name=$plcInstanceName", "--symbol-name=MAIN.__TaskOid", "--object-id=$($script:taskObjectId)")
 Invoke-DotnetCli "tsproj.ensure-interface-pointer" @("--project-path=$projectPath", "--instance-name=FileMutationCpp01", "--pointer-name=CyclicCaller", "--object-id=$($script:taskObjectId)")
-Invoke-DotnetCli "tsproj.ensure-data-pointer" @("--project-path=$projectPath", "--instance-name=FileMutationCpp01", "--pointer-name=Inputs.Value", "--object-id=$($script:taskObjectId)", "--area-no=0", "--byte-offset=8", "--byte-size=4")
+Invoke-DotnetCli "tsproj.ensure-data-pointer" @("--project-path=$projectPath", "--instance-name=FileMutationCpp01", "--pointer-name=Inputs.Value", "--object-id=$($script:taskObjectId)", "--area-no=0", "--byte-offset=8", "--byte-size=4", "--array-index=0")
 Invoke-DotnetCli "tsproj.clear-unrestored-var-links" @("--project-path=$projectPath")
 Invoke-DotnetCli "tsproj.ensure-mapping-link" @("--project-path=$projectPath", "--owner-a-name=TIXC^$cppProjectName^FileMutationCpp01", "--owner-b-name=TIPC^$plcProjectName^$plcInstanceName", "--var-a=Outputs^Var 1", "--var-b=MAIN.nValue")
 Invoke-DotnetCli "tsproj.upsert-element" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'generic-element-upsert.json')")

@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Json;
 using TwinCatAutomationKit.Abstractions;
 using TwinCatAutomationKit.TwinCat;
 
@@ -245,6 +247,7 @@ internal static partial class StepInvokeCommand
         string cppProjectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
         int postPublishDelayMs = CliOptionParser.GetIntOption(options, "post-publish-delay-ms", 5000);
         int waitForUpdatedTmcTimeoutMs = CliOptionParser.GetIntOption(options, "wait-for-updated-tmc-timeout-ms", 30000);
+        bool runTmcCodeGeneratorFirst = CliOptionParser.GetBoolOption(options, "run-tmc-code-generator-first", false);
 
         return RunEngineeringOperation(
             options,
@@ -252,7 +255,7 @@ internal static partial class StepInvokeCommand
             {
                 PublishModulesResult result = engineering.PublishModules(
                     session,
-                    new PublishModulesRequest(cppProjectName, postPublishDelayMs, waitForUpdatedTmcTimeoutMs));
+                    new PublishModulesRequest(cppProjectName, postPublishDelayMs, waitForUpdatedTmcTimeoutMs, runTmcCodeGeneratorFirst));
                 return result.Succeeded
                     ? StepExecutionOutcome.Success(
                         $"PublishModules completed for {cppProjectName}.",
@@ -265,6 +268,96 @@ internal static partial class StepInvokeCommand
                             : [new EvidenceArtifact("updated-tmc", result.UpdatedTmcPath!, "tmc")])
                     : StepExecutionOutcome.Failed($"PublishModules did not produce a readable TMC for {cppProjectName}.");
             });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringStartTmcCodeGenerator(IReadOnlyDictionary<string, string> options)
+    {
+        string cppProjectName = CliOptionParser.RequireOption(options, "cpp-project-name", "project-name");
+        int postStartDelayMs = CliOptionParser.GetIntOption(options, "post-start-delay-ms", 500);
+        int waitForUpdatedTmcTimeoutMs = CliOptionParser.GetIntOption(options, "wait-for-updated-tmc-timeout-ms", 30000);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                StartTmcCodeGeneratorResult result = engineering.StartTmcCodeGenerator(
+                    session,
+                    new StartTmcCodeGeneratorRequest(cppProjectName, postStartDelayMs, waitForUpdatedTmcTimeoutMs));
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(
+                        $"TMC code generator completed for {cppProjectName}.",
+                        CreateOutputs(
+                            ("updatedTmcPath", result.UpdatedTmcPath),
+                            ("succeeded", result.Succeeded ? "true" : "false"),
+                            ("updated", result.Updated ? "true" : "false")),
+                        string.IsNullOrWhiteSpace(result.UpdatedTmcPath)
+                            ? Array.Empty<EvidenceArtifact>()
+                            : [new EvidenceArtifact("updated-tmc", result.UpdatedTmcPath!, "tmc")])
+                    : StepExecutionOutcome.Failed($"TMC code generator did not produce a readable TMC for {cppProjectName}.");
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringVerifyTmcDataAreas(IReadOnlyDictionary<string, string> options)
+    {
+        VerifyTmcDataAreasRequest request = ReadJsonPayload<VerifyTmcDataAreasRequest>(options);
+        string? projectTmcPath = CliOptionParser.GetOption(options, "project-tmc-path", "tmc-path");
+        if (!string.IsNullOrWhiteSpace(projectTmcPath))
+        {
+            request = request with { ProjectTmcPath = projectTmcPath };
+        }
+
+        TwinCatEngineeringService engineering = new();
+        VerifyTmcDataAreasResult result = engineering.VerifyTmcDataAreas(request);
+        IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+            ("projectTmcPath", result.ProjectTmcPath),
+            ("expectedModuleCount", result.ExpectedModuleCount.ToString(CultureInfo.InvariantCulture)),
+            ("matchedModuleCount", result.MatchedModuleCount.ToString(CultureInfo.InvariantCulture)),
+            ("errorsJson", JsonSerializer.Serialize(result.Errors, JsonOptions)));
+
+        return result.Succeeded
+            ? StepExecutionOutcome.Success(result.Summary, outputs)
+            : new StepExecutionOutcome(
+                StepExecutionStatus.Failed,
+                result.Summary,
+                outputs,
+                Array.Empty<EvidenceArtifact>());
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringApplyTmcModuleModel(IReadOnlyDictionary<string, string> options)
+    {
+        ApplyTmcModuleModelRequest request = ReadJsonPayload<ApplyTmcModuleModelRequest>(options);
+        string? projectTmcPath = CliOptionParser.GetOption(options, "project-tmc-path", "tmc-path");
+        if (!string.IsNullOrWhiteSpace(projectTmcPath))
+        {
+            request = request with { ProjectTmcPath = projectTmcPath };
+        }
+
+        string? projectName = CliOptionParser.GetOption(options, "cpp-project-name", "project-name");
+        if (!string.IsNullOrWhiteSpace(projectName))
+        {
+            request = request with { ProjectName = projectName };
+        }
+
+        string? servicesHeaderPath = CliOptionParser.GetOption(options, "generated-services-header-path", "services-header-path");
+        if (!string.IsNullOrWhiteSpace(servicesHeaderPath))
+        {
+            request = request with { GeneratedServicesHeaderPath = servicesHeaderPath };
+        }
+
+        string? generatedHeaderPaths = CliOptionParser.GetOption(options, "generated-header-paths", "generated-header-path");
+        if (!string.IsNullOrWhiteSpace(generatedHeaderPaths))
+        {
+            request = request with { GeneratedHeaderPaths = ParseOptionalList(generatedHeaderPaths) };
+        }
+
+        TwinCatEngineeringService engineering = new();
+        ApplyTmcModuleModelResult result = engineering.ApplyTmcModuleModel(request);
+        return StepExecutionOutcome.Success(
+            result.Summary,
+            CreateOutputs(
+                ("projectTmcPath", result.ProjectTmcPath),
+                ("moduleCount", result.ModuleCount.ToString(CultureInfo.InvariantCulture))),
+            [new EvidenceArtifact("project-tmc", result.ProjectTmcPath, "tmc")]);
     }
 
     private static StepExecutionOutcome ExecuteEngineeringAddModuleInstance(IReadOnlyDictionary<string, string> options)
