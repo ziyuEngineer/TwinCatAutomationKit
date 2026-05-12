@@ -62,7 +62,11 @@ public static class CliHelpText
         text.AppendLine("  --file=...             Required JSON plan path. Alias: --plan=...");
         text.AppendLine("  --dry-run=true         Resolve variables and print step options without executing TwinCAT/XAE work.");
         text.AppendLine("  --stop-on-failure=true Stop after the first failed step. Default: true.");
+        text.AppendLine("  --command-timeout-ms=... Wall-clock timeout for each step; a timeout always stops the plan.");
+        text.AppendLine("  --reuse-engineering-session=true Keep one VS/XAE DTE session for adjacent engineering/cpp steps.");
         text.AppendLine("  --summary=...          Optional JSON summary output path.");
+        text.AppendLine("  --var:name=value       Override a plan variable, for example --var:root=D:\\t\\run1.");
+        text.AppendLine("  --var=name=value;...   Override multiple variables in one option.");
         text.AppendLine();
         text.AppendLine("Plan features:");
         text.AppendLine("  variables              Reusable strings such as root, solutionPath, projectPath.");
@@ -74,7 +78,9 @@ public static class CliHelpText
         text.AppendLine();
         text.AppendLine("Examples:");
         text.AppendLine("  run-plan --file=examples\\json-plans\\complex-full-project.json --dry-run=true");
+        text.AppendLine("  run-plan --file=examples\\json-plans\\complex-full-project.json --dry-run --var:root=D:\\t\\complex-run");
         text.AppendLine("  run-plan --file=examples\\json-plans\\complex-full-project.json --summary=D:\\t\\complex-plan-summary.json");
+        text.AppendLine("  run-plan --file=examples\\json-plans\\complex-full-project.json --reuse-engineering-session=true --summary=D:\\t\\complex-plan-summary.json");
         text.AppendLine();
         text.AppendLine("Documentation:");
         text.AppendLine("  docs\\cli\\json-plan.md");
@@ -100,6 +106,11 @@ public static class CliHelpText
         text.AppendLine("Engineering-session options:");
         text.AppendLine("  --visible=false");
         text.AppendLine("  --startup-delay-ms=8000");
+        text.AppendLine("  --suppress-ui=true");
+        text.AppendLine("  --enable-dialog-auto-dismiss=true Watch newly launched VS/TcXaeShell for modal prompts.");
+        text.AppendLine("  --dialog-poll-interval-ms=500");
+        text.AppendLine("  --attach-to-existing=false Avoid attaching to stale VS/TcXaeShell sessions in unattended runs.");
+        text.AppendLine("  --command-timeout-ms=... Wall-clock timeout for this step.");
         text.AppendLine();
         text.AppendLine("Supported step kinds:");
         foreach (string kind in StepInvocationCatalog.SupportedKinds)
@@ -119,6 +130,8 @@ public static class CliHelpText
         text.AppendLine("  invoke-step --kind=engineering.create-module --solution-path=D:\\t\\demo\\Demo.sln --cpp-project-name=CppBase --module-name=PipelineModule");
         text.AppendLine("  invoke-step --kind=tsproj.ensure-parameter --solution-path=D:\\t\\demo\\Demo.sln --instance-name=CppInst01 --parameter-name=Parameter.data1 --value-text=10");
         text.AppendLine("  invoke-step --kind=tsproj.ensure-mapping-link --solution-path=D:\\t\\demo\\Demo.sln --owner-a-name=TIXC^Demo^CppInst01 --owner-b-name=TIPC^PlcBase^PlcInst01 --var-a=Outputs.Var1 --var-b=MAIN.nValue");
+        text.AppendLine("  invoke-step --kind=validation.mark-event-log-window --marker-file=D:\\t\\demo\\tcsysrv-marker.json");
+        text.AppendLine("  invoke-step --kind=validation.assert-event-log-window --marker-file=D:\\t\\demo\\tcsysrv-marker.json --fail-message-contains=\"AdsError: 1792;FPU invalid operation\"");
         text.AppendLine("  invoke-step --kind=validation.ads-read-symbols --net-id=local --port=851 \"--symbols=MAIN.nSeed:UInt32;MAIN.bPipelineOk:Boolean\"");
         return text.ToString().TrimEnd();
     }

@@ -22,6 +22,12 @@ internal sealed class IntegrationTestConfig
     /// <summary>Milliseconds to wait after LaunchVisualStudio before issuing COM calls.</summary>
     public int StartupDelayMs { get; init; } = 8000;
 
+    /// <summary>Maximum wall-clock time for the default integration runner before it kills the child process tree.</summary>
+    public int RunnerTimeoutMs { get; init; } = 600000;
+
+    /// <summary>Maximum time to wait for Visual Studio DTE COM activation.</summary>
+    public int DteLaunchTimeoutMs { get; init; } = 60000;
+
     /// <summary>
     /// Reserved for future use. Not consumed by the current integration test suite.
     ///
@@ -141,8 +147,10 @@ internal sealed class IntegrationTestConfig
             AmsNetId = GetEnvironmentText("TAK_INTEGRATION_AMS_NET_ID") ?? config.AmsNetId,
             AdsPort = GetEnvironmentInt("TAK_INTEGRATION_ADS_PORT") ?? config.AdsPort,
             StartupDelayMs = GetEnvironmentInt("TAK_INTEGRATION_STARTUP_DELAY_MS") ?? config.StartupDelayMs,
+            RunnerTimeoutMs = GetEnvironmentInt("TAK_INTEGRATION_RUNNER_TIMEOUT_MS") ?? config.RunnerTimeoutMs,
+            DteLaunchTimeoutMs = GetEnvironmentInt("TAK_INTEGRATION_DTE_LAUNCH_TIMEOUT_MS") ?? config.DteLaunchTimeoutMs,
             CppModuleWizardId = GetEnvironmentText("TAK_INTEGRATION_CPP_MODULE_WIZARD_ID") ?? config.CppModuleWizardId,
-            WorkRootBase = GetEnvironmentText("TAK_INTEGRATION_WORK_ROOT_BASE") ?? config.WorkRootBase,
+            WorkRootBase = ResolveWritableWorkRootBase(GetEnvironmentText("TAK_INTEGRATION_WORK_ROOT_BASE") ?? config.WorkRootBase),
             PreserveArtifacts = GetEnvironmentBool("TAK_INTEGRATION_PRESERVE_ARTIFACTS") ?? config.PreserveArtifacts,
             EnableActivation = GetEnvironmentBool("TAK_INTEGRATION_ENABLE_ACTIVATION") ?? config.EnableActivation,
             EnableAdsRead = GetEnvironmentBool("TAK_INTEGRATION_ENABLE_ADS_READ") ?? config.EnableAdsRead,
@@ -161,6 +169,62 @@ internal sealed class IntegrationTestConfig
         result.IsExplicitConfig = config.IsExplicitConfig;
         result.ConfigPath = config.ConfigPath;
         return result;
+    }
+
+    private static string ResolveWritableWorkRootBase(string configuredWorkRoot)
+    {
+        if (CanCreateDirectory(configuredWorkRoot))
+        {
+            return configuredWorkRoot;
+        }
+
+        string fallback = Path.Combine(FindRepositoryRoot() ?? AppContext.BaseDirectory, "t");
+        return CanCreateDirectory(fallback)
+            ? fallback
+            : configuredWorkRoot;
+    }
+
+    private static string? FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "TwinCatAutomationKit.sln")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
+    }
+
+    private static bool CanCreateDirectory(string directory)
+    {
+        try
+        {
+            Directory.CreateDirectory(directory);
+            string probeDirectory = Path.Combine(directory, ".tak-write-probe-" + Guid.NewGuid().ToString("N")[..8]);
+            Directory.CreateDirectory(probeDirectory);
+            string probeFile = Path.Combine(probeDirectory, "probe.tmp");
+            File.WriteAllText(probeFile, "probe");
+            try
+            {
+                File.Delete(probeFile);
+                Directory.Delete(probeDirectory);
+            }
+            catch
+            {
+                // Leftover probe artifacts are harmless; the important check is child-directory write access.
+            }
+
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string? GetEnvironmentText(string name)

@@ -10,8 +10,8 @@ English summary: This document explains why the integration suite groups the pub
 
 当前默认 coverage 口径是：
 
-- `TwinCatStepCatalog.All` 里共有 69 个 public step。
-- 默认真实 TwinCAT 测试必须覆盖 66 个 step/interface。
+- `TwinCatStepCatalog.All` 里共有 85 个 public step。
+- 默认真实 TwinCAT 测试必须覆盖 82 个 step/interface。
 - 3 个 OEM signing certificate/private-key step 明确排除：
   - `signing.grant-certificate`
   - `signing.sign-twincat-binary`
@@ -25,13 +25,52 @@ English summary: This document explains why the integration suite groups the pub
 - README 是否提到每个 step kind。
 - 只有上述 3 个 signing certificate step 可以不进入默认真实执行集合。
 
-因此，“7 个测试通过”的含义不是“只测了 7 个接口”，而是 66 个默认 step/interface 被组织进 7 个真实机器场景里验证，并由 coverage contract 防止遗漏。
+因此，“7 个测试通过”的含义不是“只测了 7 个接口”，而是 82 个默认 step/interface 被组织进 7 个真实机器场景里验证，并由 coverage contract 防止遗漏。
 
 ## 运行方式
 
 ```powershell
 dotnet run --project .\tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests.csproj
 ```
+
+默认入口会启动一个 child process 跑真实测试，并用 `TAK_INTEGRATION_RUNNER_TIMEOUT_MS` 控制总超时，默认 `600000` ms。DTE COM activation 另有 `TAK_INTEGRATION_DTE_LAUNCH_TIMEOUT_MS`，默认 `60000` ms。`engineering.activate-configuration` 自身还有 `ActivationTimeoutMs`，默认 `120000` ms，用来限制 `ITcSysManager.ActivateConfiguration` 和 restart。这样 VS/XAE 弹窗、DTE COM hang 或无响应 `devenv.exe` 不会让无人值守测试无限等待；超时后父进程会杀掉 child process tree 并返回失败。CLI `invoke-step` / `run-plan --command-timeout-ms` 还会清理本次 step 超时窗口中新启动的 `devenv.exe` / `TcXaeShell.exe` host，运行前已经存在的 IDE 不会被清理。复杂 JSON plan 可用 `run-plan --reuse-engineering-session=true` 复用连续 DTE-backed steps 的 session；低风险复用 engineering/cpp step 会关闭 timeout worker，但 launch/open/export/build/activation 这些高风险 step 仍保留 command timeout，并在 timeout 后 abandon 当前复用 session。
+
+CLI 项目默认设置 `UseAppHost=false`。这样 `dotnet run` / `dotnet <TwinCatAutomationKit.Cli.dll>` 仍可执行，但构建不会依赖可锁定的 `TwinCatAutomationKit.Cli.exe` apphost；无人值守验证即使遗留了旧 CLI 进程，也不会因为 exe 文件被占用而把后续 build 变成失败。
+
+真实 DTE session 默认使用 `SuppressUI=true` 和 `EnableDialogAutoDismiss=true`。后者会覆盖 DTE COM activation、fallback `/Embedding` launch、startup delay 和 active session，监控本轮新启动的 `devenv.exe` / `TcXaeShell.exe` modal dialog，不会处理用户已打开的 IDE；它会优先处理 `OK`、TwinCAT 激活/重启类 `Yes`、以及未知确认框的 `Cancel/No`，并把命中的标题写入 `autoDismissedDialogs`。如果弹窗无法安全处理，runner watchdog 仍会超时失败。
+
+需要从用户交互桌面执行真实 VS/XAE proof 时，使用 `Scripts\interactive-command-runner.ps1`。runner 轮询 `.artifacts\interactive-runner\requests\*.json`，用 `powershell.exe -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass` 执行 request 中的命令，并把 exit code、timeout、stdout/stderr path 写入 `.artifacts\interactive-runner\responses\<id>.response.json`。`-Once` 模式适合 agent 投递单个 request 后立即收集结果；常驻模式适合用户手动打开 runner 后让 agent 持续投递 request。runner 启动时会清理已有 response 对应的 stale request，恢复或移除崩溃遗留的 `.processing.json`，并在 runner 自身异常时写 `exitCode=-2` 的 response，避免后续 automation 永远等不到结果。stdout/stderr 会把 Windows PowerShell CLIXML 日志转成可读文本；失败命令必须保留真实 non-zero exit code，不能误报成功。
+
+如果 DTE 启动阶段 ActivityLog 报 `Failed to initialize Registry Root Hive`，测试或 JSON plan 可以传 `root-suffix`，让显式 fallback launch 使用独立 `/RootSuffix` 避开损坏的 Visual Studio profile。该参数默认关闭，避免无故创建额外 VS hive。
+
+如果机器上同时有 VS2019、VS2022 和 Beckhoff `TcXaeShell`，测试或 JSON plan 可以传 `dte-host-path` 指向具体 `devenv.exe` / `TcXaeShell.exe`，避免 COM activation 超时后的 fallback launch 选错 IDE host。
+
+当 DTE COM activation 本身已知会弹出 unattended registry/profile 错误时，可传 `prefer-dte-host-launch=true`，先启动显式 host 再从 ROT attach，保留 ActivityLog 诊断并减少无意义等待。
+
+`run-plan` 的 stop-on-failure 失败路径用专门脚本回归验证，确保前序 step 失败后，后续 skipped step 不会继续解析未执行输出并掩盖原始失败：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests\Scripts\verify-run-plan-stop-on-failure.ps1
+```
+
+```powershell
+$env:TAK_INTEGRATION_RUNNER_TIMEOUT_MS='45000'
+dotnet run --project .\tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests.csproj
+```
+
+单个 public step probe 也走同一个 watchdog，避免误触发 VS/XAE 弹窗后无人值守挂死。推荐用显式命令：
+
+```powershell
+dotnet run --project .\tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests.csproj -- probe-run --kind=tsproj.assert-data-pointer-shape
+```
+
+入口也接受短别名：
+
+```powershell
+dotnet run --project .\tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTests.csproj -- --probe=tsproj.assert-data-pointer-shape
+```
+
+未知参数会直接失败，不会静默落回整套测试。纯 `.tsproj` file-mutation probe 可以使用最小 fixture，不需要启动 DTE；需要 XAE proof 的 probe 仍会启动真实 VS/XAE，并受 `TAK_INTEGRATION_DTE_LAUNCH_TIMEOUT_MS` 和 runner watchdog 约束。
 
 本地配置文件：
 
@@ -46,6 +85,7 @@ tests\TwinCatAutomationKit.IntegrationTests\TwinCatAutomationKit.IntegrationTest
 - `EnableActivation=true`。
 - `EnableAdsRead=true`，并且配置的 `AmsNetId` / `AdsPort` 能读到本机 runtime。
 - signing certificate 三项默认不启用；`signing.set-license` 仍然验证。
+- `WorkRootBase` 会验证能创建子目录并写文件；不可写时 fallback 到 repo 内短路径 `t`。
 
 缺少真实 TwinCAT/VS/activation/ADS 前置条件时，默认策略是失败而不是 skip。因为这些测试就是用来证明真实机器交互能力的。
 
@@ -286,11 +326,15 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `engineering.create-xae-solution` | `ordered-step-surface` | `.sln` 和 `.tsproj` 由 Beckhoff XAE template 创建。 |
 | `engineering.create-cpp-project` | `ordered-step-surface` | 返回的 tree path/display name/file path 精确匹配；`.vcxproj` 有 `ProjectGuid`，`.tmc` 存在。 |
 | `engineering.create-vs-cpp-project` | `ordered-step-surface` | 创建普通 VS C++ `AdsClient` project，`.sln`、`.vcxproj` 和 DTE model 都能定位。 |
+| `engineering.create-scope-project` | `ordered-step-surface` / `OptCNC parity` | 生成新的 Scope `.tcmproj` 和空 `.tcscopex` 骨架，并把 project GUID/path 写入 `.sln`；不复制样例 Scope 文件。 |
+| `scope.ensure-configuration` | `ordered-step-surface` / `OptCNC parity` | 结构化写入 Scope `.tcscopex` 的 ADS acquisition 和 YT chart channel，验证 symbol、port、offset 和 acquisition link，不复制样例 Scope XML。 |
+| `scope.assert-configuration-shape` | `ordered-step-surface` / `OptCNC guard` | 解析 Scope `.tcscopex` 并校验 Scope 名、chart 名、ADS/channel 数量、symbol 和 channel acquisition link。 |
 | `engineering.ensure-solution-project-dependency` | `ordered-step-surface` | `.sln` 中出现 `ProjectSection(ProjectDependencies)`，`AdsClient` 依赖 TwinCAT project 的 GUID 精确匹配。 |
 | `engineering.create-plc-project` | `ordered-step-surface` | `.tsproj` 可解析 PLC project/instance，测试写入 `MAIN.TcPOU` payload，并由 build/ADS 证明 payload 加载。 |
 | `engineering.create-module` | `ordered-step-surface` | 辅助 module 写入 header/source/TMC metadata，返回名包含请求名；允许 fallback 时必须被 full-project reopen/export 接受，不冒充严格 wizard proof。 |
 | `engineering.start-tmc-code-generator` | `ordered-step-surface` | 调用 `StartTmcCodeGenerator` 后 `.tmc` 可读，并为后续 module metadata 验证和实例创建提供输入。 |
 | `engineering.publish-modules` | `ordered-step-surface` | 调用 `PublishModules` 后 `.tmc` 可读并包含 `AuxModule` metadata；`updated` output 记录本次 timestamp/hash 是否变化。 |
+| `engineering.apply-tmc-module-model` | `ordered-step-surface` | 结构化 JSON module model 写入 `.tmc`，从 generated `Services.h` 解析 custom type GUID，并由 `verify-tmc-data-areas` 复核 module shape。 |
 | `engineering.verify-tmc-data-areas` | `ordered-step-surface` | 直接解析 `.tmc`，验证预期 module DataArea 和 symbol shape，防止 fallback skeleton 被当作真实 TMC。 |
 | `engineering.add-module-instance` | `ordered-step-surface` | primary/aux instance 返回可解析 ObjectId，DisplayName 包含请求名，并在 `.tsproj` 中按精确 ObjectId 存在；允许 fallback 时必须被 full-project reopen/export 接受。 |
 | `engineering.ensure-task` | `ordered-step-surface` | 两个 task 返回可解析 ObjectId，并在 reopen 后精确匹配 priority、cycle、AMS port、affinity、layout。 |
@@ -299,7 +343,7 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `engineering.close-visual-studio` | `ordered-step-surface` | 关闭 VS 后执行 `.tsproj` file mutation；runner 结束统一清理 session。 |
 | `engineering.open-xae-solution` | `ordered-step-surface` | file mutation 后 XAE reopen 不抛异常，且 export XML 成功。 |
 | `engineering.build-solution` | `ordered-step-surface` | PLC-only runtime clone 上 `BuildCurrentSolution` 返回成功和 `LastBuildInfo=0`，并生成或更新非空 PLC `.tmc` / `.compileinfo`。 |
-| `engineering.activate-configuration` | `activation-ads-runtime` | `EnableActivation=true` 时 activation 成功，记录 command/restart，并写出非空 `activated.tszip`。 |
+| `engineering.activate-configuration` | `activation-ads-runtime` | `EnableActivation=true` 时 activation 在 timeout 内成功，记录 command/restart，并写出非空 `activated.tszip`；默认关闭 DTE command fallback。 |
 | `cpp.create-project-item` | `ordered-step-surface` / `atomic-step-wrappers` | 创建 `.cpp`、`.h`、`.rc`、`None` item，物理文件存在，`.vcxproj` 注册，`.filters` filter mapping 精确存在。 |
 | `cpp.write-project-item-content` | `ordered-step-surface` / `atomic-step-wrappers` | payload 内容写入 project item，SHA256 / bytes output 与文件一致，且 `RequireProjectRegistration=true` 能防止未注册文件。 |
 | `cpp.remove-project-item` | `ordered-step-surface` | `.vcxproj` 和 `.filters` 不再引用 exact item，物理 `.license` 文件被删除。 |
@@ -315,6 +359,7 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.ensure-task-vars-group` | `ordered-step-surface` | `AuxInputs` / `AuxOutputs` 按 group type、count、type、offset、external address 精确生成。 |
 | `tsproj.ensure-task-image` | `ordered-step-surface` | `AuxTask` 的 `Image` Id/address type/image type/size/name 精确写入，reopen 接受。 |
 | `tsproj.ensure-cpp-instance` | `ordered-step-surface` | `FileMutationCpp01` instance skeleton、ObjectId、context priority/cycle 和 `TmcDesc` containers 插入。 |
+| `tsproj.refresh-cpp-instance-tmc-desc` | `ordered-step-surface` | 从 project `.tmc` 刷新已有 C++ instance 的 `TmcDesc`，并保留 context、parameter、interface pointer 和 data pointer value sections。 |
 | `tsproj.ensure-plc-instance` | `ordered-step-surface` | PLC instance node 存在，后续 metadata/vars mutation 可定位。 |
 | `tsproj.bind-instance-context` | `ordered-step-surface` | aux instance context `ManualConfig` 和 `CyclicCaller` 指向 `AuxTask`。 |
 | `tsproj.bind-instance-task` | `ordered-step-surface` | primary instance context `ManualConfig` 和 `CyclicCaller` 指向 `RuntimeTask`。 |
@@ -341,6 +386,10 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.ensure-mapping-info` | `ordered-step-surface` | root `Mappings/MappingInfo` 的 Identifier/ObjectId pair 精确写入且唯一。 |
 | `tsproj.ensure-io-mapping-link` | `ordered-step-surface` | IO-to-TcCOM `OwnerA/OwnerB/Link` 写入，并支持 `Size` / `RestoreInfo` 等已知 mapping attributes。 |
 | `tsproj.apply-io-topology-plan` | `ordered-step-surface` | batch JSON 通过 dedicated primitives 写入 Device、Box、Pdo、MappingInfo 和 Link，并按 count/结构断言。 |
+| `tsproj.assert-io-topology-shape` | `ordered-step-surface` / `OptCNC guard` | 读取 `.tsproj`，按请求断言 `Project/Io` 的 Device、Box、PDO 数量和 root `<Mappings>` 的 MappingInfo、OwnerA、Link 形状；单步 probe 使用 file-only fixture，不需要启动 DTE。 |
+| `tsproj.assert-io-image-references` | `ordered-step-surface` / `OptCNC guard` | 读取 `.tsproj`，断言 root `ImageDatas`、direct Device `Image`、Device `InfoImageId` 和 `ImageId` 引用关系，不修改工程；用于抓出半截 process-image IO shape。 |
+| `tsproj.describe-io-topology` | `ordered-step-surface` / `OptCNC guard` | 读取 `.tsproj` 并输出 normalized IO topology JSON，包含 Device/Box/PDO/mapping 计数、ID、名称和可选属性摘要；不返回 raw XML，不修改工程。 |
+| `tsproj.compare-io-topology` | `ordered-step-surface` / `OptCNC guard` | 只读比较两个 `.tsproj` 的 normalized IO topology facts，报告 count、缺失 Device/Box/PDO 和 mapping link 差异；不导入 reference metadata。 |
 | `tsproj.ensure-io-task-image` | `ordered-step-surface` | task image 与 primary instance `IoTaskImage` pointer 一起生成，并精确指向 `#x03040010`。 |
 | `tsproj.clear-instance-parameter-values` | `ordered-step-surface` | 先写入 stale `Parameter.stale=999/888`，clear 后由 plan 重建，reopen 后 stale parameter 不存在。 |
 | `tsproj.apply-instance-parameter-plan` | `ordered-step-surface` | batch plan 精确写入 primary `Parameter.data1=123` 和 aux `Parameter.data1=17`，reopen 后按值断言。 |
@@ -350,6 +399,7 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.clear-instance-data-pointer-values` | `ordered-step-surface` / `atomic-step-wrappers` | 先写入 stale `StalePointer` / `AtomicWrapperPointer`，clear 后由 plan 重建，reopen 后 stale pointer 不存在。 |
 | `tsproj.apply-instance-data-pointer-plan` | `ordered-step-surface` / `atomic-step-wrappers` | batch plan 精确写入 primary/aux `DataIn` / `DataOut` 的 `OTCID`、`AreaNo`、`ByteOffs`、`ByteSize`。 |
 | `tsproj.ensure-data-pointer` | `ordered-step-surface` | 单项 data pointer upsert 在 batch 后保持幂等，reopen 后精确字段不变。 |
+| `tsproj.assert-data-pointer-shape` | `ordered-step-surface` / `OptCNC guard` | 读取 `.tsproj`，按请求断言 C++ instance `DataPointerValues` 记录数、array index 和 root `<Mappings>` link 仍然存在；单步 probe 使用 file-only fixture，不需要启动 DTE。 |
 | `tsproj.clear-mappings` | `ordered-step-surface` | 先写入 stale mapping link，clear 后重建 4 条 deterministic links，reopen 后 stale link 不存在且 link 数量等于 4。 |
 | `tsproj.replace-mappings-section` | `ordered-step-surface` | 先替换成 stale known-good `Mappings`，再替换为空 section 并重建 deterministic links，reopen 后 stale link 不存在。 |
 | `tsproj.clear-unrestored-var-links` | `ordered-step-surface` / `atomic-step-wrappers` | 先写入 stale `UnrestoredVarLinks`，clear 后 reopen/build 或 wrapper 断言中都必须不存在。 |
@@ -359,6 +409,10 @@ ADS scan 也不能只看“任意 port 成功”。测试要求配置的 runtime
 | `tsproj.apply-mutation-plan` | `ordered-step-surface` | batch generic mutation 写入 element 和 fragment，并精确校验 batch child values；负例证明 valid+invalid batch 不 partial write。 |
 | `tsproj.merge-fragment` | `ordered-step-surface` | 在唯一 `DataTypes` parent 下执行带 evidence 字段的 named fragment merge，最终 `DataTypes` 集合必须精确。 |
 | `validation.ads-scan` | `activation-ads-runtime` | `EnableAdsRead=true` 时配置的 runtime port 必须可读 ADS state，不接受仅其他 port 成功。 |
+| `validation.assert-ads-state` | `activation-ads-runtime` | 配置的 ADS port 必须等于请求的 ADS state，例如 `10000=Run;200=Run;300=Run`，防止 activation false positive。 |
+| `validation.mark-event-log-window` | `activation-ads-runtime` / `OptCNC guard` | 在 activation 前记录 `TcSysSrv` event-log marker，后续断言只看同一窗口内的新事件；file-only probe 不启动 DTE。 |
+| `validation.assert-event-log-window` | `activation-ads-runtime` / `OptCNC guard` | activation 后断言同一 `TcSysSrv` 窗口内没有 Error/Critical、`AdsState: >15<` Config 回退或请求的 forbidden message。 |
+| `validation.assert-process-crash-window` | `activation-ads-runtime` / `OptCNC guard` | activation 或 XAE open 后断言同一 Application event-log 窗口内没有 `devenv.exe`、`TcXaeShell.exe` 或 TwinCAT System Manager crash。 |
 | `validation.ads-read-symbols` | `activation-ads-runtime` | batch ADS read 必须精确读回配置参数、转换结果、task ObjectId probes、runtime-only InitSymbol probe、checksum、transform-ok flag 和 mismatch count。 |
 | `validation.ads-read` | `activation-ads-runtime` | 固定读取 `MAIN.nConfiguredParameter` 并精确返回 `12345`，证明 batch 与 single read 两条 ADS path 都读到同一确定 runtime 语义。 |
 

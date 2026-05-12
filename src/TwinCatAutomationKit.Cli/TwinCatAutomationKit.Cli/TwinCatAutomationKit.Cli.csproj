@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <UseAppHost>false</UseAppHost>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\TwinCatAutomationKit.Core\TwinCatAutomationKit.Core\TwinCatAutomationKit.Core.csproj" SkipGetTargetFrameworkProperties="true" />

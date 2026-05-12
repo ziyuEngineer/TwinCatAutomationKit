@@ -1,5 +1,5 @@
 param(
-    [string]$OutputRoot = "D:\t\tcak_cli_all_$(Get-Date -Format yyyyMMdd_HHmmss)",
+    [string]$OutputRoot = "",
     [switch]$Execute,
     [switch]$Visible,
     [int]$StartupDelayMs = 8000,
@@ -41,6 +41,9 @@ function Find-RepoRoot {
 }
 
 $repoRoot = Find-RepoRoot
+if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
+    $OutputRoot = Join-Path (Join-Path $repoRoot "t") "tcak_cli_all_$(Get-Date -Format yyyyMMdd_HHmmss)"
+}
 $cliProject = Join-Path $repoRoot "src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli.csproj"
 $solutionName = "Demo"
 $projectName = "Demo"
@@ -55,13 +58,25 @@ $payloadDir = Join-Path $OutputRoot "_cli_verify_payloads"
 $logPath = Join-Path $OutputRoot "_cli_verify.log"
 $task1AmsPort = 360
 $taskCliAmsPort = 361
+$launchTimeoutMs = 60000
 $targetTmxPath = Join-Path $OutputRoot "$projectName\$cppProjectName\_products\TwinCAT OS (x64)\Release\$cppProjectName\$cppProjectName.tmx"
 
 $allKinds = @(
+    "engineering.cleanup-dte-host-processes",
     "engineering.launch-visual-studio",
     "engineering.create-xae-solution",
     "engineering.open-xae-solution",
     "engineering.create-cpp-project",
+    "engineering.create-scope-project",
+    "scope.ensure-configuration",
+    "scope.assert-configuration-shape",
+    "engineering.create-io-device",
+    "engineering.create-ethercat-box",
+    "engineering.generate-io-mappings",
+    "engineering.search-io-devices",
+    "engineering.reload-io-devices",
+    "engineering.apply-io-tree-plan",
+    "ethercat.assert-product-revisions",
     "engineering.create-plc-project",
     "engineering.create-module",
     "engineering.add-module-instance",
@@ -118,12 +133,21 @@ $allKinds = @(
     "tsproj.ensure-interface-pointer",
     "tsproj.ensure-data-pointer",
     "tsproj.ensure-mapping-link",
+    "tsproj.assert-data-pointer-shape",
+    "tsproj.assert-io-topology-shape",
+    "tsproj.assert-io-image-references",
+    "tsproj.describe-io-topology",
+    "tsproj.compare-io-topology",
     "tsproj.clear-unrestored-var-links",
     "tsproj.upsert-element",
     "tsproj.upsert-fragment",
     "tsproj.apply-mutation-plan",
     "tsproj.merge-fragment",
     "validation.ads-scan",
+    "validation.assert-ads-state",
+    "validation.mark-event-log-window",
+    "validation.assert-event-log-window",
+    "validation.assert-process-crash-window",
     "validation.ads-read",
     "validation.ads-read-symbols"
 )
@@ -152,7 +176,7 @@ function Invoke-DotnetCli {
     $script:stepIndex++
     $script:ranKinds.Add($Kind) | Out-Null
 
-    $dotnetArgs = @("run", "--project", $cliProject, "--", "invoke-step", "--kind=$Kind") + $Arguments
+    $dotnetArgs = @("run", "--no-restore", "--project", $cliProject, "--", "invoke-step", "--kind=$Kind") + $Arguments
     $commandLine = "dotnet " + (Format-CommandLine $dotnetArgs)
 
     Write-Host ""
@@ -167,8 +191,25 @@ function Invoke-DotnetCli {
         return
     }
 
-    $output = & dotnet @dotnetArgs 2>&1
-    $exitCode = $LASTEXITCODE
+    $previousErrorActionPreference = $ErrorActionPreference
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+        $previousNativeCommandPreference = $Global:PSNativeCommandUseErrorActionPreference
+        $Global:PSNativeCommandUseErrorActionPreference = $false
+    } else {
+        $previousNativeCommandPreference = $null
+    }
+
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = & dotnet @dotnetArgs 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -ne $previousNativeCommandPreference) {
+            $Global:PSNativeCommandUseErrorActionPreference = $previousNativeCommandPreference
+        }
+    }
+
     $text = $output -join [Environment]::NewLine
     $text | Tee-Object -FilePath $logPath -Append | Out-Host
 
@@ -236,11 +277,11 @@ function Get-CertificatePasswordArgs {
 }
 
 function Write-PayloadFiles {
+    New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
+
     if (-not $Execute) {
         return
     }
-
-    New-Item -ItemType Directory -Path $payloadDir -Force | Out-Null
 
     @"
 <Mappings>
@@ -329,6 +370,27 @@ function Write-PayloadFiles {
 "@ | Set-Content -LiteralPath (Join-Path $payloadDir "io-topology-plan.json") -Encoding UTF8
 
     @"
+{
+  "devices": [
+    {
+      "name": "Cli Device 92 (EtherCAT)",
+      "subType": 111,
+      "parentTreeItemPath": "TIID",
+      "disabled": true
+    }
+  ],
+  "boxes": [
+    {
+      "parentTreeItemPath": "TIID^Cli Device 92 (EtherCAT)",
+      "name": "Cli Box 9201 (EK1100)",
+      "productRevision": "EK1100-0000-0017",
+      "disabled": true
+    }
+  ]
+}
+"@ | Set-Content -LiteralPath (Join-Path $payloadDir "io-tree-plan.json") -Encoding UTF8
+
+    @"
 <DataTypes>
   <DataType>
     <Name>CliVerifyType</Name>
@@ -407,6 +469,137 @@ function Write-PayloadFiles {
   }
 ]
 "@ | Set-Content -LiteralPath (Join-Path $payloadDir "data-pointer-plan.json") -Encoding UTF8
+
+    @{
+        instanceName = 'FileMutationCpp01'
+        expectedDataPointerRecordCount = 1
+        expectedRootMappingLinkCount = 1
+        dataPointers = @(
+            @{
+                pointerName = 'Inputs.Value'
+                dataRecordCount = 1
+                arrayIndexes = @(0)
+            }
+        )
+        mappingLinks = @(
+            @{
+                ownerAName = "TIXC^$cppProjectName^FileMutationCpp01"
+                ownerBName = "TIPC^$plcProjectName^$plcInstanceName"
+                varA = 'Outputs^Var 1'
+                varB = 'MAIN.nValue'
+            }
+        )
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payloadDir 'assert-data-pointer-shape.json') -Encoding UTF8
+
+    @{
+        expectedDeviceCount = 2
+        expectedBoxCount = 2
+        expectedPdoCount = 2
+        expectedMappingInfoCount = 2
+        expectedOwnerACount = 2
+        expectedRootMappingLinkCount = 3
+        devices = @(
+            @{
+                deviceId = 31
+                name = 'Cli Device 31 (EtherCAT)'
+                boxCount = 2
+            }
+        )
+        boxes = @(
+            @{
+                deviceId = 31
+                boxId = 3101
+                name = 'Cli Box 3101 (EK1100)'
+                pdoCount = 2
+            }
+        )
+        mappingLinks = @(
+            @{
+                ownerAName = 'TIID^Cli Device 31 (EtherCAT)'
+                ownerBName = "TIXC^$cppProjectName^FileMutationCpp01"
+                varA = 'Cli Box 3101 (EK1100)^Channel 1^Output'
+                varB = 'Outputs^Power'
+            }
+        )
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payloadDir 'assert-io-topology-shape.json') -Encoding UTF8
+
+    @{
+        expectedRootImageDataCount = 0
+        expectedDeviceImageCount = 0
+        expectedImageReferenceCount = 2
+        requireDeviceImageForInfoImageId = $true
+        requireImageIdBacking = $true
+        allowedUnbackedImageIds = @("1001", "1002")
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payloadDir 'assert-io-image-references.json') -Encoding UTF8
+
+    @{
+        configurationFilePath = (Join-Path $OutputRoot 'Scope\Scope Project1.tcscopex')
+        scopeName = 'Scope Project'
+        mainServer = '127.0.0.1.1.1'
+        replaceChannels = $true
+        adsChannels = @(
+            @{
+                name = 'BufferWriteAvailable'
+                symbolName = 'CommandsExecuter.Data.StateData.BufferWriteAvailable'
+                amsNetId = '199.4.42.250.1.1'
+                targetPort = 351
+                dataType = 'UINT32'
+                indexGroup = 16842880
+                indexOffset = 2197815308
+            },
+            @{
+                name = 'BufferReadAvailable'
+                symbolName = 'CommandsExecuter.Data.StateData.BufferReadAvailable'
+                amsNetId = '199.4.42.250.1.1'
+                targetPort = 351
+                dataType = 'UINT32'
+                indexGroup = 16842880
+                indexOffset = 2197815312
+            }
+        )
+        chartChannels = @(
+            @{
+                name = 'BufferReadAvailable'
+                acquisitionName = 'BufferReadAvailable'
+                displayColor = '-16744448'
+                sortPriority = 10
+            },
+            @{
+                name = 'BufferWriteAvailable'
+                acquisitionName = 'BufferWriteAvailable'
+                displayColor = '-16776961'
+                sortPriority = 11
+            }
+        )
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payloadDir 'scope-configuration.json') -Encoding UTF8
+
+    @{
+        configurationFilePath = (Join-Path $OutputRoot 'Scope\Scope Project1.tcscopex')
+        expectedAdsChannelCount = 2
+        expectedChartChannelCount = 2
+        expectedScopeName = 'Scope Project'
+        expectedChartName = 'YT Chart'
+        adsChannels = @(
+            @{
+                name = 'BufferWriteAvailable'
+                symbolName = 'CommandsExecuter.Data.StateData.BufferWriteAvailable'
+            },
+            @{
+                name = 'BufferReadAvailable'
+                symbolName = 'CommandsExecuter.Data.StateData.BufferReadAvailable'
+            }
+        )
+        chartChannels = @(
+            @{
+                name = 'BufferReadAvailable'
+                acquisitionName = 'BufferReadAvailable'
+            },
+            @{
+                name = 'BufferWriteAvailable'
+                acquisitionName = 'BufferWriteAvailable'
+            }
+        )
+    } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $payloadDir 'scope-shape.json') -Encoding UTF8
 
     @"
 {
@@ -489,12 +682,26 @@ Write-Host "OutputRoot: $OutputRoot"
 Write-Host "CLI:        $cliProject"
 
 $visibleText = if ($Visible) { "true" } else { "false" }
-$commonEngineeringArgs = @("--solution-path=$solutionPath", "--project-path=$projectPath", "--visible=$visibleText", "--startup-delay-ms=$StartupDelayMs")
+$unattendedArgs = @("--visible=$visibleText", "--startup-delay-ms=$StartupDelayMs", "--suppress-ui=true", "--enable-dialog-auto-dismiss=true", "--dialog-poll-interval-ms=500", "--launch-timeout-ms=$launchTimeoutMs", "--attach-to-existing=false")
+$commonEngineeringArgs = @("--solution-path=$solutionPath", "--project-path=$projectPath") + $unattendedArgs
 
-Invoke-DotnetCli "engineering.launch-visual-studio" @("--visible=$visibleText", "--startup-delay-ms=$StartupDelayMs")
-Invoke-DotnetCli "engineering.create-xae-solution" @("--solution-directory=$OutputRoot", "--solution-name=$solutionName", "--project-name=$projectName", "--visible=$visibleText", "--startup-delay-ms=$StartupDelayMs")
+Write-PayloadFiles
+
+Invoke-DotnetCli "engineering.cleanup-dte-host-processes" @("--dry-run=true")
+Invoke-DotnetCli "engineering.launch-visual-studio" $unattendedArgs
+Invoke-DotnetCli "engineering.create-xae-solution" (@("--solution-directory=$OutputRoot", "--solution-name=$solutionName", "--project-name=$projectName") + $unattendedArgs)
 Invoke-DotnetCli "engineering.open-xae-solution" $commonEngineeringArgs
 Invoke-DotnetCli "engineering.create-cpp-project" ($commonEngineeringArgs + @("--cpp-project-name=$cppProjectName"))
+Invoke-DotnetCli "engineering.create-scope-project" ($commonEngineeringArgs + @("--scope-project-name=Scope", "--configuration-file-name=Scope Project1.tcscopex", "--create-empty-configuration=true", "--allow-solution-file-fallback=true"))
+Invoke-DotnetCli "scope.ensure-configuration" @("--json-file=$(Join-Path $payloadDir 'scope-configuration.json')")
+Invoke-DotnetCli "scope.assert-configuration-shape" @("--json-file=$(Join-Path $payloadDir 'scope-shape.json')")
+Invoke-DotnetCli "engineering.create-io-device" ($commonEngineeringArgs + @("--name=Cli Device 90 (EtherCAT)", "--subtype=111", "--parent-tree-item-path=TIID", "--disabled=true"))
+Invoke-DotnetCli "engineering.create-ethercat-box" ($commonEngineeringArgs + @("--parent-tree-item-path=TIID^Cli Device 90 (EtherCAT)", "--name=Cli Box 9001 (EK1100)", "--product-revision=EK1100-0000-0017", "--disabled=true"))
+Invoke-DotnetCli "engineering.generate-io-mappings" ($commonEngineeringArgs + @("--allow-dte-command-fallback=false", "--timeout-ms=120000"))
+Invoke-DotnetCli "engineering.search-io-devices" ($commonEngineeringArgs + @("--timeout-ms=120000"))
+Invoke-DotnetCli "engineering.reload-io-devices" ($commonEngineeringArgs + @("--timeout-ms=120000"))
+Invoke-DotnetCli "engineering.apply-io-tree-plan" ($commonEngineeringArgs + @("--json-file=$(Join-Path $payloadDir 'io-tree-plan.json')"))
+Invoke-DotnetCli "ethercat.assert-product-revisions" @("--product-revisions=EK1100-0000-0018;AX5125-0000-0214")
 Invoke-DotnetCli "engineering.create-plc-project" ($commonEngineeringArgs + @("--plc-project-name=$plcProjectName"))
 Invoke-DotnetCli "engineering.create-module" ($commonEngineeringArgs + @("--cpp-project-name=$cppProjectName", "--module-name=AuxModule", "--allow-offline-fallback=true"))
 
@@ -549,7 +756,7 @@ if ($IncludeSigning) {
 }
 
 if ($IncludeActivation) {
-    Invoke-DotnetCli "engineering.activate-configuration" ($commonEngineeringArgs + @("--save-configuration-archive=true", "--configuration-archive-path=$(Join-Path $evidenceDir 'activated.tszip')"))
+    Invoke-DotnetCli "engineering.activate-configuration" ($commonEngineeringArgs + @("--save-configuration-archive=true", "--configuration-archive-path=$(Join-Path $evidenceDir 'activated.tszip')", "--suppress-ui=true", "--allow-dte-command-fallback=false", "--activation-timeout-ms=120000"))
 } else {
     Skip-Kind "engineering.activate-configuration" "Skipped by default because it activates the local TwinCAT configuration. Re-run with -IncludeActivation to include it."
 }
@@ -599,6 +806,11 @@ Invoke-DotnetCli "tsproj.ensure-interface-pointer" @("--project-path=$projectPat
 Invoke-DotnetCli "tsproj.ensure-data-pointer" @("--project-path=$projectPath", "--instance-name=FileMutationCpp01", "--pointer-name=Inputs.Value", "--object-id=$($script:taskObjectId)", "--area-no=0", "--byte-offset=8", "--byte-size=4", "--array-index=0")
 Invoke-DotnetCli "tsproj.clear-unrestored-var-links" @("--project-path=$projectPath")
 Invoke-DotnetCli "tsproj.ensure-mapping-link" @("--project-path=$projectPath", "--owner-a-name=TIXC^$cppProjectName^FileMutationCpp01", "--owner-b-name=TIPC^$plcProjectName^$plcInstanceName", "--var-a=Outputs^Var 1", "--var-b=MAIN.nValue")
+Invoke-DotnetCli "tsproj.assert-data-pointer-shape" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'assert-data-pointer-shape.json')")
+Invoke-DotnetCli "tsproj.assert-io-topology-shape" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'assert-io-topology-shape.json')")
+Invoke-DotnetCli "tsproj.assert-io-image-references" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'assert-io-image-references.json')")
+Invoke-DotnetCli "tsproj.describe-io-topology" @("--project-path=$projectPath", "--include-attributes=true", "--max-items-per-collection=5")
+Invoke-DotnetCli "tsproj.compare-io-topology" @("--project-path=$projectPath", "--reference-project-path=$projectPath", "--max-differences=10")
 Invoke-DotnetCli "tsproj.upsert-element" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'generic-element-upsert.json')")
 Invoke-DotnetCli "tsproj.upsert-fragment" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'generic-fragment-upsert.json')")
 Invoke-DotnetCli "tsproj.apply-mutation-plan" @("--project-path=$projectPath", "--json-file=$(Join-Path $payloadDir 'generic-mutation-plan.json')")
@@ -622,10 +834,19 @@ if ($IncludeMergeFragment) {
 
 if ($IncludeAdsRead) {
     Invoke-DotnetCli "validation.ads-scan" @("--net-id=$AdsNetId", "--ports=100,200,300,800,$AdsPort,10000")
+    Invoke-DotnetCli "validation.assert-ads-state" @("--net-id=$AdsNetId", "--expected=$AdsPort=Run")
+    $markerPath = Join-Path $evidenceDir "event-log-marker.json"
+    Invoke-DotnetCli "validation.mark-event-log-window" @("--log-name=Application", "--provider-name=TcSysSrv", "--marker-file=$markerPath")
+    Invoke-DotnetCli "validation.assert-event-log-window" @("--marker-file=$markerPath", "--max-events=20")
+    Invoke-DotnetCli "validation.assert-process-crash-window" @("--marker-file=$markerPath", "--max-events=20")
     Invoke-DotnetCli "validation.ads-read" @("--net-id=$AdsNetId", "--port=$AdsPort", "--symbol=$AdsSymbol", "--type=$AdsType", "--auto-reconnect=true")
     Invoke-DotnetCli "validation.ads-read-symbols" @("--net-id=$AdsNetId", "--port=$AdsPort", "--symbols=$($AdsSymbol):$($AdsType)", "--auto-reconnect=true")
 } else {
     Skip-Kind "validation.ads-scan" "Skipped by default because it needs a running ADS router/runtime. Re-run with -IncludeAdsRead and pass -AdsNetId/-AdsPort."
+    Skip-Kind "validation.assert-ads-state" "Skipped by default because it needs a running ADS router/runtime. Re-run with -IncludeAdsRead and pass -AdsNetId/-AdsPort."
+    Skip-Kind "validation.mark-event-log-window" "Skipped by default because it is meaningful when paired with activation/runtime validation. Re-run with -IncludeAdsRead to include it."
+    Skip-Kind "validation.assert-event-log-window" "Skipped by default because it is meaningful when paired with activation/runtime validation. Re-run with -IncludeAdsRead to include it."
+    Skip-Kind "validation.assert-process-crash-window" "Skipped by default because it is meaningful when paired with activation/runtime validation. Re-run with -IncludeAdsRead to include it."
     Skip-Kind "validation.ads-read" "Skipped by default because it needs a running target and a valid ADS symbol. Re-run with -IncludeAdsRead and pass -AdsNetId/-AdsPort/-AdsSymbol/-AdsType."
     Skip-Kind "validation.ads-read-symbols" "Skipped by default because it needs a running target and valid ADS symbols. Re-run with -IncludeAdsRead and pass -AdsNetId/-AdsPort/-AdsSymbol/-AdsType."
 }
@@ -655,7 +876,7 @@ if ($missing.Count -gt 0) {
     throw "The script did not cover every known invoke-step kind."
 }
 
-if ($skippedUnique.Count -gt 0) {
+if ($Execute -and $skippedUnique.Count -gt 0) {
     throw "Full invoke-step verification skipped one or more kinds. Re-run with the required signing, activation, ADS, and merge-fragment switches."
 }
 

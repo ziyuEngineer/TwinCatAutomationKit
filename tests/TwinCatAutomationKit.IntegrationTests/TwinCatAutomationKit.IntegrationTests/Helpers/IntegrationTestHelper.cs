@@ -32,7 +32,14 @@ internal static class IntegrationTestHelper
     /// Starts VS hidden — integration tests don't need a visible window.
     /// </summary>
     public static LaunchVisualStudioRequest MakeLaunchRequest(IntegrationTestConfig config) =>
-        new(config.VisualStudioProgId, Visible: false, StartupDelayMs: config.StartupDelayMs);
+        new(
+            config.VisualStudioProgId,
+            Visible: false,
+            StartupDelayMs: config.StartupDelayMs,
+            SuppressUi: true,
+            LaunchTimeoutMs: config.DteLaunchTimeoutMs,
+            EnableDialogAutoDismiss: true,
+            DialogPollIntervalMs: 500);
 
     /// <summary>
     /// Builds a <see cref="CreateTwinCatSolutionRequest"/> for a test solution

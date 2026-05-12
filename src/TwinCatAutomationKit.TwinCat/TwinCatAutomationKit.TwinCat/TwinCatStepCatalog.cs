@@ -10,19 +10,49 @@ public static class TwinCatStepCatalog
             "engineering.launch-visual-studio",
             "TwinCatEngineeringService.LaunchVisualStudio",
             "engineering",
-            "Starts a new DTE session that later steps can use for XAE creation, build, and activation.",
+            "Starts or attaches a DTE session that later steps can use for XAE creation, build, and activation.",
             new[] { "Visual Studio with TwinCAT XAE must be installed on the machine." },
             new[]
             {
                 new StepParameterContract("ProgId", "string", false, "Visual Studio DTE ProgId.", TwinCatPathDefaults.DefaultVisualStudioProgId),
                 new StepParameterContract("StartupDelayMs", "int", false, "Warm-up delay before the DTE session is used.", "5000"),
-                new StepParameterContract("Visible", "bool", false, "Whether the launched Visual Studio window should be visible.", "true")
+                new StepParameterContract("Visible", "bool", false, "Whether the launched Visual Studio window should be visible.", "true"),
+                new StepParameterContract("SuppressUi", "bool", false, "Whether DTE.SuppressUI should be enabled for unattended runs.", "true"),
+                new StepParameterContract("LaunchTimeoutMs", "int", false, "Maximum time allowed for DTE COM activation before failing the step.", "60000"),
+                new StepParameterContract("EnableDialogAutoDismiss", "bool", false, "Whether unattended runs should monitor selected VS/TcXaeShell host processes during DTE COM activation, fallback launch, startup delay, and the active session, then close known modal confirmation dialogs by title or message text.", "true"),
+                new StepParameterContract("DialogPollIntervalMs", "int", false, "Polling interval for the unattended dialog auto-dismiss watcher.", "500"),
+                new StepParameterContract("AttachToExisting", "bool", false, "Whether launch may attach to an already running DTE session. Keep false for unattended runs so stale headless Visual Studio hosts are not reused.", "false"),
+                new StepParameterContract("RootSuffix", "string", false, "Optional Visual Studio /RootSuffix used by explicit fallback launch to isolate a broken user registry hive or profile during unattended DTE startup."),
+                new StepParameterContract("DteHostPath", "string", false, "Optional explicit devenv.exe or TcXaeShell.exe path used for fallback DTE host launch when COM activation does not return promptly."),
+                new StepParameterContract("PreferDteHostLaunch", "bool", false, "Whether to start the explicit DTE host first and attach through the ROT before attempting Activator.CreateInstance. Useful when COM activation is known to show an unattended registry/profile error.", "false")
             },
             new[]
             {
                 new StepOutputContract("session", "TwinCatEngineeringSession", "Live DTE session stored in pipeline state.")
             },
-            new[] { "Read back DTE version or solution state to confirm the COM server is reachable." }),
+            new[] { "Read back DTE version or solution state to confirm the COM server is reachable.", "For unattended runs, inspect targetProcessIds and autoDismissedDialogs outputs to confirm which host was monitored and whether launch/session modal dialogs were dismissed." }),
+
+        new StepContract(
+            "engineering.cleanup-dte-host-processes",
+            "TwinCatEngineeringService.CleanupDteHostProcesses",
+            "engineering",
+            "Lists or explicitly kills unattended Visual Studio/TcXaeShell host processes that can block DTE automation.",
+            new[] { "Use dry-run first.", "Default matching only targets host processes without a main window title; windowed IDEs require IncludeWindowed=true or explicit ProcessIds." },
+            new[]
+            {
+                new StepParameterContract("ProcessNames", "string[]", false, "Process names to inspect, separated by ';' or '|'.", "devenv;TcXaeShell"),
+                new StepParameterContract("ProcessIds", "int[]", false, "Optional explicit process ids to match."),
+                new StepParameterContract("DryRun", "bool", false, "Whether to only report candidates without killing them.", "true"),
+                new StepParameterContract("IncludeWindowed", "bool", false, "Whether processes with a main window title are also candidates.", "false"),
+                new StepParameterContract("KillProcessTree", "bool", false, "Whether to kill the full process tree for matched processes.", "true")
+            },
+            new[]
+            {
+                new StepOutputContract("matchedCount", "int", "Number of candidate processes."),
+                new StepOutputContract("killedCount", "int", "Number of processes killed when DryRun=false."),
+                new StepOutputContract("processesJson", "json", "Per-process match/cleanup details.")
+            },
+            new[] { "Run before unattended DTE launch if previous tests left headless devenv/TcXaeShell processes; follow with engineering.launch-visual-studio." }),
 
         new StepContract(
             "engineering.create-xae-solution",
@@ -103,6 +133,80 @@ public static class TwinCatStepCatalog
             new[] { "Verify the .sln contains the project, .vcxproj exists, DTE can find it by name, and reopen keeps it visible." }),
 
         new StepContract(
+            "engineering.create-scope-project",
+            "TwinCatEngineeringService.CreateScopeProject",
+            "engineering",
+            "Creates a TwinCAT Scope project skeleton inside the current solution without copying an existing Scope project file.",
+            new[] { "A solution must already be loaded in the DTE session." },
+            new[]
+            {
+                new StepParameterContract("ProjectName", "string", true, "Scope project name."),
+                new StepParameterContract("ProjectDirectory", "string", false, "Optional project directory. Defaults to SolutionDirectory/ProjectName."),
+                new StepParameterContract("ConfigurationFileName", "string", false, "Optional .tcscopex file name to include.", "<ProjectName>.tcscopex"),
+                new StepParameterContract("CreateEmptyConfiguration", "bool", false, "Whether to create a minimal empty .tcscopex configuration file.", "true"),
+                new StepParameterContract("AllowSolutionFileFallback", "bool", false, "Whether to write a typed .sln project entry if DTE AddFromFile does not accept the .tcmproj.", "true")
+            },
+            new[]
+            {
+                new StepOutputContract("projectFilePath", "string", "Absolute .tcmproj path."),
+                new StepOutputContract("projectGuid", "string", "Project GUID registered in the .tcmproj/.sln."),
+                new StepOutputContract("configurationFilePath", "string", "Optional generated .tcscopex path."),
+                new StepOutputContract("usedSolutionFileFallback", "bool", "Whether the .sln entry fallback path was used.")
+            },
+            new[] { "Verify the .tcmproj exists, optional .tcscopex exists, and the saved .sln contains the Scope project GUID and relative path." }),
+
+        new StepContract(
+            "scope.ensure-configuration",
+            "TwinCatScopeConfigurationService.EnsureConfiguration",
+            "scope",
+            "Creates or updates a TwinCAT Scope .tcscopex configuration from typed chart, channel, and ADS symbol definitions.",
+            new[] { "The Scope project directory must exist or be creatable.", "Callers must provide typed JSON or explicit fields; do not pass copied .tcscopex XML." },
+            new[]
+            {
+                new StepParameterContract("ConfigurationFilePath", "string", true, "Absolute .tcscopex file path to create or update."),
+                new StepParameterContract("ScopeName", "string", false, "Scope display name.", "Scope Project"),
+                new StepParameterContract("MainServer", "string", false, "Scope main server AMS NetId.", "127.0.0.1.1.1"),
+                new StepParameterContract("RecordTime", "long", false, "Scope record time in 100 ns units.", "6000000000"),
+                new StepParameterContract("StopMode", "string", false, "Scope stop mode.", "AutoStop"),
+                new StepParameterContract("ChartName", "string", false, "YT chart name.", "YT Chart"),
+                new StepParameterContract("ReplaceChannels", "bool", false, "Whether existing ADS acquisitions and chart channels should be replaced.", "false"),
+                new StepParameterContract("AdsChannels", "ScopeAdsChannelDefinition[]", false, "Typed ADS acquisition channel definitions."),
+                new StepParameterContract("ChartChannels", "ScopeChartChannelDefinition[]", false, "Typed YT chart channel definitions.")
+            },
+            new[]
+            {
+                new StepOutputContract("configurationFilePath", "string", "Generated .tcscopex path."),
+                new StepOutputContract("adsChannelCount", "int", "Number of ADS acquisition channels in the resulting file."),
+                new StepOutputContract("chartChannelCount", "int", "Number of chart channels in the resulting file.")
+            },
+            new[] { "Re-read the .tcscopex file and assert the requested ADS symbol channels and chart channels exist; do not compare against a copied sample file." }),
+
+        new StepContract(
+            "scope.assert-configuration-shape",
+            "TwinCatScopeConfigurationService.AssertConfigurationShape",
+            "scope",
+            "Reads a TwinCAT Scope .tcscopex configuration and asserts typed channel/chart shape without mutating it.",
+            new[] { "The .tcscopex file must exist." },
+            new[]
+            {
+                new StepParameterContract("ConfigurationFilePath", "string", true, "Absolute .tcscopex file path to inspect."),
+                new StepParameterContract("ExpectedScopeName", "string", false, "Expected Scope display name."),
+                new StepParameterContract("ExpectedChartName", "string", false, "Expected YT chart name."),
+                new StepParameterContract("ExpectedAdsChannelCount", "int", false, "Expected ADS acquisition channel count."),
+                new StepParameterContract("ExpectedChartChannelCount", "int", false, "Expected chart channel count."),
+                new StepParameterContract("AdsChannels", "ScopeConfigurationChannelShape[]", false, "Expected ADS channel names and optional SymbolName values."),
+                new StepParameterContract("ChartChannels", "ScopeConfigurationChannelShape[]", false, "Expected chart channel names and optional acquisition names.")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether every requested shape condition matched."),
+                new StepOutputContract("adsChannelCount", "int", "Observed ADS acquisition channel count."),
+                new StepOutputContract("chartChannelCount", "int", "Observed chart channel count."),
+                new StepOutputContract("shapeJson", "json", "Observed shape and error details.")
+            },
+            new[] { "Use after scope.ensure-configuration or after XAE reopen/save to prove the generated channels were retained." }),
+
+        new StepContract(
             "engineering.ensure-solution-project-dependency",
             "TwinCatEngineeringService.EnsureSolutionProjectDependency",
             "engineering",
@@ -119,6 +223,159 @@ public static class TwinCatStepCatalog
                 new StepOutputContract("dependsOnProjectGuid", "string", "Dependency project GUID.")
             },
             new[] { "Inspect .sln ProjectSection(ProjectDependencies) and reload the solution to confirm the dependency remains." }),
+
+        new StepContract(
+            "engineering.create-io-device",
+            "TwinCatEngineeringService.CreateIoDevice",
+            "engineering",
+            "Creates an IO device under a TwinCAT tree parent through ITcSmTreeItem.CreateChild.",
+            new[] { "A bound XAE solution must be open.", "This is an engineering COM/XAE operation; use command timeouts and unattended dialog auto-dismiss for headless runs.", "For an EtherCAT master use ParentTreeItemPath=TIID and SubType=111." },
+            new[]
+            {
+                new StepParameterContract("Name", "string", true, "Device display name to create or find."),
+                new StepParameterContract("SubType", "int", false, "TwinCAT CreateChild subtype, for example 111 for an EtherCAT master.", "111"),
+                new StepParameterContract("ParentTreeItemPath", "string", false, "TwinCAT tree parent path.", "TIID"),
+                new StepParameterContract("Before", "string", false, "Optional sibling name/path passed to CreateChild before insertion."),
+                new StepParameterContract("VInfo", "string", false, "Optional CreateChild vInfo payload for device-specific identity fields."),
+                new StepParameterContract("Disabled", "bool?", false, "Optional Disabled state to apply after creation or lookup."),
+                new StepParameterContract("AllowExisting", "bool", false, "Whether an existing child at ParentTreeItemPath^Name is accepted instead of failing.", "true"),
+                new StepParameterContract("PostCreateDelayMs", "int", false, "Delay after CreateChild so XAE can persist generated IO metadata.", "500")
+            },
+            new[]
+            {
+                new StepOutputContract("treeItemPath", "string", "Created or existing tree item path."),
+                new StepOutputContract("displayName", "string", "Resolved TwinCAT display name."),
+                new StepOutputContract("objectId", "string", "Tree item ObjectId when XAE exposes one.")
+            },
+            new[] { "Export or describe TIID after SaveAll; the created Device should appear without copying a Project/Io XML section." }),
+
+        new StepContract(
+            "engineering.create-ethercat-box",
+            "TwinCatEngineeringService.CreateEthercatBox",
+            "engineering",
+            "Creates an EtherCAT box or terminal under an EtherCAT parent through ITcSmTreeItem.CreateChild.",
+            new[] { "An EtherCAT device or parent box path must already exist.", "Use subtype 9099 for E-Bus terminals/boxes whose product identity comes from ProductRevision/vInfo.", "This step asks XAE/ESI to generate box metadata; it must not be replaced by copied sample XML." },
+            new[]
+            {
+                new StepParameterContract("ParentTreeItemPath", "string", true, "TwinCAT parent path, for example TIID^Device 3 (EtherCAT)."),
+                new StepParameterContract("Name", "string", true, "Box or terminal display name to create or find."),
+                new StepParameterContract("SubType", "int", false, "TwinCAT CreateChild subtype. 9099 is the Automation Interface subtype for product-revision based EtherCAT boxes.", "9099"),
+                new StepParameterContract("Before", "string", false, "Optional sibling name/path passed to CreateChild before insertion."),
+                new StepParameterContract("ProductRevision", "string", false, "Product/revision identity passed as vInfo when VInfo is not set, for example EK1100-0000-0017."),
+                new StepParameterContract("VInfo", "string", false, "Optional raw CreateChild vInfo string when Beckhoff documents a different identity payload."),
+                new StepParameterContract("Disabled", "bool?", false, "Optional Disabled state to apply after creation or lookup."),
+                new StepParameterContract("AllowExisting", "bool", false, "Whether an existing child at ParentTreeItemPath^Name is accepted instead of failing.", "true"),
+                new StepParameterContract("PostCreateDelayMs", "int", false, "Delay after CreateChild so XAE can generate PDO/SyncMan/FMMU metadata.", "500")
+            },
+            new[]
+            {
+                new StepOutputContract("treeItemPath", "string", "Created or existing tree item path."),
+                new StepOutputContract("displayName", "string", "Resolved TwinCAT display name."),
+                new StepOutputContract("objectId", "string", "Tree item ObjectId when XAE exposes one.")
+            },
+            new[] { "Export or describe the EtherCAT tree after SaveAll; PDO/process-image metadata should come from XAE/ESI generation rather than a copied .tsproj fragment." }),
+
+        new StepContract(
+            "engineering.generate-io-mappings",
+            "TwinCatEngineeringService.GenerateIoMappings",
+            "engineering",
+            "Invokes TwinCAT GenerateMappings so XAE can rebuild variable mappings from the current IO tree.",
+            new[] { "A bound XAE solution with IO topology must be open.", "The step first requires ITcSmCommands.GenerateMappings on the current SysManager COM object.", "DTE command fallback is disabled by default because menu commands can show interactive prompts." },
+            new[]
+            {
+                new StepParameterContract("SuppressUi", "bool", false, "Whether DTE.SuppressUI should be set before invoking the command.", "true"),
+                new StepParameterContract("AllowDteCommandFallback", "bool", false, "Whether to try TwinCAT GenerateMappings DTE commands if ITcSmCommands is not available.", "false"),
+                new StepParameterContract("TimeoutMs", "int", false, "Maximum time allowed for the GenerateMappings operation.", "120000")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether GenerateMappings completed."),
+                new StepOutputContract("command", "string", "The COM or DTE command path that completed."),
+                new StepOutputContract("attemptedCommands", "string", "Semicolon-separated attempted command paths.")
+            },
+            new[] { "Save and describe/compare the IO topology and root Mappings after this step; do not treat command success alone as IO parity." }),
+
+        new StepContract(
+            "engineering.search-io-devices",
+            "TwinCatEngineeringService.SearchIoDevices",
+            "engineering",
+            "Invokes TwinCAT SearchDevices through ITcSmCommands so XAE can scan local IO devices without using menu commands.",
+            new[] { "A bound XAE solution must be open.", "This operation can change the IO tree and can depend on local hardware/driver state.", "No DTE menu fallback is provided; unattended runs must rely on the COM command, timeout, suppress-ui, and dialog auto-dismiss." },
+            new[]
+            {
+                new StepParameterContract("SuppressUi", "bool", false, "Whether DTE.SuppressUI should be set before invoking the command.", "true"),
+                new StepParameterContract("TimeoutMs", "int", false, "Maximum time allowed for SearchDevices.", "120000")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether SearchDevices completed."),
+                new StepOutputContract("command", "string", "The COM command path that completed."),
+                new StepOutputContract("attemptedCommands", "string", "Semicolon-separated attempted command paths.")
+            },
+            new[] { "Save, export TIID, and compare/describe IO topology after this step. A successful scan command is not enough to claim OptCNC IO parity." }),
+
+        new StepContract(
+            "engineering.reload-io-devices",
+            "TwinCatEngineeringService.ReloadIoDevices",
+            "engineering",
+            "Invokes TwinCAT ReloadDevices through ITcSmCommands so XAE can reload IO device metadata without using menu commands.",
+            new[] { "A bound XAE solution with IO devices must be open.", "This operation can regenerate IO metadata from installed device descriptions.", "No DTE menu fallback is provided; unattended runs must rely on the COM command, timeout, suppress-ui, and dialog auto-dismiss." },
+            new[]
+            {
+                new StepParameterContract("SuppressUi", "bool", false, "Whether DTE.SuppressUI should be set before invoking the command.", "true"),
+                new StepParameterContract("TimeoutMs", "int", false, "Maximum time allowed for ReloadDevices.", "120000")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether ReloadDevices completed."),
+                new StepOutputContract("command", "string", "The COM command path that completed."),
+                new StepOutputContract("attemptedCommands", "string", "Semicolon-separated attempted command paths.")
+            },
+            new[] { "Save, export TIID, and compare/describe IO topology after this step. Reopen with XAE or run topology guards before activation." }),
+
+        new StepContract(
+            "engineering.apply-io-tree-plan",
+            "TwinCatEngineeringService.ApplyIoTreePlan",
+            "engineering",
+            "Applies a batch IO tree payload by orchestrating engineering.create-io-device and engineering.create-ethercat-box operations.",
+            new[] { "A bound XAE solution must be open.", "The payload is a convenience wrapper around CreateChild operations only; it must not contain .tsproj XML metadata.", "Use this for large IO trees, then save/export/describe topology to prove what XAE generated." },
+            new[]
+            {
+                new StepParameterContract("Devices", "IReadOnlyList<CreateIoDeviceRequest>", false, "IO device CreateChild requests to apply in order."),
+                new StepParameterContract("Boxes", "IReadOnlyList<CreateEthercatBoxRequest>", false, "EtherCAT box/terminal CreateChild requests to apply in order.")
+            },
+            new[]
+            {
+                new StepOutputContract("deviceCount", "int", "Number of device requests applied."),
+                new StepOutputContract("boxCount", "int", "Number of box requests applied."),
+                new StepOutputContract("treeItemPaths", "string", "Semicolon-separated tree paths returned by XAE."),
+                new StepOutputContract("nodesJson", "json", "Serialized node info returned by the underlying CreateChild operations.")
+            },
+            new[] { "Run tsproj.describe-io-topology or export TIID after SaveAll; this wrapper does not prove PDO/process-image parity by itself." }),
+
+        new StepContract(
+            "ethercat.assert-product-revisions",
+            "TwinCatEtherCatDeviceDescriptionService.AssertProductRevisions",
+            "ethercat",
+            "Asserts that EtherCAT productRevision strings used for CreateChild are present in the installed Beckhoff ESI/device-description XML files.",
+            new[] { "The machine must have Beckhoff EtherCAT device description XML files installed.", "This step is file-only; it does not launch XAE and does not mutate a .tsproj.", "Use it before engineering.create-ethercat-box or engineering.apply-io-tree-plan when a JSON plan depends on productRevision/vInfo values." },
+            new[]
+            {
+                new StepParameterContract("ProductRevisions", "IReadOnlyList<string>", false, "ProductRevision/vInfo values to verify, such as EK1100-0000-0018 or AX5125-0000-0214."),
+                new StepParameterContract("Items", "IReadOnlyList<EtherCatProductRevisionRequirement>", false, "Structured productRevision checks with optional ProductCode and RevisionNo constraints."),
+                new StepParameterContract("SearchDirectories", "IReadOnlyList<string>", false, "Optional EtherCAT ESI XML directories. Defaults to Beckhoff TwinCAT install/program-data locations."),
+                new StepParameterContract("IncludeHiddenTypes", "bool", false, "Whether HideType elements should count as matches.", "false")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether all requested product revisions were found."),
+                new StepOutputContract("requestedCount", "int", "Number of requested product revisions."),
+                new StepOutputContract("matchedCount", "int", "Number of matched product revisions."),
+                new StepOutputContract("missingCount", "int", "Number of missing product revisions."),
+                new StepOutputContract("scannedFileCount", "int", "Number of ESI XML files scanned."),
+                new StepOutputContract("assertionsJson", "json", "Per-product match result including ProductCode, RevisionNo and source file.")
+            },
+            new[] { "Run before XAE CreateChild IO tree steps; a match proves the local ESI catalog contains the requested productRevision string, but final IO topology still needs XAE tree and .tsproj guards." }),
 
         new StepContract(
             "engineering.create-plc-project",
@@ -333,17 +590,27 @@ public static class TwinCatStepCatalog
             "engineering.build-solution",
             "TwinCatEngineeringService.BuildCurrentSolution",
             "engineering",
-            "Runs SolutionBuild.Build and waits until the DTE build state reaches done.",
-            new[] { "A solution must be loaded in the DTE session." },
+            "Builds the loaded solution through DTE, an unattended devenv.com command-line build, or an MSBuild project sequence.",
+            new[] { "DTE engine requires a loaded solution.", "CommandLine engine requires a solution path and installed Visual Studio/XAE command-line build support.", "MsBuildProjects engine requires C++ project paths that can be built outside the XAE solution shell." },
             new[]
             {
-                new StepParameterContract("TimeoutMs", "int", false, "Maximum build wait time.", "300000")
+                new StepParameterContract("TimeoutMs", "int", false, "Maximum build wait time.", "300000"),
+                new StepParameterContract("BuildEngine", "BuildSolutionEngine", false, "Build backend: Dte, CommandLine, or MsBuildProjects.", "Dte"),
+                new StepParameterContract("Configuration", "string", false, "Solution configuration for command-line build.", "Release"),
+                new StepParameterContract("Platform", "string", false, "Solution platform for command-line build.", "TwinCAT OS (x64)"),
+                new StepParameterContract("DevenvPath", "string", false, "Optional explicit devenv.com path for command-line build."),
+                new StepParameterContract("MsBuildPath", "string", false, "Optional explicit MSBuild.exe path for MSBuildProjects engine."),
+                new StepParameterContract("ProjectPaths", "string[]", false, "Semicolon-separated C++ project path sequence for MSBuildProjects engine. Relative paths are resolved from the solution directory.", "OptcncTwinCAT\\Ruckig\\Ruckig.vcxproj;OptcncTwinCAT\\Tinyxml2\\Tinyxml2.vcxproj;OptcncTwinCAT\\MotionControl\\MotionControl.vcxproj"),
+                new StepParameterContract("LogFilePath", "string", false, "Optional devenv /Out log destination.")
             },
             new[]
             {
-                new StepOutputContract("lastBuildInfo", "int", "DTE LastBuildInfo value.")
+                new StepOutputContract("lastBuildInfo", "int", "DTE LastBuildInfo value, or command-line exit code for CommandLine engine."),
+                new StepOutputContract("buildEngine", "string", "Build backend used."),
+                new StepOutputContract("exitCode", "int", "Process exit code when CommandLine engine is used."),
+                new StepOutputContract("logFilePath", "string", "Build log path when available.")
             },
-            new[] { "Treat LastBuildInfo == 0 as the engineering success condition." }),
+            new[] { "Treat LastBuildInfo == 0 or process exit code 0 as the engineering success condition.", "For unattended runs, CommandLine and MsBuildProjects avoid Visual Studio confirmation dialogs blocking DTE automation." }),
 
         new StepContract(
             "cpp.create-project-item",
@@ -578,18 +845,21 @@ public static class TwinCatStepCatalog
             "engineering.activate-configuration",
             "TwinCatEngineeringService.ActivateConfiguration",
             "engineering",
-            "Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback.",
+            "Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager; DTE command fallback is opt-in for interactive troubleshooting.",
             new[] { "A solution must be loaded and its ITcSysManager must be available." },
             new[]
             {
                 new StepParameterContract("SaveConfigurationArchive", "bool", false, "Whether to attempt SaveConfiguration before activate.", "true"),
-                new StepParameterContract("ConfigurationArchivePath", "string", false, "Optional override for the generated .tszip path.")
+                new StepParameterContract("ConfigurationArchivePath", "string", false, "Optional override for the generated .tszip path."),
+                new StepParameterContract("SuppressUi", "bool", false, "Whether DTE.SuppressUI should be enabled before activation.", "true"),
+                new StepParameterContract("AllowDteCommandFallback", "bool", false, "Whether activation may fall back to DTE ExecuteCommand names that can show interactive prompts.", "false"),
+                new StepParameterContract("ActivationTimeoutMs", "int", false, "Maximum wall-clock time for ActivateConfiguration plus StartRestartTwinCAT before failing unattended.", "120000")
             },
             new[]
             {
                 new StepOutputContract("activationCommand", "string", "The command or fallback path used for activation.")
             },
-            new[] { "Confirm that either ITcSysManager.ActivateConfiguration or a DTE command succeeded." }),
+            new[] { "Do not treat this step alone as runtime proof; follow with ADS state assertions and TcSysSrv error-window checks." }),
 
         new StepContract(
             "tsproj.ensure-task",
@@ -603,9 +873,16 @@ public static class TwinCatStepCatalog
                 new StepParameterContract("Priority", "int", true, "Task priority."),
                 new StepParameterContract("CycleTimeNs", "int", true, "Task cycle time in nanoseconds."),
                 new StepParameterContract("AmsPort", "int", true, "Assigned AMS port."),
-                new StepParameterContract("IoAtBegin", "bool", false, "Optional TaskDef IoAtBegin setting.", "true")
+                new StepParameterContract("IoAtBegin", "bool", false, "Optional TaskDef IoAtBegin setting.", "true"),
+                new StepParameterContract("TaskId", "int?", false, "Optional Task Id attribute for matching a known runtime object id layout.")
             },
-            Array.Empty<StepOutputContract>(),
+            new[]
+            {
+                new StepOutputContract("projectPath", "string", "Updated .tsproj path."),
+                new StepOutputContract("taskName", "string", "Task node name."),
+                new StepOutputContract("taskId", "int?", "Task Id attribute when provided."),
+                new StepOutputContract("objectId", "string?", "Derived task ObjectId when TaskId is provided, for example #x02010020.")
+            },
             new[] { "Re-open the .tsproj and verify the Task attributes match the requested values." }),
 
         new StepContract(
@@ -934,6 +1211,12 @@ public static class TwinCatStepCatalog
                 new StepParameterContract("InfoImageId", "int?", false, "Optional InfoImageId attribute."),
                 new StepParameterContract("AddressInfo", "IoAddressInfo", false, "Structured TcCom/Pnp AddressInfo or documented raw AddressInfo XML."),
                 new StepParameterContract("Images", "IReadOnlyList<IoImageDefinition>", false, "Optional direct Image children for process images."),
+                new StepParameterContract("EtherCatAttributes", "IReadOnlyList<TsprojXmlAttribute>", false, "Structured attributes for a direct Device/EtherCAT child."),
+                new StepParameterContract("EtherCatElements", "IReadOnlyList<IoStructuredElement>", false, "Structured repeated Device/EtherCAT child elements such as DcMode when their meaning is known."),
+                new StepParameterContract("ReplaceEtherCatElements", "bool", false, "Whether same-name Device/EtherCAT child elements are replaced before EtherCatElements are added.", "true"),
+                new StepParameterContract("EthernetAttributes", "IReadOnlyList<TsprojXmlAttribute>", false, "Structured attributes for a direct Device/Ethernet child."),
+                new StepParameterContract("EthernetElements", "IReadOnlyList<IoStructuredElement>", false, "Structured repeated Device/Ethernet child elements such as Esl."),
+                new StepParameterContract("ReplaceEthernetElements", "bool", false, "Whether same-name Device/Ethernet child elements are replaced before EthernetElements are added.", "true"),
                 new StepParameterContract("ExtraFragments", "IReadOnlyList<IoRawXmlFragment>", false, "Known-good extra Device child fragments with required source/meaning/evidence metadata.")
             },
             Array.Empty<StepOutputContract>(),
@@ -957,6 +1240,8 @@ public static class TwinCatStepCatalog
                 new StepParameterContract("ImageId", "int?", false, "Optional ImageId child value."),
                 new StepParameterContract("EtherCatAttributes", "IReadOnlyList<TsprojXmlAttribute>", false, "Structured attributes for the Box/EtherCAT child."),
                 new StepParameterContract("EtherCatChildValues", "IReadOnlyList<TsprojXmlChildValue>", false, "Simple child values for Box/EtherCAT, such as SyncMan or Fmmu only when their meaning is known."),
+                new StepParameterContract("EtherCatElements", "IReadOnlyList<IoStructuredElement>", false, "Structured repeated Box/EtherCAT child elements such as SyncMan, Fmmu, DcMode, BootStrapData, MBoxUserCmdData, CoeProfile, DcData, or Slot."),
+                new StepParameterContract("ReplaceEtherCatElements", "bool", false, "Whether same-name Box/EtherCAT child elements are replaced before EtherCatElements are added.", "true"),
                 new StepParameterContract("ExtraFragments", "IReadOnlyList<IoRawXmlFragment>", false, "Known-good extra Box child fragments with required source/meaning/evidence metadata.")
             },
             Array.Empty<StepOutputContract>(),
@@ -1103,7 +1388,11 @@ public static class TwinCatStepCatalog
             {
                 new StepParameterContract("CpuId", "int?", false, "Optional System/Settings/Cpu CpuId attribute."),
                 new StepParameterContract("IoIdleTaskPriority", "int?", false, "Optional System/Settings/IoIdleTask Priority attribute."),
-                new StepParameterContract("InsertBeforeTasks", "bool", false, "Whether to insert Settings before System/Tasks when Settings is created and Tasks exists.", "true")
+                new StepParameterContract("InsertBeforeTasks", "bool", false, "Whether to insert Settings before System/Tasks when Settings is created and Tasks exists.", "true"),
+                new StepParameterContract("MaxCpus", "int?", false, "Optional System/Settings MaxCpus attribute."),
+                new StepParameterContract("NonWinCpus", "int?", false, "Optional System/Settings NonWinCpus attribute."),
+                new StepParameterContract("CpuEntries", "IReadOnlyList<SystemCpuSetting>", false, "Optional full Cpu entry list, including entries without CpuId."),
+                new StepParameterContract("ReplaceCpuEntries", "bool", false, "Whether existing Cpu children are replaced before CpuEntries are added.", "false")
             },
             Array.Empty<StepOutputContract>(),
             new[] { "Re-open the .tsproj and verify System/Settings contains the requested Cpu and IoIdleTask attributes while existing Tasks remain intact." }),
@@ -1361,6 +1650,149 @@ public static class TwinCatStepCatalog
             new[] { "Re-open the .tsproj and confirm Mappings contains the requested OwnerA/OwnerB/Link entry." }),
 
         new StepContract(
+            "tsproj.assert-data-pointer-shape",
+            "TwinCatTsprojMutationService.AssertDataPointerShape",
+            "tsproj",
+            "Reads a .tsproj and asserts that C++ instance DataPointerValues and root Mappings links still match the requested shape.",
+            new[] { "Use after data pointer and mapping steps, and again after XAE save/activate, to catch TwinCAT deleting unresolved DataPointerValues." },
+            new[]
+            {
+                new StepParameterContract("InstanceName", "string", true, "Exact C++ instance display name to inspect."),
+                new StepParameterContract("DataPointers", "IReadOnlyList<ExpectedDataPointerValueShape>", false, "Required DataPointerValues entries, optional per-entry record count, and optional ArrayIndex set."),
+                new StepParameterContract("ExpectedDataPointerRecordCount", "int?", false, "Expected total number of data pointer records across all DataPointerValues entries."),
+                new StepParameterContract("MappingLinks", "IReadOnlyList<ExpectedMappingLinkShape>", false, "Root Mappings OwnerA/OwnerB/Link entries that must be present."),
+                new StepParameterContract("ExpectedDataPointerMappingLinkCount", "int?", false, "Expected number of root Mappings Link entries whose VarA or VarB is a Data Pointer reference."),
+                new StepParameterContract("ExpectedRootMappingLinkCount", "int?", false, "Expected total root Mappings Link count.")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether all requested shape assertions passed."),
+                new StepOutputContract("dataPointerRecordCount", "int", "Total DataPointerValues record count for the inspected instance."),
+                new StepOutputContract("dataPointerMappingLinkCount", "int", "Root Mappings Link count limited to Data Pointer links."),
+                new StepOutputContract("rootMappingLinkCount", "int", "Total root Mappings Link count."),
+                new StepOutputContract("errorsText", "string", "Human-readable assertion failures."),
+                new StepOutputContract("shapeJson", "json", "Full observed shape and error details.")
+            },
+            new[] { "Run against the generated .tsproj before activation and after activation/save; for OptCNC, AxesGroup0 should retain six data pointer records and eight data pointer mapping links." }),
+
+        new StepContract(
+            "tsproj.assert-io-topology-shape",
+            "TwinCatTsprojMutationService.AssertIoTopologyShape",
+            "tsproj",
+            "Reads a .tsproj and asserts the Project/Io topology and root Mappings shape without mutating TwinCAT metadata.",
+            new[] { "Use after dedicated IO topology primitives or after XAE import/scan evidence; this step is a guard and does not create devices or copy IO XML." },
+            new[]
+            {
+                new StepParameterContract("ExpectedDeviceCount", "int?", false, "Expected Project/Io Device count."),
+                new StepParameterContract("ExpectedBoxCount", "int?", false, "Expected total Box count under Project/Io."),
+                new StepParameterContract("ExpectedImageCount", "int?", false, "Expected total Image count under Project/Io."),
+                new StepParameterContract("ExpectedPdoCount", "int?", false, "Expected total Pdo count under Project/Io."),
+                new StepParameterContract("ExpectedPdoEntryCount", "int?", false, "Expected total Pdo Entry count under Project/Io."),
+                new StepParameterContract("ExpectedMappingInfoCount", "int?", false, "Expected root Mappings/MappingInfo count."),
+                new StepParameterContract("ExpectedOwnerACount", "int?", false, "Expected root Mappings/OwnerA count."),
+                new StepParameterContract("ExpectedRootMappingLinkCount", "int?", false, "Expected total root Mappings Link count."),
+                new StepParameterContract("Devices", "IReadOnlyList<ExpectedIoDeviceShape>", false, "Specific Device Id/name/box-count/InfoImageId/Image-count/direct-child-count assertions."),
+                new StepParameterContract("Boxes", "IReadOnlyList<ExpectedIoBoxShape>", false, "Specific Device/Box Id/name/ImageId/BoxFlags/parent/PDO/PDO-entry/direct-child-count assertions."),
+                new StepParameterContract("MappingLinks", "IReadOnlyList<ExpectedMappingLinkShape>", false, "Root Mappings OwnerA/OwnerB/Link entries that must be present.")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether all requested IO shape assertions passed."),
+                new StepOutputContract("deviceCount", "int", "Observed Project/Io Device count."),
+                new StepOutputContract("boxCount", "int", "Observed total Box count."),
+                new StepOutputContract("imageCount", "int", "Observed total Image count."),
+                new StepOutputContract("pdoCount", "int", "Observed total Pdo count."),
+                new StepOutputContract("pdoEntryCount", "int", "Observed total Pdo Entry count."),
+                new StepOutputContract("mappingInfoCount", "int", "Observed root Mappings/MappingInfo count."),
+                new StepOutputContract("rootMappingLinkCount", "int", "Observed root Mappings Link count."),
+                new StepOutputContract("errorsText", "string", "Human-readable assertion failures."),
+                new StepOutputContract("shapeJson", "json", "Full observed shape and error details.")
+            },
+            new[] { "For OptCNC sample parity, use this to prove the generated .tsproj has the expected 5 Device / 28 Box / 107 PDO / 2 MappingInfo skeleton before claiming IO parity." }),
+
+        new StepContract(
+            "tsproj.assert-io-image-references",
+            "TwinCatTsprojMutationService.AssertIoImageReferences",
+            "tsproj",
+            "Reads a .tsproj and asserts IO process-image references without mutating TwinCAT metadata.",
+            new[] { "Use after IO topology creation to catch half-populated process-image shape, for example Device InfoImageId without a direct Image node or ImageId values with no known backing." },
+            new[]
+            {
+                new StepParameterContract("ExpectedRootImageDataCount", "int?", false, "Expected root TcSmProject/ImageDatas/ImageData count."),
+                new StepParameterContract("ExpectedDeviceImageCount", "int?", false, "Expected direct Device/Image count under Project/Io."),
+                new StepParameterContract("ExpectedImageReferenceCount", "int?", false, "Expected ImageId reference count under Project/Io."),
+                new StepParameterContract("RequireDeviceImageForInfoImageId", "bool", false, "Fail when a Device has InfoImageId but no direct Image node.", "true"),
+                new StepParameterContract("RequireImageIdBacking", "bool", false, "Fail when an ImageId does not match root ImageData, direct Device Image, Device InfoImageId, or AllowedUnbackedImageIds.", "true"),
+                new StepParameterContract("AllowedUnbackedImageIds", "IReadOnlyList<string>", false, "Known system image ids that are valid without root ImageData, for example TwinSAFE module image id 118.")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether all requested IO image reference assertions passed."),
+                new StepOutputContract("rootImageDataCount", "int", "Observed root ImageData count."),
+                new StepOutputContract("deviceImageCount", "int", "Observed direct Device/Image count."),
+                new StepOutputContract("deviceWithInfoImageCount", "int", "Observed Device count with InfoImageId."),
+                new StepOutputContract("deviceInfoWithoutImageCount", "int", "Observed Device count with InfoImageId but no direct Image node."),
+                new StepOutputContract("imageReferenceCount", "int", "Observed Project/Io ImageId reference count."),
+                new StepOutputContract("unbackedImageReferenceCount", "int", "Observed ImageId reference count without known backing."),
+                new StepOutputContract("errorsText", "string", "Human-readable assertion failures."),
+                new StepOutputContract("shapeJson", "json", "Full observed IO image reference shape and error details.")
+            },
+            new[] { "For OptCNC sample parity, require four direct Device/Image nodes and allow only documented system image ids as unbacked." }),
+
+        new StepContract(
+            "tsproj.describe-io-topology",
+            "TwinCatTsprojMutationService.DescribeIoTopology",
+            "tsproj",
+            "Reads a .tsproj and emits a normalized IO topology summary without copying or mutating TwinCAT metadata XML.",
+            new[] { "Use this as evidence before designing IO topology steps; it reports stable IDs, names, counts, process images, PDO entries, mapping owners, and optional attributes but never returns raw XML fragments." },
+            new[]
+            {
+                new StepParameterContract("IncludeDevices", "bool", false, "Whether Device summaries should be included.", "true"),
+                new StepParameterContract("IncludeBoxes", "bool", false, "Whether Box summaries should be included.", "true"),
+                new StepParameterContract("IncludePdos", "bool", false, "Whether PDO and PDO Entry summaries should be included.", "true"),
+                new StepParameterContract("IncludeMappings", "bool", false, "Whether root Mappings/MappingInfo/OwnerA/Link summaries should be included.", "true"),
+                new StepParameterContract("IncludeAttributes", "bool", false, "Whether normalized attribute name/value summaries should be included for inspected nodes.", "false"),
+                new StepParameterContract("MaxItemsPerCollection", "int", false, "Optional cap per output collection; zero means no truncation.", "0")
+            },
+            new[]
+            {
+                new StepOutputContract("deviceCount", "int", "Observed Project/Io Device count."),
+                new StepOutputContract("boxCount", "int", "Observed total Box count."),
+                new StepOutputContract("imageCount", "int", "Observed normalized IO Image summary count in the output JSON."),
+                new StepOutputContract("pdoCount", "int", "Observed total Pdo count."),
+                new StepOutputContract("pdoEntryCount", "int", "Observed total Pdo Entry count."),
+                new StepOutputContract("mappingInfoCount", "int", "Observed root Mappings/MappingInfo count."),
+                new StepOutputContract("ownerACount", "int", "Observed root Mappings/OwnerA count."),
+                new StepOutputContract("rootMappingLinkCount", "int", "Observed root Mappings Link count."),
+                new StepOutputContract("truncated", "bool", "Whether collection output was truncated by MaxItemsPerCollection."),
+                new StepOutputContract("shapeJson", "json", "Normalized IO topology description for evidence and diffing.")
+            },
+            new[] { "Run on the target sample and generated .tsproj, compare shapeJson counts and selected IDs/names, then design missing typed IO steps without using copied metadata XML." }),
+
+        new StepContract(
+            "tsproj.compare-io-topology",
+            "TwinCatTsprojMutationService.CompareIoTopology",
+            "tsproj",
+            "Compares two .tsproj files through normalized IO topology facts and reports stable count/key/field differences.",
+            new[] { "This is a read-only guard for evidence and acceptance. It never imports the reference topology, never emits raw IO XML, and must not be used as a metadata copy path." },
+            new[]
+            {
+                new StepParameterContract("ReferenceProjectPath", "string", true, "Reference .tsproj path to compare against the candidate project path."),
+                new StepParameterContract("IncludeMappings", "bool", false, "Whether root Mappings/MappingInfo/OwnerA/Link facts should be compared.", "true"),
+                new StepParameterContract("IncludePdos", "bool", false, "Whether PDO and PDO Entry facts should be compared.", "true"),
+                new StepParameterContract("IncludeAttributes", "bool", false, "Whether normalized attributes should be included in the underlying descriptions.", "false"),
+                new StepParameterContract("MaxDifferences", "int", false, "Maximum number of differences to return; zero means no cap.", "200")
+            },
+            new[]
+            {
+                new StepOutputContract("succeeded", "bool", "Whether all compared IO topology facts match."),
+                new StepOutputContract("differenceCount", "int", "Number of reported differences."),
+                new StepOutputContract("truncated", "bool", "Whether differences were truncated by MaxDifferences."),
+                new StepOutputContract("comparisonJson", "json", "Count comparisons and stable topology differences.")
+            },
+            new[] { "Use after generation and again after XAE save/activate; it compares process-image and PDO-entry facts as normalized fields, so a mismatch proves IO parity is not complete without requiring or exposing sample metadata XML." }),
+
+        new StepContract(
             "tsproj.upsert-element",
             "TwinCatTsprojMutationService.UpsertElement",
             "tsproj",
@@ -1456,6 +1888,103 @@ public static class TwinCatStepCatalog
             new[] { "If 100 or 10000 are not reachable, treat later PLC symbol read failures as runtime/router/permission failures rather than symbol-path failures." }),
 
         new StepContract(
+            "validation.assert-ads-state",
+            "AdsValidationService.AssertStates",
+            "validation",
+            "Asserts that specific ADS ports are reachable and in the expected ADS state, turning activation false positives into hard failures.",
+            new[] { "TwinCAT runtime or router must be installed on the target machine.", "Use after activation when a plan needs exact ports such as 10000, 200, and 300 to be Run." },
+            new[]
+            {
+                new StepParameterContract("NetId", "string", false, "AMS NetId, or local for the local router.", "local"),
+                new StepParameterContract("ExpectedPorts", "IReadOnlyList<ExpectedAdsPortState>", true, "Port/state assertions. Direct CLI accepts --expected=10000=Run;200=Run;300=Run, --ports=10000,200,300 --ads-state=Run, or --json-file."),
+                new StepParameterContract("DeviceState", "short?", false, "Optional device state assertion per port.")
+            },
+            new[]
+            {
+                new StepOutputContract("succeededCount", "int", "Number of ports that matched the expected state."),
+                new StepOutputContract("failedCount", "int", "Number of ports that were unreachable or mismatched."),
+                new StepOutputContract("statesText", "string", "Human-readable port=state assertions."),
+                new StepOutputContract("statesJson", "json", "Per-port expected and actual ADS/device state.")
+            },
+            new[] { "For OptCNC activation proof, require 10000=Run and system ports 200/300=Run instead of accepting a generic activation step success." }),
+
+        new StepContract(
+            "validation.mark-event-log-window",
+            "AdsValidationService.MarkEventLogWindow",
+            "validation",
+            "Marks the current Windows event-log position so a later step can assert only events from the same activation window.",
+            new[] { "Use immediately before engineering.activate-configuration.", "This step is read-only and does not require Visual Studio or ADS." },
+            new[]
+            {
+                new StepParameterContract("LogName", "string", false, "Windows event log name.", "Application"),
+                new StepParameterContract("ProviderName", "string", false, "Event source/provider to mark.", "TcSysSrv"),
+                new StepParameterContract("MarkerFilePath", "string?", false, "Optional JSON file path where the marker should be written for a later plan step.")
+            },
+            new[]
+            {
+                new StepOutputContract("markedAt", "datetime", "Marker timestamp."),
+                new StepOutputContract("lastEntryIndex", "int?", "Last observed provider event index at marker time."),
+                new StepOutputContract("markerJson", "json", "Marker payload usable by validation.assert-event-log-window.")
+            },
+            new[] { "For OptCNC, write the marker to evidenceDir before activation, then pass the marker file to validation.assert-event-log-window after ADS assertions." }),
+
+        new StepContract(
+            "validation.assert-event-log-window",
+            "AdsValidationService.AssertEventLogWindow",
+            "validation",
+            "Asserts that no forbidden TcSysSrv Windows event-log entries appeared after a marker or within a recent time window.",
+            new[] { "Use after activation and ADS state checks.", "By default it fails on Error/Critical TcSysSrv events and AdsState: >15< Config messages." },
+            new[]
+            {
+                new StepParameterContract("Marker", "EventLogWindowMarker?", false, "Inline marker returned by validation.mark-event-log-window."),
+                new StepParameterContract("MarkerFilePath", "string?", false, "Marker JSON file written by validation.mark-event-log-window."),
+                new StepParameterContract("LogName", "string", false, "Windows event log name when no marker is supplied.", "Application"),
+                new StepParameterContract("ProviderName", "string", false, "Event source/provider when no marker is supplied.", "TcSysSrv"),
+                new StepParameterContract("LookbackSeconds", "int", false, "Fallback lookback window when no marker is supplied.", "300"),
+                new StepParameterContract("FailOnErrorOrCritical", "bool", false, "Whether Error/Critical entries fail the step.", "true"),
+                new StepParameterContract("FailOnConfigAdsState", "bool", false, "Whether AdsState: >15< Config messages fail the step.", "true"),
+                new StepParameterContract("FailMessageContains", "IReadOnlyList<string>?", false, "Additional message substrings that should fail the step."),
+                new StepParameterContract("MaxEvents", "int", false, "Maximum events to include in output; zero means no cap.", "50")
+            },
+            new[]
+            {
+                new StepOutputContract("observedEventCount", "int", "Provider event count observed in the window."),
+                new StepOutputContract("errorOrCriticalCount", "int", "Error/Critical event count in the window."),
+                new StepOutputContract("configAdsStateCount", "int", "AdsState >15< Config message count in the window."),
+                new StepOutputContract("errorsText", "string", "Human-readable assertion failures."),
+                new StepOutputContract("assertionJson", "json", "Full event window assertion result.")
+            },
+            new[] { "For OptCNC activation proof, this step closes the gap where engineering.activate-configuration succeeds but TcSysSrv immediately reports an error or returns to Config." }),
+
+        new StepContract(
+            "validation.assert-process-crash-window",
+            "AdsValidationService.AssertProcessCrashWindow",
+            "validation",
+            "Asserts that no matching Windows Application crash events appeared after a marker or within a recent time window.",
+            new[] { "Use after Visual Studio/XAE launch, solution open, build, or activation when unattended runs must distinguish a COM/RPC disconnect from a crashed IDE host.", "By default it checks Application Error, .NET Runtime, and Windows Error Reporting events for devenv.exe, TcXaeShell.exe, and TwinCAT System Manager modules." },
+            new[]
+            {
+                new StepParameterContract("Marker", "EventLogWindowMarker?", false, "Inline marker returned by validation.mark-event-log-window."),
+                new StepParameterContract("MarkerFilePath", "string?", false, "Marker JSON file written by validation.mark-event-log-window."),
+                new StepParameterContract("LogName", "string", false, "Windows event log name.", "Application"),
+                new StepParameterContract("LookbackSeconds", "int", false, "Fallback lookback window when no marker is supplied.", "300"),
+                new StepParameterContract("ProviderNames", "IReadOnlyList<string>?", false, "Event sources to scan. Direct CLI accepts semicolon-separated provider names."),
+                new StepParameterContract("ProcessNames", "IReadOnlyList<string>?", false, "Process names that should fail when found in an event message."),
+                new StepParameterContract("ModuleNames", "IReadOnlyList<string>?", false, "Fault module names that should fail when found in an event message."),
+                new StepParameterContract("MessageContains", "IReadOnlyList<string>?", false, "Additional message substrings that should fail the step."),
+                new StepParameterContract("MaxEvents", "int", false, "Maximum events to include in output; zero means no cap.", "100")
+            },
+            new[]
+            {
+                new StepOutputContract("observedEventCount", "int", "Application event count observed in the window."),
+                new StepOutputContract("matchingEventCount", "int", "Crash event count matching the requested process/module/message filters."),
+                new StepOutputContract("errorsText", "string", "Human-readable assertion failures."),
+                new StepOutputContract("matchingEventsJson", "json", "Matching crash event snapshots."),
+                new StepOutputContract("assertionJson", "json", "Full process crash assertion result.")
+            },
+            new[] { "For OptCNC, use the same marker file as the activation TcSysSrv event guard so a Visual Studio/XAE crash becomes an explicit validation failure instead of only an RPC error." }),
+
+        new StepContract(
             "validation.ads-read",
             "AdsValidationService.Read",
             "validation",
@@ -1506,11 +2035,22 @@ public static class TwinCatStepCatalog
 
     public static IReadOnlyList<string> RecommendedExecutionOrder { get; } = new[]
     {
+        "engineering.cleanup-dte-host-processes",
         "engineering.launch-visual-studio",
         "engineering.create-xae-solution",
         "engineering.create-cpp-project",
         "engineering.create-vs-cpp-project",
+        "engineering.create-scope-project",
+        "scope.ensure-configuration",
+        "scope.assert-configuration-shape",
         "engineering.ensure-solution-project-dependency",
+        "engineering.create-io-device",
+        "engineering.create-ethercat-box",
+        "engineering.apply-io-tree-plan",
+        "ethercat.assert-product-revisions",
+        "engineering.search-io-devices",
+        "engineering.reload-io-devices",
+        "engineering.generate-io-mappings",
         "cpp.remove-project-item",
         "cpp.create-project-item",
         "cpp.write-project-item-content",
@@ -1571,6 +2111,11 @@ public static class TwinCatStepCatalog
         "tsproj.ensure-interface-pointer",
         "tsproj.ensure-data-pointer",
         "tsproj.ensure-mapping-link",
+        "tsproj.assert-data-pointer-shape",
+        "tsproj.assert-io-topology-shape",
+        "tsproj.assert-io-image-references",
+        "tsproj.describe-io-topology",
+        "tsproj.compare-io-topology",
         "tsproj.upsert-element",
         "tsproj.upsert-fragment",
         "tsproj.apply-mutation-plan",
@@ -1583,6 +2128,9 @@ public static class TwinCatStepCatalog
         "signing.verify-twincat-binary",
         "engineering.activate-configuration",
         "validation.ads-scan",
+        "validation.assert-ads-state",
+        "validation.mark-event-log-window",
+        "validation.assert-event-log-window",
         "validation.ads-read",
         "validation.ads-read-symbols"
     };

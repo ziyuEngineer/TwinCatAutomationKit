@@ -1,3 +1,4 @@
+using System.Text.Json;
 using TwinCatAutomationKit.Abstractions;
 using TwinCatAutomationKit.TwinCat;
 
@@ -12,13 +13,21 @@ internal static partial class StepInvokeCommand
         int cycleTimeNs = CliOptionParser.GetIntOption(options, "cycle-time-ns", 10_000_000);
         int amsPort = CliOptionParser.GetIntOption(options, "ams-port", 301);
         bool? ioAtBegin = TryGetNullableBool(options, "io-at-begin");
+        int? taskId = TryGetNullableInt(options, "task-id");
 
         return RunTsprojOperation(
             options,
             (tsproj, projectPath) =>
             {
-                tsproj.EnsureTaskDefinition(projectPath, new EnsureTaskDefinitionRequest(taskName, priority, cycleTimeNs, amsPort, ioAtBegin));
-                return StepExecutionOutcome.Success($"Task definition {taskName} updated in tsproj.", CreateOutputs(("projectPath", projectPath)));
+                tsproj.EnsureTaskDefinition(projectPath, new EnsureTaskDefinitionRequest(taskName, priority, cycleTimeNs, amsPort, ioAtBegin, taskId));
+                string? objectId = taskId.HasValue ? TwinCatTsprojMutationService.DeriveTaskObjectId(taskId.Value) : null;
+                return StepExecutionOutcome.Success(
+                    $"Task definition {taskName} updated in tsproj.",
+                    CreateOutputs(
+                        ("projectPath", projectPath),
+                        ("taskName", taskName),
+                        ("taskId", taskId?.ToString()),
+                        ("objectId", objectId)));
             });
     }
 
@@ -629,20 +638,29 @@ internal static partial class StepInvokeCommand
 
     private static StepExecutionOutcome ExecuteTsprojEnsureSystemSettings(IReadOnlyDictionary<string, string> options)
     {
-        int? cpuId = TryGetNullableInt(options, "cpu-id");
-        int? ioIdleTaskPriority = TryGetNullableInt(options, "io-idle-task-priority");
-        bool insertBeforeTasks = CliOptionParser.GetBoolOption(options, "insert-before-tasks", true);
+        EnsureSystemSettingsRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<EnsureSystemSettingsRequest>(options)
+            : new EnsureSystemSettingsRequest(
+                TryGetNullableInt(options, "cpu-id"),
+                TryGetNullableInt(options, "io-idle-task-priority"),
+                CliOptionParser.GetBoolOption(options, "insert-before-tasks", true),
+                MaxCpus: TryGetNullableInt(options, "max-cpus"),
+                NonWinCpus: TryGetNullableInt(options, "non-win-cpus"));
 
-        if (!cpuId.HasValue && !ioIdleTaskPriority.HasValue)
+        if (!request.CpuId.HasValue &&
+            !request.IoIdleTaskPriority.HasValue &&
+            !request.MaxCpus.HasValue &&
+            !request.NonWinCpus.HasValue &&
+            (request.CpuEntries?.Count ?? 0) == 0)
         {
-            throw new InvalidOperationException("tsproj.ensure-system-settings requires at least --cpu-id or --io-idle-task-priority.");
+            throw new InvalidOperationException("tsproj.ensure-system-settings requires at least one typed settings field.");
         }
 
         return RunTsprojOperation(
             options,
             (tsproj, projectPath) =>
             {
-                tsproj.EnsureSystemSettings(projectPath, new EnsureSystemSettingsRequest(cpuId, ioIdleTaskPriority, insertBeforeTasks));
+                tsproj.EnsureSystemSettings(projectPath, request);
                 return StepExecutionOutcome.Success("System Settings ensured in tsproj.", CreateOutputs(("projectPath", projectPath)));
             });
     }
@@ -723,6 +741,176 @@ internal static partial class StepInvokeCommand
             {
                 tsproj.ApplyInstanceDataPointerPlan(projectPath, request);
                 return StepExecutionOutcome.Success($"Instance data pointer plan applied with {request.Items.Count} item(s).", CreateOutputs(("projectPath", projectPath)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojAssertDataPointerShape(IReadOnlyDictionary<string, string> options)
+    {
+        AssertDataPointerShapeRequest request = ReadJsonPayload<AssertDataPointerShapeRequest>(options);
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                AssertDataPointerShapeResult result = tsproj.AssertDataPointerShape(projectPath, request);
+                IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+                    ("projectPath", projectPath),
+                    ("succeeded", result.Succeeded ? "true" : "false"),
+                    ("instanceName", result.InstanceName),
+                    ("dataPointerRecordCount", result.DataPointerRecordCount.ToString()),
+                    ("dataPointerMappingLinkCount", result.DataPointerMappingLinkCount.ToString()),
+                    ("rootMappingLinkCount", result.RootMappingLinkCount.ToString()),
+                    ("errorsText", string.Join("; ", result.Errors)),
+                    ("shapeJson", JsonSerializer.Serialize(result, JsonOptions)));
+
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(result.Summary, outputs)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary + " " + string.Join("; ", result.Errors),
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojAssertIoTopologyShape(IReadOnlyDictionary<string, string> options)
+    {
+        AssertIoTopologyShapeRequest request = ReadJsonPayload<AssertIoTopologyShapeRequest>(options);
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                AssertIoTopologyShapeResult result = tsproj.AssertIoTopologyShape(projectPath, request);
+                IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+                    ("projectPath", projectPath),
+                    ("succeeded", result.Succeeded ? "true" : "false"),
+                    ("deviceCount", result.DeviceCount.ToString()),
+                    ("boxCount", result.BoxCount.ToString()),
+                    ("imageCount", result.ImageCount.ToString()),
+                    ("pdoCount", result.PdoCount.ToString()),
+                    ("pdoEntryCount", result.PdoEntryCount.ToString()),
+                    ("mappingInfoCount", result.MappingInfoCount.ToString()),
+                    ("ownerACount", result.OwnerACount.ToString()),
+                    ("rootMappingLinkCount", result.RootMappingLinkCount.ToString()),
+                    ("errorsText", string.Join("; ", result.Errors)),
+                    ("shapeJson", JsonSerializer.Serialize(result, JsonOptions)));
+
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(result.Summary, outputs)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary + " " + string.Join("; ", result.Errors),
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojAssertIoImageReferences(IReadOnlyDictionary<string, string> options)
+    {
+        AssertIoImageReferencesRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<AssertIoImageReferencesRequest>(options)
+            : new AssertIoImageReferencesRequest(
+                ExpectedRootImageDataCount: TryGetNullableInt(options, "expected-root-image-data-count"),
+                ExpectedDeviceImageCount: TryGetNullableInt(options, "expected-device-image-count"),
+                ExpectedImageReferenceCount: TryGetNullableInt(options, "expected-image-reference-count"),
+                RequireDeviceImageForInfoImageId: CliOptionParser.GetBoolOption(options, "require-device-image-for-info-image-id", true),
+                RequireImageIdBacking: CliOptionParser.GetBoolOption(options, "require-image-id-backing", true),
+                AllowedUnbackedImageIds: ParseOptionalList(CliOptionParser.GetOption(options, "allowed-unbacked-image-ids")));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                AssertIoImageReferencesResult result = tsproj.AssertIoImageReferences(projectPath, request);
+                IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+                    ("projectPath", projectPath),
+                    ("succeeded", result.Succeeded ? "true" : "false"),
+                    ("rootImageDataCount", result.RootImageDataCount.ToString()),
+                    ("deviceImageCount", result.DeviceImageCount.ToString()),
+                    ("deviceWithInfoImageCount", result.DeviceWithInfoImageCount.ToString()),
+                    ("deviceInfoWithoutImageCount", result.DeviceInfoWithoutImageCount.ToString()),
+                    ("imageReferenceCount", result.ImageReferenceCount.ToString()),
+                    ("backedImageReferenceCount", result.BackedImageReferenceCount.ToString()),
+                    ("unbackedImageReferenceCount", result.UnbackedImageReferenceCount.ToString()),
+                    ("errorsText", string.Join("; ", result.Errors)),
+                    ("shapeJson", JsonSerializer.Serialize(result, JsonOptions)));
+
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(result.Summary, outputs)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary + " " + string.Join("; ", result.Errors),
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojDescribeIoTopology(IReadOnlyDictionary<string, string> options)
+    {
+        DescribeIoTopologyRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<DescribeIoTopologyRequest>(options)
+            : new DescribeIoTopologyRequest(
+                IncludeDevices: CliOptionParser.GetBoolOption(options, "include-devices", true),
+                IncludeBoxes: CliOptionParser.GetBoolOption(options, "include-boxes", true),
+                IncludePdos: CliOptionParser.GetBoolOption(options, "include-pdos", true),
+                IncludeMappings: CliOptionParser.GetBoolOption(options, "include-mappings", true),
+                IncludeAttributes: CliOptionParser.GetBoolOption(options, "include-attributes", false),
+                MaxItemsPerCollection: CliOptionParser.GetIntOption(options, "max-items-per-collection", 0));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                DescribeIoTopologyResult result = tsproj.DescribeIoTopology(projectPath, request);
+                IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+                    ("projectPath", result.ProjectPath),
+                    ("deviceCount", result.DeviceCount.ToString()),
+                    ("boxCount", result.BoxCount.ToString()),
+                    ("imageCount", result.ImageCount.ToString()),
+                    ("pdoCount", result.PdoCount.ToString()),
+                    ("pdoEntryCount", result.PdoEntryCount.ToString()),
+                    ("mappingInfoCount", result.MappingInfoCount.ToString()),
+                    ("ownerACount", result.OwnerACount.ToString()),
+                    ("rootMappingLinkCount", result.RootMappingLinkCount.ToString()),
+                    ("truncated", result.Truncated ? "true" : "false"),
+                    ("shapeJson", JsonSerializer.Serialize(result, JsonOptions)));
+
+                return StepExecutionOutcome.Success(result.Summary, outputs);
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteTsprojCompareIoTopology(IReadOnlyDictionary<string, string> options)
+    {
+        CompareIoTopologyRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<CompareIoTopologyRequest>(options)
+            : new CompareIoTopologyRequest(
+                CliOptionParser.RequireOption(options, "reference-project-path", "reference-tsproj-path"),
+                IncludeMappings: CliOptionParser.GetBoolOption(options, "include-mappings", true),
+                IncludePdos: CliOptionParser.GetBoolOption(options, "include-pdos", true),
+                IncludeAttributes: CliOptionParser.GetBoolOption(options, "include-attributes", false),
+                MaxDifferences: CliOptionParser.GetIntOption(options, "max-differences", 200));
+
+        return RunTsprojOperation(
+            options,
+            (tsproj, projectPath) =>
+            {
+                CompareIoTopologyResult result = tsproj.CompareIoTopology(projectPath, request);
+                IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+                    ("referenceProjectPath", result.ReferenceProjectPath),
+                    ("candidateProjectPath", result.CandidateProjectPath),
+                    ("succeeded", result.Succeeded ? "true" : "false"),
+                    ("differenceCount", result.Differences.Count.ToString()),
+                    ("truncated", result.Truncated ? "true" : "false"),
+                    ("comparisonJson", JsonSerializer.Serialize(result, JsonOptions)));
+
+                return result.Succeeded
+                    ? StepExecutionOutcome.Success(result.Summary, outputs)
+                    : new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary,
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
             });
     }
 

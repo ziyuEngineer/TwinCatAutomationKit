@@ -235,6 +235,15 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.True(scan.AnySucceeded, "validation.ads-scan should find at least one reachable configured port.");
         AssertAdsScanHitRuntimePort(scan, config.AdsPort);
 
+        AssertAdsStateResult stateAssertion = ads.AssertStates(new AssertAdsStateRequest(
+            config.AmsNetId,
+            [new ExpectedAdsPortState(config.AdsPort, "Run")]));
+        state.Cover("AdsValidationService.AssertStates");
+        state.CoverStep("validation.assert-ads-state");
+        IntegrationAssertEx.True(
+            stateAssertion.Succeeded,
+            "validation.assert-ads-state failed: " + string.Join("; ", stateAssertion.Ports.Select(port => port.ErrorMessage ?? $"{port.Port}={port.ActualAdsState}")));
+
         IReadOnlyList<AdsReadSymbolRequest> symbols = BuildRequiredAdsSymbols(config);
         AdsReadSymbolsResult batch = ads.ReadSymbols(new AdsReadSymbolsRequest(
             config.AmsNetId,
@@ -565,6 +574,12 @@ internal static class OrderedTwinCatScenarioTests
                 "atomic-ads-scan",
                 ads,
                 new AdsPortScanRequest(config.AmsNetId, config.AdsScanPorts)),
+            TwinCatAtomicSteps.AssertAdsState(
+                "atomic-assert-ads-state",
+                ads,
+                new AssertAdsStateRequest(
+                    config.AmsNetId,
+                    [new ExpectedAdsPortState(config.AdsPort, "Run")])),
             TwinCatAtomicSteps.AdsRead(
                 "atomic-ads-read",
                 ads,
@@ -595,6 +610,7 @@ internal static class OrderedTwinCatScenarioTests
         state.Cover("TwinCatAtomicSteps.UpsertFragmentInTsproj");
         state.Cover("TwinCatAtomicSteps.ApplyMutationPlanInTsproj");
         state.Cover("TwinCatAtomicSteps.AdsScan");
+        state.Cover("TwinCatAtomicSteps.AssertAdsState");
         state.Cover("TwinCatAtomicSteps.AdsRead");
         state.Cover("TwinCatAtomicSteps.AdsReadSymbols");
     }
@@ -613,6 +629,7 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatEngineeringService.OpenTwinCatSolution",
             "TwinCatEngineeringService.CreateCppProject",
             "TwinCatEngineeringService.CreateVisualStudioCppProject",
+            "TwinCatEngineeringService.CreateScopeProject",
             "TwinCatEngineeringService.EnsureSolutionProjectDependency",
             "TwinCatEngineeringService.CreateCppProjectItem",
             "TwinCatEngineeringService.WriteCppProjectItemContent",
@@ -636,6 +653,8 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatEngineeringService.BuildCurrentSolution",
             "TwinCatEngineeringService.ActivateConfiguration",
             "TwinCatEngineeringService.CloseVisualStudio",
+            "TwinCatScopeConfigurationService.EnsureConfiguration",
+            "TwinCatScopeConfigurationService.AssertConfigurationShape",
             "TwinCatTsprojMutationService.ApplyMutationPlan",
             "TwinCatTsprojMutationService.UpsertElement",
             "TwinCatTsprojMutationService.UpsertFragment",
@@ -668,6 +687,9 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.EnsureMappingInfo",
             "TwinCatTsprojMutationService.EnsureIoMappingLink",
             "TwinCatTsprojMutationService.ApplyIoTopologyPlan",
+            "TwinCatTsprojMutationService.AssertIoTopologyShape",
+            "TwinCatTsprojMutationService.DescribeIoTopology",
+            "TwinCatTsprojMutationService.CompareIoTopology",
             "TwinCatTsprojMutationService.ReplaceDataTypesSection",
             "TwinCatTsprojMutationService.ReplaceSystemSettingsSection",
             "TwinCatTsprojMutationService.EnsureSystemSettings",
@@ -684,6 +706,7 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.EnsureParameterValue",
             "TwinCatTsprojMutationService.EnsureInterfacePointerValue",
             "TwinCatTsprojMutationService.EnsureDataPointerValue",
+            "TwinCatTsprojMutationService.AssertDataPointerShape",
             "TwinCatTsprojMutationService.MergeNamedElementFragment",
             "TwinCatTsprojMutationService.ConvertObjectIdToInitSymbolData",
             "TwinCatTsprojMutationService.DeriveIoTaskImageObjectId",
@@ -691,6 +714,7 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatSigningService.SetLicense",
             "TwinCatSigningService.ResolveToolPath",
             "AdsValidationService.ScanPorts",
+            "AdsValidationService.AssertStates",
             "AdsValidationService.Read",
             "AdsValidationService.ReadSymbols",
         ];
@@ -939,6 +963,9 @@ internal static class OrderedTwinCatScenarioTests
             TraceScenarioStage("exercise public C++ project item steps");
             ExerciseCppProjectItemSteps(engineering, session, info);
             coveredInterfaces.Add("TwinCatEngineeringService.CreateVisualStudioCppProject");
+            coveredInterfaces.Add("TwinCatEngineeringService.CreateScopeProject");
+            coveredInterfaces.Add("TwinCatScopeConfigurationService.EnsureConfiguration");
+            coveredInterfaces.Add("TwinCatScopeConfigurationService.AssertConfigurationShape");
             coveredInterfaces.Add("TwinCatEngineeringService.EnsureSolutionProjectDependency");
             coveredInterfaces.Add("TwinCatEngineeringService.CreateCppProjectItem");
             coveredInterfaces.Add("TwinCatEngineeringService.WriteCppProjectItemContent");
@@ -947,6 +974,9 @@ internal static class OrderedTwinCatScenarioTests
             coveredInterfaces.Add("TwinCatEngineeringService.SetCppItemDefinitionProperty");
             coveredInterfaces.Add("TwinCatEngineeringService.SetCppProjectItemMetadata");
             coveredStepKinds.Add("engineering.create-vs-cpp-project");
+            coveredStepKinds.Add("engineering.create-scope-project");
+            coveredStepKinds.Add("scope.ensure-configuration");
+            coveredStepKinds.Add("scope.assert-configuration-shape");
             coveredStepKinds.Add("engineering.ensure-solution-project-dependency");
             coveredStepKinds.Add("cpp.create-project-item");
             coveredStepKinds.Add("cpp.write-project-item-content");
@@ -1278,6 +1308,14 @@ internal static class OrderedTwinCatScenarioTests
         SolutionProjectDependencyResult dependency = engineering.EnsureSolutionProjectDependency(
             session,
             new EnsureSolutionProjectDependencyRequest(VsCppProjectName, ProjectName));
+        ScopeProjectInfo scopeProject = engineering.CreateScopeProject(
+            session,
+            new CreateScopeProjectRequest("Scope", ConfigurationFileName: "Scope Project1.tcscopex"));
+        TwinCatScopeConfigurationService scopeConfiguration = new();
+        ScopeConfigurationResult scopeConfigurationResult = scopeConfiguration.EnsureConfiguration(
+            CreateOrderedScopeConfigurationRequest(scopeProject.ConfigurationFilePath!));
+        ScopeConfigurationShapeResult scopeConfigurationShape = scopeConfiguration.AssertConfigurationShape(
+            CreateOrderedScopeShapeRequest(scopeProject.ConfigurationFilePath!));
 
         AssertCppProjectItemSteps(
             info.SolutionPath,
@@ -1293,7 +1331,10 @@ internal static class OrderedTwinCatScenarioTests
             vsProject,
             adsItem,
             adsContent,
-            dependency);
+            dependency,
+            scopeProject,
+            scopeConfigurationResult,
+            scopeConfigurationShape);
     }
 
     private static void ApplyFileMutations(
@@ -1752,6 +1793,9 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.EnsureMappingInfo",
             "TwinCatTsprojMutationService.EnsureIoMappingLink",
             "TwinCatTsprojMutationService.ApplyIoTopologyPlan",
+            "TwinCatTsprojMutationService.AssertIoTopologyShape",
+            "TwinCatTsprojMutationService.DescribeIoTopology",
+            "TwinCatTsprojMutationService.CompareIoTopology",
             "TwinCatTsprojMutationService.ReplaceDataTypesSection",
             "TwinCatTsprojMutationService.ReplaceSystemSettingsSection",
             "TwinCatTsprojMutationService.EnsureSystemSettings",
@@ -1768,6 +1812,7 @@ internal static class OrderedTwinCatScenarioTests
             "TwinCatTsprojMutationService.EnsureParameterValue",
             "TwinCatTsprojMutationService.EnsureInterfacePointerValue",
             "TwinCatTsprojMutationService.EnsureDataPointerValue",
+            "TwinCatTsprojMutationService.AssertDataPointerShape",
             "TwinCatTsprojMutationService.MergeNamedElementFragment",
             "TwinCatTsprojMutationService.ConvertObjectIdToInitSymbolData",
             "TwinCatTsprojMutationService.DeriveIoTaskImageObjectId",
@@ -1826,6 +1871,10 @@ internal static class OrderedTwinCatScenarioTests
             "tsproj.ensure-parameter",
             "tsproj.ensure-interface-pointer",
             "tsproj.ensure-data-pointer",
+            "tsproj.assert-data-pointer-shape",
+            "tsproj.assert-io-topology-shape",
+            "tsproj.describe-io-topology",
+            "tsproj.compare-io-topology",
             "tsproj.merge-fragment",
         })
         {
@@ -1988,6 +2037,96 @@ internal static class OrderedTwinCatScenarioTests
         AssertMappingInfo(document, "{00000000-0020-0201-3000-010131000101}", "#x02030030");
         AssertMappingInfo(document, "{00000000-0020-0201-4000-010132000101}", "#x02030040");
 
+        TwinCatTsprojMutationService mutation = new();
+        AssertDataPointerShapeResult dataPointerShape = mutation.AssertDataPointerShape(
+            state.ProjectInfo.ProjectPath,
+            new AssertDataPointerShapeRequest(
+                state.AuxInstanceName,
+                [
+                    new ExpectedDataPointerValueShape("DataIn", 1),
+                    new ExpectedDataPointerValueShape("DataOut", 1),
+                    new ExpectedDataPointerValueShape("IndexedData", 1, [1]),
+                ],
+                ExpectedDataPointerRecordCount: 3,
+                MappingLinks:
+                [
+                    new ExpectedMappingLinkShape(
+                        "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+                        "TIXC^" + CppProjectName + "^" + state.AuxInstanceName,
+                        "PlcTask Outputs^MAIN.nStage2Seed",
+                        "Input^DataIn"),
+                    new ExpectedMappingLinkShape(
+                        "TIXC^" + CppProjectName + "^" + state.AuxInstanceName,
+                        "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+                        "Output^DataOut",
+                        "PlcTask Inputs^MAIN.nStage2"),
+                ],
+                ExpectedRootMappingLinkCount: 6));
+        IntegrationAssertEx.True(dataPointerShape.Succeeded, dataPointerShape.Summary + " " + string.Join("; ", dataPointerShape.Errors));
+        state.Cover("TwinCatTsprojMutationService.AssertDataPointerShape");
+
+        AssertIoTopologyShapeResult ioShape = mutation.AssertIoTopologyShape(
+            state.ProjectInfo.ProjectPath,
+            new AssertIoTopologyShapeRequest(
+                ExpectedDeviceCount: 2,
+                ExpectedBoxCount: 3,
+                ExpectedImageCount: 1,
+                ExpectedPdoCount: 2,
+                ExpectedMappingInfoCount: 2,
+                ExpectedOwnerACount: 5,
+                ExpectedRootMappingLinkCount: 6,
+                Devices:
+                [
+                    new ExpectedIoDeviceShape(31, "Integration Device 31 (EtherCAT)", 2, "31", 1),
+                    new ExpectedIoDeviceShape(32, "Integration Device 32 (EtherCAT)", 1),
+                ],
+                Boxes:
+                [
+                    new ExpectedIoBoxShape(31, 3102, "Integration Terminal 3102 (EL2889)", 1, "1002"),
+                    new ExpectedIoBoxShape(32, 3201, "Integration Box 3201 (EK1100)", 1),
+                ],
+                MappingLinks:
+                [
+                    new ExpectedMappingLinkShape(
+                        "TIID^Integration Device 31 (EtherCAT)",
+                        "TIXC^" + CppProjectName + "^" + state.PrimaryInstanceName,
+                        "Integration Node 3101 (CU2508)^Integration Terminal 3102 (EL2889)^Channel 1^Output",
+                        "Outputs^Power"),
+                    new ExpectedMappingLinkShape(
+                        "TIID^Integration Device 32 (EtherCAT)",
+                        "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
+                        "Integration Box 3201 (EK1100)^PLC_Inputs^Input",
+                        "PlcTask Inputs^MAIN.nStage1"),
+                ]));
+        IntegrationAssertEx.True(ioShape.Succeeded, ioShape.Summary + " " + string.Join("; ", ioShape.Errors));
+        state.Cover("TwinCatTsprojMutationService.AssertIoTopologyShape");
+
+        DescribeIoTopologyResult ioDescription = mutation.DescribeIoTopology(
+            state.ProjectInfo.ProjectPath,
+            new DescribeIoTopologyRequest(IncludeAttributes: true));
+        IntegrationAssertEx.True(ioDescription.Succeeded, ioDescription.Summary);
+        IntegrationAssertEx.Equal(2, ioDescription.DeviceCount, "DescribeIoTopology should report the real IO Device count.");
+        IntegrationAssertEx.Equal(3, ioDescription.BoxCount, "DescribeIoTopology should report the real IO Box count.");
+        IntegrationAssertEx.Equal(1, ioDescription.ImageCount, "DescribeIoTopology should report the real IO Image count.");
+        IntegrationAssertEx.Equal(2, ioDescription.PdoCount, "DescribeIoTopology should report the real PDO count.");
+        IntegrationAssertEx.True(
+            ioDescription.Devices.Any(device => device.DeviceId == 31 && device.TotalBoxCount == 2),
+            "DescribeIoTopology should include normalized Device Id/name/count records.");
+        IntegrationAssertEx.True(
+            ioDescription.Images.Any(image => image.DeviceId == 31 && image.Id == "31"),
+            "DescribeIoTopology should include normalized process image records.");
+        IntegrationAssertEx.True(
+            ioDescription.Pdos.Any(pdo => pdo.DeviceId == 31 && pdo.BoxId == 3102 && pdo.EntryCount == 1),
+            "DescribeIoTopology should include normalized PDO ownership and entry counts.");
+        state.Cover("TwinCatTsprojMutationService.DescribeIoTopology");
+
+        CompareIoTopologyResult selfComparison = mutation.CompareIoTopology(
+            state.ProjectInfo.ProjectPath,
+            new CompareIoTopologyRequest(state.ProjectInfo.ProjectPath, MaxDifferences: 20));
+        IntegrationAssertEx.True(selfComparison.Succeeded, selfComparison.Summary);
+        IntegrationAssertEx.Equal(0, selfComparison.Differences.Count, "Self comparison should have no IO topology differences.");
+        state.Cover("TwinCatTsprojMutationService.CompareIoTopology");
+
         AssertMapping(
             document,
             "TIPC^" + state.PlcProjectName + "^" + state.PlcInstanceName,
@@ -2088,6 +2227,7 @@ internal static class OrderedTwinCatScenarioTests
             "atomic-upsert-fragment",
             "atomic-apply-mutation-plan",
             "atomic-ads-scan",
+            "atomic-assert-ads-state",
             "atomic-ads-read",
             "atomic-ads-read-symbols",
         ];
@@ -2123,6 +2263,10 @@ internal static class OrderedTwinCatScenarioTests
         IntegrationAssertEx.True(
             succeededPorts.Split(';', StringSplitOptions.RemoveEmptyEntries).Contains(expectedAdsPort.ToString(CultureInfo.InvariantCulture)),
             $"Atomic ADS scan should include configured runtime port {expectedAdsPort} in succeededPorts.");
+
+        StepExecutionRecord adsState = RequireStepRecord(summary, "atomic-assert-ads-state");
+        IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, adsState.Status, "Atomic ADS state assertion should report Succeeded.");
+        IntegrationAssertEx.Contains(expectedAdsPort.ToString(CultureInfo.InvariantCulture) + "=Run", RequireOutput(adsState, "portsText"), "Atomic ADS state assertion should prove the configured runtime port is Run.");
 
         StepExecutionRecord adsRead = RequireStepRecord(summary, "atomic-ads-read");
         IntegrationAssertEx.Equal(StepExecutionStatus.Succeeded, adsRead.Status, "Atomic ADS read should report Succeeded.");
@@ -2194,7 +2338,10 @@ internal static class OrderedTwinCatScenarioTests
         VisualStudioCppProjectInfo vsProject,
         CppProjectItemResult adsItem,
         CppProjectItemContentResult adsContent,
-        SolutionProjectDependencyResult dependency)
+        SolutionProjectDependencyResult dependency,
+        ScopeProjectInfo scopeProject,
+        ScopeConfigurationResult scopeConfigurationResult,
+        ScopeConfigurationShapeResult scopeConfigurationShape)
     {
         IntegrationAssertEx.Equal(CppProjectItemType.ClCompile, sourceItem.ItemType, "StepProbe.cpp should be registered as ClCompile.");
         IntegrationAssertEx.Equal(CppProjectItemType.ClInclude, headerItem.ItemType, "StepProbe.h should infer ClInclude.");
@@ -2234,13 +2381,112 @@ internal static class OrderedTwinCatScenarioTests
         AssertVcxItem(adsProject, "ClCompile", "SampleRPC.cpp");
         AssertElementChildValue(adsProject, "PropertyGroup", "ConfigurationType", "Application");
         AssertElementChildValue(adsProject, "Link", "SubSystem", "Console");
+        AssertScopeProject(scopeProject, scopeConfigurationResult, scopeConfigurationShape);
 
         string solutionText = File.ReadAllText(solutionPath);
         IntegrationAssertEx.Contains(VsCppProjectName, solutionText, "Solution should contain the VS C++ project name.");
+        IntegrationAssertEx.Contains("Scope\\Scope.tcmproj", solutionText.Replace('/', '\\'), "Solution should contain the generated Scope project path.");
+        IntegrationAssertEx.Contains(scopeProject.ProjectGuid, solutionText, "Solution should contain the generated Scope project GUID.");
         IntegrationAssertEx.Contains("ProjectSection(ProjectDependencies)", solutionText, "Solution should contain a project dependency section.");
         IntegrationAssertEx.Contains(dependency.ProjectGuid, solutionText, "Solution should contain the dependent project GUID.");
         IntegrationAssertEx.Contains(dependency.DependsOnProjectGuid, solutionText, "Solution should contain the dependency project GUID.");
     }
+
+    private static void AssertScopeProject(
+        ScopeProjectInfo scopeProject,
+        ScopeConfigurationResult scopeConfigurationResult,
+        ScopeConfigurationShapeResult scopeConfigurationShape)
+    {
+        IntegrationAssertEx.True(File.Exists(scopeProject.ProjectFilePath), $"Scope project should exist: {scopeProject.ProjectFilePath}");
+        IntegrationAssertEx.True(scopeProject.AddedToSolution, "Scope project should be added to the solution.");
+        IntegrationAssertEx.True(Guid.TryParse(scopeProject.ProjectGuid.Trim('{', '}'), out _), "Scope project GUID should be parseable.");
+        IntegrationAssertEx.True(!string.IsNullOrWhiteSpace(scopeProject.ConfigurationFilePath), "Scope configuration path should be reported.");
+        IntegrationAssertEx.True(File.Exists(scopeProject.ConfigurationFilePath!), $"Scope configuration should exist: {scopeProject.ConfigurationFilePath}");
+
+        XDocument project = XDocument.Load(scopeProject.ProjectFilePath);
+        AssertElementChildValue(project, "PropertyGroup", "Name", "Scope");
+        bool contentRegistered = project.Descendants().Any(element =>
+            element.Name.LocalName == "Content" &&
+            string.Equals(GetAttributeValue(element, "Include"), "Scope Project1.tcscopex", StringComparison.OrdinalIgnoreCase));
+        IntegrationAssertEx.True(contentRegistered, "Scope .tcmproj should register the generated .tcscopex file.");
+
+        XDocument config = XDocument.Load(scopeProject.ConfigurationFilePath!);
+        IntegrationAssertEx.Equal("ScopeProject", config.Root?.Name.LocalName, "Generated Scope config should use the ScopeProject root.");
+        AssertElementChildValue(config, "ScopeProject", "Name", "Scope Project");
+        IntegrationAssertEx.Equal(scopeProject.ConfigurationFilePath, scopeConfigurationResult.ConfigurationFilePath, "Scope configuration result should report the edited file.");
+        IntegrationAssertEx.Equal(2, scopeConfigurationResult.AdsChannelCount, "Scope configuration should create two ADS acquisitions.");
+        IntegrationAssertEx.Equal(2, scopeConfigurationResult.ChartChannelCount, "Scope configuration should create two chart channels.");
+        IntegrationAssertEx.True(scopeConfigurationShape.Succeeded, "Scope configuration shape should match: " + string.Join("; ", scopeConfigurationShape.Errors));
+        IntegrationAssertEx.Equal("Scope Project", scopeConfigurationShape.ScopeName, "Scope shape should report the requested Scope name.");
+        IntegrationAssertEx.Equal("YT Chart", scopeConfigurationShape.ChartName, "Scope shape should report the requested chart name.");
+        IntegrationAssertEx.Equal(2, scopeConfigurationShape.AdsChannelCount, "Scope shape should observe two ADS acquisitions.");
+        IntegrationAssertEx.Equal(2, scopeConfigurationShape.ChartChannelCount, "Scope shape should observe two chart channels.");
+    }
+
+    private static EnsureScopeConfigurationRequest CreateOrderedScopeConfigurationRequest(string scopePath) =>
+        new(
+            scopePath,
+            "Scope Project",
+            "127.0.0.1.1.1",
+            ReplaceChannels: true,
+            AdsChannels:
+            [
+                new ScopeAdsChannelDefinition(
+                    "BufferWriteAvailable",
+                    "CommandsExecuter.Data.StateData.BufferWriteAvailable",
+                    "199.4.42.250.1.1",
+                    351,
+                    "UINT32",
+                    16842880,
+                    2197815308),
+                new ScopeAdsChannelDefinition(
+                    "BufferReadAvailable",
+                    "CommandsExecuter.Data.StateData.BufferReadAvailable",
+                    "199.4.42.250.1.1",
+                    351,
+                    "UINT32",
+                    16842880,
+                    2197815312)
+            ],
+            ChartChannels:
+            [
+                new ScopeChartChannelDefinition(
+                    "BufferReadAvailable",
+                    "BufferReadAvailable",
+                    "-16744448",
+                    10),
+                new ScopeChartChannelDefinition(
+                    "BufferWriteAvailable",
+                    "BufferWriteAvailable",
+                    "-16776961",
+                    11)
+            ]);
+
+    private static AssertScopeConfigurationShapeRequest CreateOrderedScopeShapeRequest(string scopePath) =>
+        new(
+            scopePath,
+            ExpectedAdsChannelCount: 2,
+            ExpectedChartChannelCount: 2,
+            ExpectedScopeName: "Scope Project",
+            ExpectedChartName: "YT Chart",
+            AdsChannels:
+            [
+                new ScopeConfigurationChannelShape(
+                    "BufferWriteAvailable",
+                    "CommandsExecuter.Data.StateData.BufferWriteAvailable"),
+                new ScopeConfigurationChannelShape(
+                    "BufferReadAvailable",
+                    "CommandsExecuter.Data.StateData.BufferReadAvailable")
+            ],
+            ChartChannels:
+            [
+                new ScopeConfigurationChannelShape(
+                    "BufferReadAvailable",
+                    AcquisitionName: "BufferReadAvailable"),
+                new ScopeConfigurationChannelShape(
+                    "BufferWriteAvailable",
+                    AcquisitionName: "BufferWriteAvailable")
+            ]);
 
     private static void AssertVcxItem(XDocument project, string itemName, string includePath)
     {

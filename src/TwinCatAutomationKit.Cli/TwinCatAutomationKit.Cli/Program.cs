@@ -2,6 +2,7 @@ namespace TwinCatAutomationKit.Cli;
 
 internal static class Program
 {
+    [STAThread]
     private static int Main(string[] args)
     {
         if (args.Length == 0)

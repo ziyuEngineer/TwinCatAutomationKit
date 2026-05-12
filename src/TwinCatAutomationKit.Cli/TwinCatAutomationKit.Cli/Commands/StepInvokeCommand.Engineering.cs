@@ -9,21 +9,51 @@ internal static partial class StepInvokeCommand
 {
     private static StepExecutionOutcome ExecuteEngineeringLaunchVisualStudio(IReadOnlyDictionary<string, string> options)
     {
-        string progId = CliOptionParser.GetOption(options, "prog-id") ?? "VisualStudio.DTE.17.0";
-        bool visible = CliOptionParser.GetBoolOption(options, "visible", false);
-        int startupDelayMs = CliOptionParser.GetIntOption(options, "startup-delay-ms", 8000);
+        LaunchVisualStudioRequest request = BuildLaunchVisualStudioRequest(options);
+        if (_engineeringSessionReuseScope is not null)
+        {
+            TwinCatEngineeringSession reusedSession = _engineeringSessionReuseScope.EnsureLaunched(options);
+            return StepExecutionOutcome.Success(
+                "Visual Studio launch verified in reused run-plan engineering session.",
+                CreateOutputs(
+                    ("progId", request.ProgId),
+                    ("visible", request.Visible ? "true" : "false"),
+                    ("suppressUi", request.SuppressUi ? "true" : "false"),
+                    ("enableDialogAutoDismiss", request.EnableDialogAutoDismiss ? "true" : "false"),
+                    ("attachToExisting", request.AttachToExisting ? "true" : "false"),
+                    ("rootSuffix", request.RootSuffix ?? string.Empty),
+                    ("dteHostPath", request.DteHostPath ?? string.Empty),
+                    ("preferDteHostLaunch", request.PreferDteHostLaunch ? "true" : "false"),
+                    ("attachedToExisting", reusedSession.AttachedToExisting ? "true" : "false"),
+                    ("targetProcessIds", string.Join(";", reusedSession.TargetProcessIds)),
+                    ("autoDismissedDialogs", JsonSerializer.Serialize(reusedSession.AutoDismissedDialogs, JsonOptions)),
+                    ("launchTimeoutMs", request.LaunchTimeoutMs.ToString(CultureInfo.InvariantCulture)),
+                    ("dialogPollIntervalMs", request.DialogPollIntervalMs.ToString(CultureInfo.InvariantCulture)),
+                    ("startupDelayMs", request.StartupDelayMs.ToString(CultureInfo.InvariantCulture))));
+        }
 
         TwinCatEngineeringService engineering = new();
         TwinCatEngineeringSession? session = null;
         try
         {
-            session = engineering.LaunchVisualStudio(new LaunchVisualStudioRequest(progId, startupDelayMs, visible));
+            session = engineering.LaunchVisualStudio(request);
             return StepExecutionOutcome.Success(
                 "Visual Studio launch verified in stateless CLI mode.",
                 CreateOutputs(
-                    ("progId", progId),
-                    ("visible", visible ? "true" : "false"),
-                    ("startupDelayMs", startupDelayMs.ToString())));
+                    ("progId", request.ProgId),
+                    ("visible", request.Visible ? "true" : "false"),
+                    ("suppressUi", request.SuppressUi ? "true" : "false"),
+                    ("enableDialogAutoDismiss", request.EnableDialogAutoDismiss ? "true" : "false"),
+                    ("attachToExisting", request.AttachToExisting ? "true" : "false"),
+                    ("rootSuffix", request.RootSuffix ?? string.Empty),
+                    ("dteHostPath", request.DteHostPath ?? string.Empty),
+                    ("preferDteHostLaunch", request.PreferDteHostLaunch ? "true" : "false"),
+                    ("attachedToExisting", session.AttachedToExisting ? "true" : "false"),
+                    ("targetProcessIds", string.Join(";", session.TargetProcessIds)),
+                    ("autoDismissedDialogs", JsonSerializer.Serialize(session.AutoDismissedDialogs, JsonOptions)),
+                    ("launchTimeoutMs", request.LaunchTimeoutMs.ToString(CultureInfo.InvariantCulture)),
+                    ("dialogPollIntervalMs", request.DialogPollIntervalMs.ToString(CultureInfo.InvariantCulture)),
+                    ("startupDelayMs", request.StartupDelayMs.ToString(CultureInfo.InvariantCulture))));
         }
         finally
         {
@@ -38,7 +68,7 @@ internal static partial class StepInvokeCommand
                 }
                 finally
                 {
-                    session.Dispose();
+                    DisposeEngineeringSession(session);
                 }
             }
         }
@@ -49,14 +79,29 @@ internal static partial class StepInvokeCommand
         string solutionDirectory = Path.GetFullPath(CliOptionParser.RequireOption(options, "solution-directory", "output"));
         string solutionName = CliOptionParser.RequireOption(options, "solution-name");
         string projectName = CliOptionParser.RequireOption(options, "project-name");
-        bool visible = CliOptionParser.GetBoolOption(options, "visible", false);
-        int startupDelayMs = CliOptionParser.GetIntOption(options, "startup-delay-ms", 8000);
+        LaunchVisualStudioRequest launchRequest = BuildLaunchVisualStudioRequest(options);
+
+        if (_engineeringSessionReuseScope is not null)
+        {
+            TwinCatEngineeringSession reusedSession = _engineeringSessionReuseScope.EnsureLaunched(options);
+            TwinCatProjectInfo reusedResult = _engineeringSessionReuseScope.Engineering.CreateTwinCatSolution(
+                reusedSession,
+                new CreateTwinCatSolutionRequest(solutionDirectory, solutionName, projectName));
+            _engineeringSessionReuseScope.Engineering.SaveAll(reusedSession);
+            _engineeringSessionReuseScope.RememberWorkspace(new CliWorkspacePaths(reusedResult.SolutionPath, reusedResult.ProjectPath));
+            return StepExecutionOutcome.Success(
+                $"TwinCAT solution {solutionName} created.",
+                CreateOutputs(
+                    ("solutionPath", reusedResult.SolutionPath),
+                    ("projectPath", reusedResult.ProjectPath),
+                    ("solutionDirectory", reusedResult.SolutionDirectory)));
+        }
 
         TwinCatEngineeringService engineering = new();
         TwinCatEngineeringSession? session = null;
         try
         {
-            session = engineering.LaunchVisualStudio(new LaunchVisualStudioRequest(Visible: visible, StartupDelayMs: startupDelayMs));
+            session = engineering.LaunchVisualStudio(launchRequest);
             TwinCatProjectInfo result = engineering.CreateTwinCatSolution(
                 session,
                 new CreateTwinCatSolutionRequest(solutionDirectory, solutionName, projectName));
@@ -81,10 +126,42 @@ internal static partial class StepInvokeCommand
                 }
                 finally
                 {
-                    session.Dispose();
+                    DisposeEngineeringSession(session);
                 }
             }
         }
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringCleanupDteHostProcesses(IReadOnlyDictionary<string, string> options)
+    {
+        IReadOnlyList<string>? processNames = ParseOptionalList(CliOptionParser.GetOption(options, "process-names", "process-name"));
+        IReadOnlyList<int>? processIds = ParseOptionalIntList(CliOptionParser.GetOption(options, "process-ids", "process-id"));
+        bool dryRun = CliOptionParser.GetBoolOption(options, "dry-run", true);
+        bool includeWindowed = CliOptionParser.GetBoolOption(options, "include-windowed", false);
+        bool killProcessTree = CliOptionParser.GetBoolOption(options, "kill-process-tree", true);
+
+        TwinCatEngineeringService engineering = new();
+        CleanupDteHostProcessesResult result = engineering.CleanupDteHostProcesses(
+            new CleanupDteHostProcessesRequest(
+                processNames,
+                processIds,
+                dryRun,
+                includeWindowed,
+                killProcessTree));
+
+        IReadOnlyDictionary<string, string?> outputs = CreateOutputs(
+            ("dryRun", result.DryRun ? "true" : "false"),
+            ("matchedCount", result.MatchedCount.ToString(CultureInfo.InvariantCulture)),
+            ("killedCount", result.KilledCount.ToString(CultureInfo.InvariantCulture)),
+            ("processesJson", JsonSerializer.Serialize(result.Processes, JsonOptions)));
+
+        return result.Succeeded
+            ? StepExecutionOutcome.Success(result.Summary, outputs)
+            : new StepExecutionOutcome(
+                StepExecutionStatus.Failed,
+                result.Summary,
+                outputs,
+                Array.Empty<EvidenceArtifact>());
     }
 
     private static StepExecutionOutcome ExecuteEngineeringCreateCppProject(IReadOnlyDictionary<string, string> options)
@@ -138,6 +215,38 @@ internal static partial class StepInvokeCommand
             });
     }
 
+    private static StepExecutionOutcome ExecuteEngineeringCreateScopeProject(IReadOnlyDictionary<string, string> options)
+    {
+        string projectName = CliOptionParser.RequireOption(options, "scope-project-name", "project-name");
+        string? projectDirectory = CliOptionParser.GetOption(options, "project-directory");
+        string? configurationFileName = CliOptionParser.GetOption(options, "configuration-file-name", "config-file-name");
+        bool createEmptyConfiguration = CliOptionParser.GetBoolOption(options, "create-empty-configuration", true);
+        bool allowSolutionFileFallback = CliOptionParser.GetBoolOption(options, "allow-solution-file-fallback", true);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                ScopeProjectInfo result = engineering.CreateScopeProject(
+                    session,
+                    new CreateScopeProjectRequest(
+                        projectName,
+                        projectDirectory,
+                        configurationFileName,
+                        createEmptyConfiguration,
+                        allowSolutionFileFallback));
+                return StepExecutionOutcome.Success(
+                    $"Scope project {projectName} created.",
+                    CreateOutputs(
+                        ("projectFilePath", result.ProjectFilePath),
+                        ("projectGuid", result.ProjectGuid),
+                        ("projectDirectory", result.ProjectDirectory),
+                        ("configurationFilePath", result.ConfigurationFilePath),
+                        ("addedToSolution", result.AddedToSolution ? "true" : "false"),
+                        ("usedSolutionFileFallback", result.UsedSolutionFileFallback ? "true" : "false")));
+            });
+    }
+
     private static StepExecutionOutcome ExecuteEngineeringEnsureSolutionProjectDependency(IReadOnlyDictionary<string, string> options)
     {
         string projectName = CliOptionParser.RequireOption(options, "dependency-project-name", "project-name");
@@ -158,17 +267,180 @@ internal static partial class StepInvokeCommand
             });
     }
 
+    private static StepExecutionOutcome ExecuteEngineeringCreateIoDevice(IReadOnlyDictionary<string, string> options)
+    {
+        CreateIoDeviceRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<CreateIoDeviceRequest>(options)
+            : new CreateIoDeviceRequest(
+                Name: CliOptionParser.RequireOption(options, "name", "device-name"),
+                SubType: CliOptionParser.GetIntOption(options, "subtype", 111),
+                ParentTreeItemPath: CliOptionParser.GetOption(options, "parent-tree-item-path", "parent-path") ?? "TIID",
+                Before: CliOptionParser.GetOption(options, "before"),
+                VInfo: CliOptionParser.GetOption(options, "vinfo", "info"),
+                Disabled: CliOptionParser.GetNullableBoolOption(options, "disabled"),
+                AllowExisting: CliOptionParser.GetBoolOption(options, "allow-existing", true),
+                PostCreateDelayMs: CliOptionParser.GetIntOption(options, "post-create-delay-ms", 500));
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                TwinCatNodeInfo result = engineering.CreateIoDevice(session, request);
+                return StepExecutionOutcome.Success(
+                    $"IO device {request.Name} created or found.",
+                    CreateOutputs(
+                        ("treeItemPath", result.TreeItemPath),
+                        ("displayName", result.DisplayName),
+                        ("objectId", result.ObjectId),
+                        ("parentTreeItemPath", request.ParentTreeItemPath),
+                        ("subType", request.SubType.ToString(CultureInfo.InvariantCulture))));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringCreateEthercatBox(IReadOnlyDictionary<string, string> options)
+    {
+        CreateEthercatBoxRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<CreateEthercatBoxRequest>(options)
+            : new CreateEthercatBoxRequest(
+                ParentTreeItemPath: CliOptionParser.RequireOption(options, "parent-tree-item-path", "parent-path"),
+                Name: CliOptionParser.RequireOption(options, "name", "box-name"),
+                SubType: CliOptionParser.GetIntOption(options, "subtype", 9099),
+                Before: CliOptionParser.GetOption(options, "before"),
+                ProductRevision: CliOptionParser.GetOption(options, "product-revision", "product"),
+                VInfo: CliOptionParser.GetOption(options, "vinfo", "info"),
+                Disabled: CliOptionParser.GetNullableBoolOption(options, "disabled"),
+                AllowExisting: CliOptionParser.GetBoolOption(options, "allow-existing", true),
+                PostCreateDelayMs: CliOptionParser.GetIntOption(options, "post-create-delay-ms", 500));
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                TwinCatNodeInfo result = engineering.CreateEthercatBox(session, request);
+                return StepExecutionOutcome.Success(
+                    $"EtherCAT box {request.Name} created or found.",
+                    CreateOutputs(
+                        ("treeItemPath", result.TreeItemPath),
+                        ("displayName", result.DisplayName),
+                        ("objectId", result.ObjectId),
+                        ("parentTreeItemPath", request.ParentTreeItemPath),
+                        ("subType", request.SubType.ToString(CultureInfo.InvariantCulture)),
+                        ("productRevision", request.ProductRevision)));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringGenerateIoMappings(IReadOnlyDictionary<string, string> options)
+    {
+        GenerateIoMappingsRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<GenerateIoMappingsRequest>(options)
+            : new GenerateIoMappingsRequest(
+                SuppressUi: CliOptionParser.GetBoolOption(options, "suppress-ui", true),
+                AllowDteCommandFallback: CliOptionParser.GetBoolOption(options, "allow-dte-command-fallback", false),
+                TimeoutMs: CliOptionParser.GetIntOption(options, "timeout-ms", 120000));
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                EngineeringCommandResult result = engineering.GenerateIoMappings(session, request);
+                return StepExecutionOutcome.Success(
+                    "TwinCAT IO mappings generated.",
+                    CreateOutputs(
+                        ("succeeded", result.Succeeded ? "true" : "false"),
+                        ("command", result.Command),
+                        ("attemptedCommands", string.Join(";", result.AttemptedCommands))));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringSearchIoDevices(IReadOnlyDictionary<string, string> options)
+    {
+        SearchIoDevicesRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<SearchIoDevicesRequest>(options)
+            : new SearchIoDevicesRequest(
+                SuppressUi: CliOptionParser.GetBoolOption(options, "suppress-ui", true),
+                TimeoutMs: CliOptionParser.GetIntOption(options, "timeout-ms", 120000));
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                EngineeringCommandResult result = engineering.SearchIoDevices(session, request);
+                return StepExecutionOutcome.Success(
+                    "TwinCAT IO devices searched.",
+                    CreateOutputs(
+                        ("succeeded", result.Succeeded ? "true" : "false"),
+                        ("command", result.Command),
+                        ("attemptedCommands", string.Join(";", result.AttemptedCommands))));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringReloadIoDevices(IReadOnlyDictionary<string, string> options)
+    {
+        ReloadIoDevicesRequest request = HasJsonPayload(options)
+            ? ReadJsonPayload<ReloadIoDevicesRequest>(options)
+            : new ReloadIoDevicesRequest(
+                SuppressUi: CliOptionParser.GetBoolOption(options, "suppress-ui", true),
+                TimeoutMs: CliOptionParser.GetIntOption(options, "timeout-ms", 120000));
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                EngineeringCommandResult result = engineering.ReloadIoDevices(session, request);
+                return StepExecutionOutcome.Success(
+                    "TwinCAT IO devices reloaded.",
+                    CreateOutputs(
+                        ("succeeded", result.Succeeded ? "true" : "false"),
+                        ("command", result.Command),
+                        ("attemptedCommands", string.Join(";", result.AttemptedCommands))));
+            });
+    }
+
+    private static StepExecutionOutcome ExecuteEngineeringApplyIoTreePlan(IReadOnlyDictionary<string, string> options)
+    {
+        ApplyIoTreePlanRequest request = ReadJsonPayload<ApplyIoTreePlanRequest>(options);
+
+        return RunEngineeringOperation(
+            options,
+            (engineering, session, _) =>
+            {
+                ApplyIoTreePlanResult result = engineering.ApplyIoTreePlan(session, request);
+                return StepExecutionOutcome.Success(
+                    result.Summary,
+                    CreateOutputs(
+                        ("deviceCount", result.DeviceCount.ToString(CultureInfo.InvariantCulture)),
+                        ("boxCount", result.BoxCount.ToString(CultureInfo.InvariantCulture)),
+                        ("treeItemPaths", string.Join(";", result.Nodes.Select(node => node.TreeItemPath))),
+                        ("nodesJson", JsonSerializer.Serialize(result.Nodes, JsonOptions))));
+            });
+    }
+
     private static StepExecutionOutcome ExecuteEngineeringOpenXaeSolution(IReadOnlyDictionary<string, string> options)
     {
         CliWorkspacePaths workspace = ResolveWorkspace(options, requireSolutionPath: true);
-        bool visible = CliOptionParser.GetBoolOption(options, "visible", false);
-        int startupDelayMs = CliOptionParser.GetIntOption(options, "startup-delay-ms", 8000);
+        LaunchVisualStudioRequest launchRequest = BuildLaunchVisualStudioRequest(options);
+
+        if (_engineeringSessionReuseScope is not null)
+        {
+            TwinCatEngineeringSession reusedSession = _engineeringSessionReuseScope.EnsureLaunched(options);
+            TwinCatProjectInfo reusedInfo = _engineeringSessionReuseScope.Engineering.OpenTwinCatSolution(
+                reusedSession,
+                new OpenTwinCatSolutionRequest(workspace.SolutionPath!, workspace.ProjectPath));
+            _engineeringSessionReuseScope.Engineering.SaveAll(reusedSession);
+            _engineeringSessionReuseScope.RememberWorkspace(new CliWorkspacePaths(reusedInfo.SolutionPath, reusedInfo.ProjectPath));
+            return StepExecutionOutcome.Success(
+                $"TwinCAT solution reopened from {reusedInfo.SolutionPath}.",
+                CreateOutputs(
+                    ("solutionPath", reusedInfo.SolutionPath),
+                    ("projectPath", reusedInfo.ProjectPath),
+                    ("solutionDirectory", reusedInfo.SolutionDirectory)));
+        }
 
         TwinCatEngineeringService engineering = new();
         TwinCatEngineeringSession? session = null;
         try
         {
-            session = engineering.LaunchVisualStudio(new LaunchVisualStudioRequest(Visible: visible, StartupDelayMs: startupDelayMs));
+            session = engineering.LaunchVisualStudio(launchRequest);
             TwinCatProjectInfo info = engineering.OpenTwinCatSolution(
                 session,
                 new OpenTwinCatSolutionRequest(workspace.SolutionPath!, workspace.ProjectPath));
@@ -193,7 +465,7 @@ internal static partial class StepInvokeCommand
                 }
                 finally
                 {
-                    session.Dispose();
+                    DisposeEngineeringSession(session);
                 }
             }
         }
@@ -433,15 +705,27 @@ internal static partial class StepInvokeCommand
 
     private static StepExecutionOutcome ExecuteEngineeringSaveAll(IReadOnlyDictionary<string, string> options)
     {
-        bool visible = CliOptionParser.GetBoolOption(options, "visible", false);
-        int startupDelayMs = CliOptionParser.GetIntOption(options, "startup-delay-ms", 8000);
+        LaunchVisualStudioRequest launchRequest = BuildLaunchVisualStudioRequest(options);
         CliWorkspacePaths? workspace = ResolveOptionalWorkspace(options);
+
+        if (_engineeringSessionReuseScope is not null)
+        {
+            TwinCatEngineeringSession reusedSession = workspace?.SolutionPath is not null
+                ? _engineeringSessionReuseScope.EnsureWorkspaceOpen(options, workspace)
+                : _engineeringSessionReuseScope.EnsureLaunched(options);
+            _engineeringSessionReuseScope.Engineering.SaveAll(reusedSession);
+            return StepExecutionOutcome.Success(
+                "Visual Studio SaveAll executed in reused run-plan engineering session.",
+                CreateOutputs(
+                    ("solutionPath", workspace?.SolutionPath),
+                    ("projectPath", workspace?.ProjectPath)));
+        }
 
         TwinCatEngineeringService engineering = new();
         TwinCatEngineeringSession? session = null;
         try
         {
-            session = engineering.LaunchVisualStudio(new LaunchVisualStudioRequest(Visible: visible, StartupDelayMs: startupDelayMs));
+            session = engineering.LaunchVisualStudio(launchRequest);
             if (workspace?.SolutionPath is not null)
             {
                 engineering.OpenTwinCatSolution(session, new OpenTwinCatSolutionRequest(workspace.SolutionPath, workspace.ProjectPath));
@@ -467,7 +751,7 @@ internal static partial class StepInvokeCommand
                 }
                 finally
                 {
-                    session.Dispose();
+                    DisposeEngineeringSession(session);
                 }
             }
         }
@@ -476,16 +760,31 @@ internal static partial class StepInvokeCommand
     private static StepExecutionOutcome ExecuteEngineeringCloseVisualStudio(IReadOnlyDictionary<string, string> options)
     {
         bool saveBeforeClose = CliOptionParser.GetBoolOption(options, "save-before-close", true);
-        bool visible = CliOptionParser.GetBoolOption(options, "visible", false);
-        int startupDelayMs = CliOptionParser.GetIntOption(options, "startup-delay-ms", 8000);
+        LaunchVisualStudioRequest launchRequest = BuildLaunchVisualStudioRequest(options);
         CliWorkspacePaths? workspace = ResolveOptionalWorkspace(options);
+
+        if (_engineeringSessionReuseScope is not null)
+        {
+            if (workspace?.SolutionPath is not null)
+            {
+                _engineeringSessionReuseScope.EnsureWorkspaceOpen(options, workspace);
+            }
+
+            _engineeringSessionReuseScope.Close(saveBeforeClose);
+            return StepExecutionOutcome.Success(
+                "Visual Studio close executed in reused run-plan engineering session.",
+                CreateOutputs(
+                    ("saveBeforeClose", saveBeforeClose ? "true" : "false"),
+                    ("solutionPath", workspace?.SolutionPath),
+                    ("projectPath", workspace?.ProjectPath)));
+        }
 
         TwinCatEngineeringService engineering = new();
         TwinCatEngineeringSession? session = null;
         bool closed = false;
         try
         {
-            session = engineering.LaunchVisualStudio(new LaunchVisualStudioRequest(Visible: visible, StartupDelayMs: startupDelayMs));
+            session = engineering.LaunchVisualStudio(launchRequest);
             if (workspace?.SolutionPath is not null)
             {
                 engineering.OpenTwinCatSolution(session, new OpenTwinCatSolutionRequest(workspace.SolutionPath, workspace.ProjectPath));
@@ -516,7 +815,7 @@ internal static partial class StepInvokeCommand
                 }
                 finally
                 {
-                    session.Dispose();
+                    DisposeEngineeringSession(session);
                 }
             }
         }
@@ -525,27 +824,106 @@ internal static partial class StepInvokeCommand
     private static StepExecutionOutcome ExecuteEngineeringBuildSolution(IReadOnlyDictionary<string, string> options)
     {
         int timeoutMs = CliOptionParser.GetIntOption(options, "timeout-ms", 300000);
+        BuildSolutionEngine buildEngine = ParseBuildSolutionEngine(options);
+        string configuration = CliOptionParser.GetOption(options, "configuration") ?? "Release";
+        string platform = CliOptionParser.GetOption(options, "platform") ?? "TwinCAT OS (x64)";
+        string? devenvPath = CliOptionParser.GetOption(options, "devenv-path");
+        string? logFilePath = CliOptionParser.GetOption(options, "log-file-path", "log-file");
+        string? msBuildPath = CliOptionParser.GetOption(options, "msbuild-path");
+        IReadOnlyList<string>? projectPaths = ParseOptionalList(CliOptionParser.GetOption(options, "project-paths", "build-project-paths"));
+        BuildSolutionRequest request = new(
+            timeoutMs,
+            buildEngine,
+            configuration,
+            platform,
+            devenvPath,
+            logFilePath,
+            msBuildPath,
+            projectPaths);
+
+        if (buildEngine == BuildSolutionEngine.CommandLine)
+        {
+            CliWorkspacePaths workspace = ResolveWorkspace(options, requireSolutionPath: true);
+            TwinCatEngineeringService service = new();
+            BuildResult result = service.BuildSolutionFromCommandLine(workspace.SolutionPath!, request);
+            if (!result.Succeeded)
+            {
+                throw new InvalidOperationException($"BuildCurrentSolution failed. Engine={result.BuildEngine}; ExitCode={result.ExitCode}; LogFilePath={result.LogFilePath}.");
+            }
+
+            return BuildSolutionSuccessOutcome(result);
+        }
+
+        if (buildEngine == BuildSolutionEngine.MsBuildProjects)
+        {
+            CliWorkspacePaths workspace = ResolveWorkspace(options, requireSolutionPath: true);
+            TwinCatEngineeringService service = new();
+            BuildResult result = service.BuildSolutionFromMsBuildProjects(workspace.SolutionPath!, request);
+            if (!result.Succeeded)
+            {
+                throw new InvalidOperationException($"BuildCurrentSolution failed. Engine={result.BuildEngine}; ExitCode={result.ExitCode}; LogFilePath={result.LogFilePath}.");
+            }
+
+            return BuildSolutionSuccessOutcome(result);
+        }
 
         return RunEngineeringOperation(
             options,
             (engineering, session, _) =>
             {
-                BuildResult result = engineering.BuildCurrentSolution(session, new BuildSolutionRequest(timeoutMs));
+                BuildResult result = engineering.BuildCurrentSolution(session, request);
                 if (!result.Succeeded)
                 {
-                    throw new InvalidOperationException($"BuildCurrentSolution failed. LastBuildInfo={result.LastBuildInfo}.");
+                    throw new InvalidOperationException($"BuildCurrentSolution failed. LastBuildInfo={result.LastBuildInfo}; Engine={result.BuildEngine}.");
                 }
 
-                return StepExecutionOutcome.Success(
-                    "Solution build succeeded.",
-                    CreateOutputs(("lastBuildInfo", result.LastBuildInfo.ToString())));
+                return BuildSolutionSuccessOutcome(result);
             });
+    }
+
+    private static BuildSolutionEngine ParseBuildSolutionEngine(IReadOnlyDictionary<string, string> options)
+    {
+        string? raw = CliOptionParser.GetOption(options, "build-engine", "engine");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return BuildSolutionEngine.Dte;
+        }
+
+        string normalized = raw.Replace("-", string.Empty, StringComparison.Ordinal);
+        if (Enum.TryParse(normalized, ignoreCase: true, out BuildSolutionEngine engine))
+        {
+            return engine;
+        }
+
+        throw new InvalidOperationException($"--build-engine must be Dte, CommandLine, or MsBuildProjects. Actual='{raw}'.");
+    }
+
+    private static StepExecutionOutcome BuildSolutionSuccessOutcome(BuildResult result)
+    {
+        List<EvidenceArtifact> evidence = [];
+        if (!string.IsNullOrWhiteSpace(result.LogFilePath) && File.Exists(result.LogFilePath))
+        {
+            evidence.Add(new EvidenceArtifact("build-log", result.LogFilePath, "log"));
+        }
+
+        return StepExecutionOutcome.Success(
+            "Solution build succeeded.",
+            CreateOutputs(
+                ("lastBuildInfo", result.LastBuildInfo.ToString(CultureInfo.InvariantCulture)),
+                ("buildEngine", result.BuildEngine),
+                ("exitCode", result.ExitCode?.ToString(CultureInfo.InvariantCulture)),
+                ("commandLine", result.CommandLine),
+                ("logFilePath", result.LogFilePath)),
+            evidence);
     }
 
     private static StepExecutionOutcome ExecuteEngineeringActivateConfiguration(IReadOnlyDictionary<string, string> options)
     {
         bool saveConfigurationArchive = CliOptionParser.GetBoolOption(options, "save-configuration-archive", true);
         string? configurationArchivePath = CliOptionParser.GetOption(options, "configuration-archive-path");
+        bool suppressUi = CliOptionParser.GetBoolOption(options, "suppress-ui", true);
+        bool allowDteCommandFallback = CliOptionParser.GetBoolOption(options, "allow-dte-command-fallback", false);
+        int activationTimeoutMs = CliOptionParser.GetIntOption(options, "activation-timeout-ms", 120000);
 
         return RunEngineeringOperation(
             options,
@@ -553,7 +931,12 @@ internal static partial class StepInvokeCommand
             {
                 ActivationResult result = engineering.ActivateConfiguration(
                     session,
-                    new ActivateConfigurationRequest(saveConfigurationArchive, configurationArchivePath));
+                    new ActivateConfigurationRequest(
+                        saveConfigurationArchive,
+                        configurationArchivePath,
+                        suppressUi,
+                        allowDteCommandFallback,
+                        activationTimeoutMs));
 
                 List<EvidenceArtifact> evidence = [];
                 if (!string.IsNullOrWhiteSpace(result.ConfigurationArchivePath) &&
@@ -578,6 +961,9 @@ internal static partial class StepInvokeCommand
                     CreateOutputs(
                         ("configurationArchivePath", result.ConfigurationArchivePath),
                         ("activationCommand", result.ActivationCommand),
+                        ("suppressUi", suppressUi ? "true" : "false"),
+                        ("allowDteCommandFallback", allowDteCommandFallback ? "true" : "false"),
+                        ("activationTimeoutMs", activationTimeoutMs.ToString()),
                         ("attemptedCommands", string.Join(" | ", result.AttemptedCommands))),
                     evidence);
             });
@@ -594,12 +980,12 @@ internal static partial class StepInvokeCommand
         ProjectItemConflictPolicy conflictPolicy = ParseEnumOption(options, "conflict-policy", ProjectItemConflictPolicy.FailIfExists);
         bool allowMsBuildFallback = CliOptionParser.GetBoolOption(options, "allow-msbuild-fallback", true);
 
-        return RunEngineeringOperation(
+        return RunCppProjectFileOperation(
             options,
-            (engineering, session, _) =>
+            (engineering, twinCatProjectDirectory) =>
             {
                 CppProjectItemResult result = engineering.CreateCppProjectItem(
-                    session,
+                    twinCatProjectDirectory,
                     new CreateCppProjectItemRequest(
                         projectName,
                         relativePath,
@@ -632,12 +1018,12 @@ internal static partial class StepInvokeCommand
         ProjectItemWritePolicy writePolicy = ParseEnumOption(options, "write-policy", ProjectItemWritePolicy.Overwrite);
         bool requireProjectRegistration = CliOptionParser.GetBoolOption(options, "require-project-registration", false);
 
-        return RunEngineeringOperation(
+        return RunCppProjectFileOperation(
             options,
-            (engineering, session, _) =>
+            (engineering, twinCatProjectDirectory) =>
             {
                 CppProjectItemContentResult result = engineering.WriteCppProjectItemContent(
-                    session,
+                    twinCatProjectDirectory,
                     new WriteCppProjectItemContentRequest(
                         projectName,
                         relativePath,
@@ -665,12 +1051,12 @@ internal static partial class StepInvokeCommand
         bool removeFilterEntry = CliOptionParser.GetBoolOption(options, "remove-filter-entry", true);
         bool ignoreMissing = CliOptionParser.GetBoolOption(options, "ignore-missing", false);
 
-        return RunEngineeringOperation(
+        return RunCppProjectFileOperation(
             options,
-            (engineering, session, _) =>
+            (engineering, twinCatProjectDirectory) =>
             {
                 RemoveCppProjectItemResult result = engineering.RemoveCppProjectItem(
-                    session,
+                    twinCatProjectDirectory,
                     new RemoveCppProjectItemRequest(
                         projectName,
                         relativePath,
@@ -694,12 +1080,12 @@ internal static partial class StepInvokeCommand
         string? condition = CliOptionParser.GetOption(options, "condition");
         string? propertyGroupLabel = CliOptionParser.GetOption(options, "property-group-label");
 
-        return RunEngineeringOperation(
+        return RunCppProjectFileOperation(
             options,
-            (engineering, session, _) =>
+            (engineering, twinCatProjectDirectory) =>
             {
                 CppProjectPropertyResult result = engineering.SetCppProjectProperty(
-                    session,
+                    twinCatProjectDirectory,
                     new SetCppProjectPropertyRequest(projectName, propertyName, value, condition, propertyGroupLabel));
                 return StepExecutionOutcome.Success(
                     $"C++ project property {propertyName} set for {projectName}.",
@@ -718,12 +1104,12 @@ internal static partial class StepInvokeCommand
         string value = CliOptionParser.RequireOption(options, "value");
         string? condition = CliOptionParser.GetOption(options, "condition");
 
-        return RunEngineeringOperation(
+        return RunCppProjectFileOperation(
             options,
-            (engineering, session, _) =>
+            (engineering, twinCatProjectDirectory) =>
             {
                 CppItemDefinitionPropertyResult result = engineering.SetCppItemDefinitionProperty(
-                    session,
+                    twinCatProjectDirectory,
                     new SetCppItemDefinitionPropertyRequest(projectName, toolName, propertyName, value, condition));
                 return StepExecutionOutcome.Success(
                     $"C++ item definition property {toolName}.{propertyName} set for {projectName}.",
@@ -744,12 +1130,12 @@ internal static partial class StepInvokeCommand
         string value = CliOptionParser.RequireOption(options, "value");
         string? condition = CliOptionParser.GetOption(options, "condition");
 
-        return RunEngineeringOperation(
+        return RunCppProjectFileOperation(
             options,
-            (engineering, session, _) =>
+            (engineering, twinCatProjectDirectory) =>
             {
                 CppProjectItemMetadataResult result = engineering.SetCppProjectItemMetadata(
-                    session,
+                    twinCatProjectDirectory,
                     new SetCppProjectItemMetadataRequest(projectName, relativePath, itemType, metadataName, value, condition));
                 return StepExecutionOutcome.Success(
                     $"C++ project item metadata {metadataName} set for {projectName}:{relativePath}.",

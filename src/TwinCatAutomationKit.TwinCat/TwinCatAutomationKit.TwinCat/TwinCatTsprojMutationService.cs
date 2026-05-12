@@ -174,6 +174,22 @@ public sealed class TwinCatTsprojMutationService
             container.Add(task);
         }
 
+        if (request.TaskId.HasValue)
+        {
+            ValidatePositive(request.TaskId.Value, nameof(request.TaskId));
+            string taskIdText = request.TaskId.Value.ToString(CultureInfo.InvariantCulture);
+            XElement? existingTaskWithId = container.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Task" &&
+                !ReferenceEquals(element, task) &&
+                string.Equals(GetAttributeValue(element, "Id"), taskIdText, StringComparison.OrdinalIgnoreCase));
+            if (existingTaskWithId is not null)
+            {
+                throw new InvalidOperationException($"Task Id '{taskIdText}' is already used by task '{GetChildElementValue(existingTaskWithId, "Name") ?? "<unnamed>"}'.");
+            }
+
+            task.SetAttributeValue("Id", taskIdText);
+        }
+
         task.SetAttributeValue("Priority", request.Priority.ToString(CultureInfo.InvariantCulture));
         task.SetAttributeValue("CycleTime", (request.CycleTimeNs / 100).ToString(CultureInfo.InvariantCulture));
         task.SetAttributeValue("AmsPort", request.AmsPort.ToString(CultureInfo.InvariantCulture));
@@ -999,6 +1015,22 @@ public sealed class TwinCatTsprojMutationService
             }
         }
 
+        SetOptionalIntAttribute(settings, "MaxCpus", request.MaxCpus);
+        SetOptionalIntAttribute(settings, "NonWinCpus", request.NonWinCpus);
+
+        if (request.ReplaceCpuEntries)
+        {
+            foreach (XElement cpu in settings.Elements().Where(element => element.Name.LocalName == "Cpu").ToList())
+            {
+                cpu.Remove();
+            }
+        }
+
+        foreach (SystemCpuSetting cpuEntry in request.CpuEntries ?? Array.Empty<SystemCpuSetting>())
+        {
+            ApplySystemCpuSetting(settings, cpuEntry);
+        }
+
         if (request.CpuId.HasValue)
         {
             if (request.CpuId.Value < 0)
@@ -1006,9 +1038,12 @@ public sealed class TwinCatTsprojMutationService
                 throw new InvalidOperationException("CpuId must be greater than or equal to zero.");
             }
 
-            XElement cpu = settings.Elements().FirstOrDefault(element => element.Name.LocalName == "Cpu")
+            string cpuIdText = request.CpuId.Value.ToString(CultureInfo.InvariantCulture);
+            XElement cpu = settings.Elements().FirstOrDefault(element =>
+                    element.Name.LocalName == "Cpu" &&
+                    string.Equals(GetAttributeValue(element, "CpuId"), cpuIdText, StringComparison.OrdinalIgnoreCase))
                 ?? AddChild(settings, "Cpu");
-            cpu.SetAttributeValue("CpuId", request.CpuId.Value.ToString(CultureInfo.InvariantCulture));
+            cpu.SetAttributeValue("CpuId", cpuIdText);
         }
 
         if (request.IoIdleTaskPriority.HasValue)
@@ -1176,6 +1211,629 @@ public sealed class TwinCatTsprojMutationService
         Save(document, tsprojPath);
     }
 
+    public AssertDataPointerShapeResult AssertDataPointerShape(string tsprojPath, AssertDataPointerShapeRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        ValidateRequiredText(request.InstanceName, nameof(request.InstanceName));
+        XDocument document = Load(tsprojPath);
+        XElement instance = FindInstance(document, request.InstanceName);
+        XElement? dataPointerValues = instance.Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "TmcDesc")?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "DataPointerValues");
+
+        IReadOnlyList<DataPointerValueShape> dataPointers = ReadDataPointerShapes(dataPointerValues);
+        int dataPointerRecordCount = dataPointers.Sum(pointer => pointer.DataRecordCount);
+        IReadOnlyList<MappingLinkShape> mappingLinks = ReadRootMappingLinks(document);
+        int dataPointerMappingLinkCount = mappingLinks.Count(IsDataPointerMappingLink);
+        List<string> errors = [];
+
+        if (request.ExpectedDataPointerRecordCount.HasValue &&
+            dataPointerRecordCount != request.ExpectedDataPointerRecordCount.Value)
+        {
+            errors.Add($"Instance '{request.InstanceName}' has {dataPointerRecordCount} DataPointerValues record(s), expected {request.ExpectedDataPointerRecordCount.Value}.");
+        }
+
+        if (request.ExpectedRootMappingLinkCount.HasValue &&
+            mappingLinks.Count != request.ExpectedRootMappingLinkCount.Value)
+        {
+            errors.Add($"Root Mappings has {mappingLinks.Count} Link record(s), expected {request.ExpectedRootMappingLinkCount.Value}.");
+        }
+
+        if (request.ExpectedDataPointerMappingLinkCount.HasValue &&
+            dataPointerMappingLinkCount != request.ExpectedDataPointerMappingLinkCount.Value)
+        {
+            errors.Add($"Root Mappings has {dataPointerMappingLinkCount} data pointer Link record(s), expected {request.ExpectedDataPointerMappingLinkCount.Value}.");
+        }
+
+        foreach (ExpectedDataPointerValueShape expected in request.DataPointers ?? Array.Empty<ExpectedDataPointerValueShape>())
+        {
+            ValidateRequiredText(expected.PointerName, nameof(expected.PointerName));
+            DataPointerValueShape? actual = dataPointers.FirstOrDefault(pointer =>
+                string.Equals(pointer.PointerName, expected.PointerName, StringComparison.OrdinalIgnoreCase));
+            if (actual is null)
+            {
+                errors.Add($"DataPointerValues entry '{expected.PointerName}' is missing on instance '{request.InstanceName}'.");
+                continue;
+            }
+
+            if (expected.DataRecordCount.HasValue && actual.DataRecordCount != expected.DataRecordCount.Value)
+            {
+                errors.Add($"DataPointerValues entry '{expected.PointerName}' has {actual.DataRecordCount} record(s), expected {expected.DataRecordCount.Value}.");
+            }
+
+            foreach (int arrayIndex in expected.ArrayIndexes ?? Array.Empty<int>())
+            {
+                if (!actual.ArrayIndexes.Contains(arrayIndex))
+                {
+                    errors.Add($"DataPointerValues entry '{expected.PointerName}' is missing Data ArrayIndex='{arrayIndex}'.");
+                }
+            }
+        }
+
+        foreach (ExpectedMappingLinkShape expected in request.MappingLinks ?? Array.Empty<ExpectedMappingLinkShape>())
+        {
+            ValidateRequiredText(expected.OwnerAName, nameof(expected.OwnerAName));
+            ValidateRequiredText(expected.OwnerBName, nameof(expected.OwnerBName));
+            ValidateRequiredText(expected.VarA, nameof(expected.VarA));
+            ValidateRequiredText(expected.VarB, nameof(expected.VarB));
+            bool found = mappingLinks.Any(link =>
+                string.Equals(link.OwnerAName, expected.OwnerAName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.OwnerBName, expected.OwnerBName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.VarA, expected.VarA, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.VarB, expected.VarB, StringComparison.OrdinalIgnoreCase));
+            if (!found)
+            {
+                errors.Add($"Mapping link '{expected.OwnerAName}:{expected.VarA} -> {expected.OwnerBName}:{expected.VarB}' is missing.");
+            }
+        }
+
+        bool succeeded = errors.Count == 0;
+        string summary = succeeded
+            ? $"Data pointer shape for {request.InstanceName} matched: {dataPointerRecordCount} data record(s), {dataPointerMappingLinkCount} data pointer mapping link(s), {mappingLinks.Count} root mapping link(s)."
+            : $"Data pointer shape for {request.InstanceName} failed with {errors.Count} error(s).";
+
+        return new AssertDataPointerShapeResult(
+            succeeded,
+            request.InstanceName,
+            dataPointerRecordCount,
+            dataPointerMappingLinkCount,
+            mappingLinks.Count,
+            dataPointers,
+            mappingLinks,
+            errors,
+            summary);
+    }
+
+    public AssertIoTopologyShapeResult AssertIoTopologyShape(string tsprojPath, AssertIoTopologyShapeRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        XDocument document = Load(tsprojPath);
+        IReadOnlyList<IoDeviceShape> devices = ReadIoDeviceShapes(document);
+        IReadOnlyList<IoBoxShape> boxes = ReadIoBoxShapes(document);
+        XElement? io = FindProjectIo(document);
+        int imageCount = io?.Descendants().Count(element => element.Name.LocalName == "Image") ?? 0;
+        int pdoCount = io?.Descendants().Count(element => element.Name.LocalName == "Pdo") ?? 0;
+        int pdoEntryCount = io?.Descendants()
+            .Where(element => element.Name.LocalName == "Pdo")
+            .Sum(pdo => pdo.Elements().Count(element => element.Name.LocalName == "Entry")) ?? 0;
+        int mappingInfoCount = ReadRootMappingInfoCount(document);
+        int ownerACount = ReadRootOwnerACount(document);
+        IReadOnlyList<MappingLinkShape> mappingLinks = ReadRootMappingLinks(document);
+        List<string> errors = [];
+
+        if (request.ExpectedDeviceCount.HasValue && devices.Count != request.ExpectedDeviceCount.Value)
+        {
+            errors.Add($"Project/Io has {devices.Count} Device record(s), expected {request.ExpectedDeviceCount.Value}.");
+        }
+
+        if (request.ExpectedBoxCount.HasValue && boxes.Count != request.ExpectedBoxCount.Value)
+        {
+            errors.Add($"Project/Io has {boxes.Count} Box record(s), expected {request.ExpectedBoxCount.Value}.");
+        }
+
+        if (request.ExpectedImageCount.HasValue && imageCount != request.ExpectedImageCount.Value)
+        {
+            errors.Add($"Project/Io has {imageCount} Image record(s), expected {request.ExpectedImageCount.Value}.");
+        }
+
+        if (request.ExpectedPdoCount.HasValue && pdoCount != request.ExpectedPdoCount.Value)
+        {
+            errors.Add($"Project/Io has {pdoCount} Pdo record(s), expected {request.ExpectedPdoCount.Value}.");
+        }
+
+        if (request.ExpectedPdoEntryCount.HasValue && pdoEntryCount != request.ExpectedPdoEntryCount.Value)
+        {
+            errors.Add($"Project/Io has {pdoEntryCount} Pdo Entry record(s), expected {request.ExpectedPdoEntryCount.Value}.");
+        }
+
+        if (request.ExpectedMappingInfoCount.HasValue && mappingInfoCount != request.ExpectedMappingInfoCount.Value)
+        {
+            errors.Add($"Root Mappings has {mappingInfoCount} MappingInfo record(s), expected {request.ExpectedMappingInfoCount.Value}.");
+        }
+
+        if (request.ExpectedOwnerACount.HasValue && ownerACount != request.ExpectedOwnerACount.Value)
+        {
+            errors.Add($"Root Mappings has {ownerACount} OwnerA record(s), expected {request.ExpectedOwnerACount.Value}.");
+        }
+
+        if (request.ExpectedRootMappingLinkCount.HasValue && mappingLinks.Count != request.ExpectedRootMappingLinkCount.Value)
+        {
+            errors.Add($"Root Mappings has {mappingLinks.Count} Link record(s), expected {request.ExpectedRootMappingLinkCount.Value}.");
+        }
+
+        foreach (ExpectedIoDeviceShape expected in request.Devices ?? Array.Empty<ExpectedIoDeviceShape>())
+        {
+            IoDeviceShape? actual = devices.FirstOrDefault(device => device.DeviceId == expected.DeviceId);
+            if (actual is null)
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' is missing.");
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(expected.Name) &&
+                !string.Equals(actual.Name, expected.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' name is '{actual.Name}', expected '{expected.Name}'.");
+            }
+
+            if (expected.BoxCount.HasValue && actual.BoxCount != expected.BoxCount.Value)
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' has {actual.BoxCount} Box record(s), expected {expected.BoxCount.Value}.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(expected.InfoImageId) &&
+                !string.Equals(actual.InfoImageId, expected.InfoImageId, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' InfoImageId is '{actual.InfoImageId}', expected '{expected.InfoImageId}'.");
+            }
+
+            if (expected.ImageCount.HasValue && actual.ImageCount != expected.ImageCount.Value)
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' has {actual.ImageCount} Image record(s), expected {expected.ImageCount.Value}.");
+            }
+
+            if (expected.DirectBoxCount.HasValue && actual.DirectBoxCount != expected.DirectBoxCount.Value)
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' has {actual.DirectBoxCount} direct Box record(s), expected {expected.DirectBoxCount.Value}.");
+            }
+
+            if (expected.DirectImageCount.HasValue && actual.DirectImageCount != expected.DirectImageCount.Value)
+            {
+                errors.Add($"IO Device Id='{expected.DeviceId}' has {actual.DirectImageCount} direct Image record(s), expected {expected.DirectImageCount.Value}.");
+            }
+
+            AssertExpectedElementCounts(
+                expected.DirectChildElementCounts,
+                actual.DirectChildElementCounts,
+                $"IO Device Id='{expected.DeviceId}' direct child",
+                errors);
+            AssertExpectedElementCounts(
+                expected.EtherCatChildElementCounts,
+                actual.EtherCatChildElementCounts,
+                $"IO Device Id='{expected.DeviceId}' EtherCAT child",
+                errors);
+            AssertExpectedElementCounts(
+                expected.EthernetChildElementCounts,
+                actual.EthernetChildElementCounts,
+                $"IO Device Id='{expected.DeviceId}' Ethernet child",
+                errors);
+        }
+
+        foreach (ExpectedIoBoxShape expected in request.Boxes ?? Array.Empty<ExpectedIoBoxShape>())
+        {
+            IoBoxShape? actual = boxes.FirstOrDefault(box => box.DeviceId == expected.DeviceId && box.BoxId == expected.BoxId);
+            if (actual is null)
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' is missing.");
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(expected.Name) &&
+                !string.Equals(actual.Name, expected.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' name is '{actual.Name}', expected '{expected.Name}'.");
+            }
+
+            if (expected.PdoCount.HasValue && actual.PdoCount != expected.PdoCount.Value)
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' has {actual.PdoCount} Pdo record(s), expected {expected.PdoCount.Value}.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(expected.ImageId) &&
+                !string.Equals(actual.ImageId, expected.ImageId, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' ImageId is '{actual.ImageId}', expected '{expected.ImageId}'.");
+            }
+
+            if (expected.ParentBoxId.HasValue && actual.ParentBoxId != expected.ParentBoxId.Value)
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' parent Box Id is '{actual.ParentBoxId}', expected '{expected.ParentBoxId.Value}'.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(expected.BoxFlags) &&
+                !string.Equals(actual.BoxFlags, expected.BoxFlags, StringComparison.OrdinalIgnoreCase))
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' BoxFlags is '{actual.BoxFlags}', expected '{expected.BoxFlags}'.");
+            }
+
+            if (expected.PdoEntryCount.HasValue && actual.PdoEntryCount != expected.PdoEntryCount.Value)
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' has {actual.PdoEntryCount} PDO Entry record(s), expected {expected.PdoEntryCount.Value}.");
+            }
+
+            if (expected.DirectChildBoxCount.HasValue && actual.DirectChildBoxCount != expected.DirectChildBoxCount.Value)
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' has {actual.DirectChildBoxCount} direct child Box record(s), expected {expected.DirectChildBoxCount.Value}.");
+            }
+
+            if (expected.TotalChildBoxCount.HasValue && actual.TotalChildBoxCount != expected.TotalChildBoxCount.Value)
+            {
+                errors.Add($"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' has {actual.TotalChildBoxCount} total child Box record(s), expected {expected.TotalChildBoxCount.Value}.");
+            }
+
+            AssertExpectedElementCounts(
+                expected.DirectChildElementCounts,
+                actual.DirectChildElementCounts,
+                $"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' direct child",
+                errors);
+            AssertExpectedElementCounts(
+                expected.EtherCatChildElementCounts,
+                actual.EtherCatChildElementCounts,
+                $"IO Box Id='{expected.BoxId}' under Device Id='{expected.DeviceId}' EtherCAT child",
+                errors);
+        }
+
+        foreach (ExpectedMappingLinkShape expected in request.MappingLinks ?? Array.Empty<ExpectedMappingLinkShape>())
+        {
+            ValidateRequiredText(expected.OwnerAName, nameof(expected.OwnerAName));
+            ValidateRequiredText(expected.OwnerBName, nameof(expected.OwnerBName));
+            ValidateRequiredText(expected.VarA, nameof(expected.VarA));
+            ValidateRequiredText(expected.VarB, nameof(expected.VarB));
+            bool found = mappingLinks.Any(link =>
+                string.Equals(link.OwnerAName, expected.OwnerAName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.OwnerBName, expected.OwnerBName, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.VarA, expected.VarA, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(link.VarB, expected.VarB, StringComparison.OrdinalIgnoreCase));
+            if (!found)
+            {
+                errors.Add($"Mapping link '{expected.OwnerAName}:{expected.VarA} -> {expected.OwnerBName}:{expected.VarB}' is missing.");
+            }
+        }
+
+        bool succeeded = errors.Count == 0;
+        string summary = succeeded
+            ? $"IO topology shape matched: {devices.Count} device(s), {boxes.Count} box(es), {imageCount} image(s), {pdoCount} PDO(s), {pdoEntryCount} PDO entry/entries, {mappingLinks.Count} link(s)."
+            : $"IO topology shape failed with {errors.Count} error(s).";
+
+        return new AssertIoTopologyShapeResult(
+            succeeded,
+            devices.Count,
+            boxes.Count,
+            imageCount,
+            pdoCount,
+            pdoEntryCount,
+            mappingInfoCount,
+            ownerACount,
+            mappingLinks.Count,
+            devices,
+            boxes,
+            mappingLinks,
+            errors,
+            summary);
+    }
+
+    public AssertIoImageReferencesResult AssertIoImageReferences(string tsprojPath, AssertIoImageReferencesRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        XDocument document = Load(tsprojPath);
+        XElement? io = FindProjectIo(document);
+        HashSet<string> rootImageDataIds = ReadRootImageDataIds(document);
+        List<IoDeviceImageReferenceShape> devices = [];
+        List<IoImageIdReferenceShape> imageReferences = [];
+        Dictionary<string, string> backingById = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string id in rootImageDataIds)
+        {
+            backingById.TryAdd(id, "RootImageData");
+        }
+
+        if (io is not null)
+        {
+            foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+            {
+                if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+                {
+                    continue;
+                }
+
+                IReadOnlyList<string> directImageIds = device.Elements()
+                    .Where(element => element.Name.LocalName == "Image")
+                    .Select(element => GetAttributeValue(element, "Id"))
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .Select(id => id!)
+                    .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                foreach (string id in directImageIds)
+                {
+                    backingById.TryAdd(id, "DeviceImage");
+                }
+
+                string? infoImageId = GetAttributeValue(device, "InfoImageId");
+                if (!string.IsNullOrWhiteSpace(infoImageId))
+                {
+                    backingById.TryAdd(infoImageId!, "DeviceInfoImageId");
+                }
+
+                devices.Add(new IoDeviceImageReferenceShape(
+                    deviceId,
+                    GetChildElementValue(device, "Name") ?? string.Empty,
+                    infoImageId,
+                    directImageIds.Count,
+                    directImageIds));
+            }
+
+            foreach (XElement imageIdElement in io.Descendants().Where(element => element.Name.LocalName == "ImageId"))
+            {
+                string imageId = imageIdElement.Value.Trim();
+                if (string.IsNullOrWhiteSpace(imageId))
+                {
+                    continue;
+                }
+
+                XElement? owner = imageIdElement.Parent;
+                string ownerKind = owner?.Name.LocalName ?? string.Empty;
+                int? deviceId = TryReadNearestDeviceId(owner);
+                int? boxId = TryReadNearestBoxId(owner);
+                string? ownerName = owner is null ? null : GetChildElementValue(owner, "Name");
+                if (string.IsNullOrWhiteSpace(ownerName) && owner is not null)
+                {
+                    ownerName = GetAttributeValue(owner, "Name") ?? GetAttributeValue(owner, "Type");
+                }
+
+                backingById.TryGetValue(imageId, out string? backingKind);
+                bool backed = !string.IsNullOrWhiteSpace(backingKind) ||
+                    (request.AllowedUnbackedImageIds?.Any(id => string.Equals(id, imageId, StringComparison.OrdinalIgnoreCase)) ?? false);
+                imageReferences.Add(new IoImageIdReferenceShape(
+                    ownerKind,
+                    deviceId,
+                    boxId,
+                    ownerName,
+                    imageId,
+                    backingKind,
+                    backed));
+            }
+        }
+
+        List<string> errors = [];
+        int deviceImageCount = devices.Sum(device => device.DirectImageCount);
+        int deviceWithInfoImageCount = devices.Count(device => !string.IsNullOrWhiteSpace(device.InfoImageId));
+        int deviceInfoWithoutImageCount = devices.Count(device => !string.IsNullOrWhiteSpace(device.InfoImageId) && device.DirectImageCount == 0);
+        int backedImageReferenceCount = imageReferences.Count(reference => reference.Backed);
+        int unbackedImageReferenceCount = imageReferences.Count(reference => !reference.Backed);
+
+        if (request.ExpectedRootImageDataCount.HasValue && rootImageDataIds.Count != request.ExpectedRootImageDataCount.Value)
+        {
+            errors.Add($"Root ImageDatas has {rootImageDataIds.Count} ImageData record(s), expected {request.ExpectedRootImageDataCount.Value}.");
+        }
+
+        if (request.ExpectedDeviceImageCount.HasValue && deviceImageCount != request.ExpectedDeviceImageCount.Value)
+        {
+            errors.Add($"Project/Io has {deviceImageCount} direct device Image record(s), expected {request.ExpectedDeviceImageCount.Value}.");
+        }
+
+        if (request.ExpectedImageReferenceCount.HasValue && imageReferences.Count != request.ExpectedImageReferenceCount.Value)
+        {
+            errors.Add($"Project/Io has {imageReferences.Count} ImageId reference(s), expected {request.ExpectedImageReferenceCount.Value}.");
+        }
+
+        if (request.RequireDeviceImageForInfoImageId)
+        {
+            foreach (IoDeviceImageReferenceShape device in devices.Where(device => !string.IsNullOrWhiteSpace(device.InfoImageId) && device.DirectImageCount == 0))
+            {
+                errors.Add($"IO Device Id='{device.DeviceId}' has InfoImageId='{device.InfoImageId}' but no direct Image node.");
+            }
+        }
+
+        if (request.RequireImageIdBacking)
+        {
+            foreach (IoImageIdReferenceShape reference in imageReferences.Where(reference => !reference.Backed))
+            {
+                string owner = string.IsNullOrWhiteSpace(reference.OwnerName) ? reference.OwnerKind : $"{reference.OwnerKind} '{reference.OwnerName}'";
+                errors.Add($"ImageId '{reference.ImageId}' on {owner} has no matching root ImageData, device Image, device InfoImageId, or allowed unbacked id.");
+            }
+        }
+
+        bool succeeded = errors.Count == 0;
+        string summary = succeeded
+            ? $"IO image references matched: {rootImageDataIds.Count} root image data record(s), {deviceImageCount} device image(s), {imageReferences.Count} ImageId reference(s)."
+            : $"IO image references failed with {errors.Count} error(s).";
+
+        return new AssertIoImageReferencesResult(
+            succeeded,
+            rootImageDataIds.Count,
+            deviceImageCount,
+            deviceWithInfoImageCount,
+            deviceInfoWithoutImageCount,
+            imageReferences.Count,
+            backedImageReferenceCount,
+            unbackedImageReferenceCount,
+            rootImageDataIds.OrderBy(id => id, StringComparer.OrdinalIgnoreCase).ToList(),
+            devices.OrderBy(device => device.DeviceId).ToList(),
+            imageReferences
+                .OrderBy(reference => reference.DeviceId ?? 0)
+                .ThenBy(reference => reference.BoxId ?? 0)
+                .ThenBy(reference => reference.OwnerKind, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(reference => reference.ImageId, StringComparer.OrdinalIgnoreCase)
+                .ToList(),
+            errors,
+            summary);
+    }
+
+    public DescribeIoTopologyResult DescribeIoTopology(string tsprojPath, DescribeIoTopologyRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        if (request.MaxItemsPerCollection < 0)
+        {
+            throw new InvalidOperationException("DescribeIoTopology MaxItemsPerCollection must be greater than or equal to zero.");
+        }
+
+        XDocument document = Load(tsprojPath);
+        XElement? io = FindProjectIo(document);
+        int deviceCount = io?.Elements().Count(element => element.Name.LocalName == "Device") ?? 0;
+        int boxCount = io?.Descendants().Count(element => element.Name.LocalName == "Box") ?? 0;
+        int pdoCount = io?.Descendants().Count(element => element.Name.LocalName == "Pdo") ?? 0;
+        int pdoEntryCount = io?.Descendants()
+            .Where(element => element.Name.LocalName == "Pdo")
+            .Sum(pdo => pdo.Elements().Count(element => element.Name.LocalName == "Entry")) ?? 0;
+        int imageCount = io?.Descendants().Count(element => element.Name.LocalName == "Image") ?? 0;
+        int mappingInfoCount = ReadRootMappingInfoCount(document);
+        int ownerACount = ReadRootOwnerACount(document);
+        IReadOnlyList<MappingLinkShape> allMappingLinks = ReadRootMappingLinks(document);
+
+        bool truncated = false;
+        IReadOnlyList<IoTopologyDeviceDescription> devices = request.IncludeDevices
+            ? LimitCollection(DescribeIoDevices(document, request.IncludeAttributes), request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<IoTopologyDeviceDescription>();
+        IReadOnlyList<IoTopologyBoxDescription> boxes = request.IncludeBoxes
+            ? LimitCollection(DescribeIoBoxes(document, request.IncludeAttributes), request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<IoTopologyBoxDescription>();
+        IReadOnlyList<IoTopologyImageDescription> images = request.IncludeDevices || request.IncludeBoxes
+            ? LimitCollection(DescribeIoImages(document, request.IncludeAttributes), request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<IoTopologyImageDescription>();
+        IReadOnlyList<IoTopologyPdoDescription> pdos = request.IncludePdos
+            ? LimitCollection(DescribeIoPdos(document, request.IncludeAttributes), request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<IoTopologyPdoDescription>();
+        IReadOnlyList<IoTopologyMappingInfoDescription> mappingInfos = request.IncludeMappings
+            ? LimitCollection(DescribeMappingInfos(document, request.IncludeAttributes), request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<IoTopologyMappingInfoDescription>();
+        IReadOnlyList<IoTopologyOwnerDescription> owners = request.IncludeMappings
+            ? LimitCollection(DescribeMappingOwners(document), request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<IoTopologyOwnerDescription>();
+        IReadOnlyList<MappingLinkShape> mappingLinks = request.IncludeMappings
+            ? LimitCollection(allMappingLinks, request.MaxItemsPerCollection, ref truncated)
+            : Array.Empty<MappingLinkShape>();
+
+        string summary = $"IO topology described: {deviceCount} device(s), {boxCount} box(es), {pdoCount} PDO(s), {allMappingLinks.Count} mapping link(s).";
+        if (truncated)
+        {
+            summary += $" Output collections were truncated to {request.MaxItemsPerCollection} item(s).";
+        }
+
+        return new DescribeIoTopologyResult(
+            true,
+            Path.GetFullPath(tsprojPath),
+            deviceCount,
+            boxCount,
+            imageCount,
+            pdoCount,
+            pdoEntryCount,
+            mappingInfoCount,
+            ownerACount,
+            allMappingLinks.Count,
+            truncated,
+            devices,
+            boxes,
+            images,
+            pdos,
+            mappingInfos,
+            owners,
+            mappingLinks,
+            summary);
+    }
+
+    public CompareIoTopologyResult CompareIoTopology(string candidateTsprojPath, CompareIoTopologyRequest request)
+    {
+        if (request is null)
+        {
+            throw new ArgumentNullException(nameof(request));
+        }
+
+        ValidateRequiredText(request.ReferenceProjectPath, nameof(request.ReferenceProjectPath));
+        if (request.MaxDifferences < 0)
+        {
+            throw new InvalidOperationException("CompareIoTopology MaxDifferences must be greater than or equal to zero.");
+        }
+
+        DescribeIoTopologyRequest describeRequest = new(
+            IncludeDevices: true,
+            IncludeBoxes: true,
+            IncludePdos: request.IncludePdos,
+            IncludeMappings: request.IncludeMappings,
+            IncludeAttributes: request.IncludeAttributes,
+            MaxItemsPerCollection: 0);
+        DescribeIoTopologyResult reference = DescribeIoTopology(request.ReferenceProjectPath, describeRequest);
+        DescribeIoTopologyResult candidate = DescribeIoTopology(candidateTsprojPath, describeRequest);
+        List<IoTopologyCountComparison> counts =
+        [
+            new("DeviceCount", reference.DeviceCount, candidate.DeviceCount, reference.DeviceCount == candidate.DeviceCount),
+            new("BoxCount", reference.BoxCount, candidate.BoxCount, reference.BoxCount == candidate.BoxCount),
+            new("ImageCount", reference.ImageCount, candidate.ImageCount, reference.ImageCount == candidate.ImageCount),
+            new("PdoCount", reference.PdoCount, candidate.PdoCount, reference.PdoCount == candidate.PdoCount),
+            new("PdoEntryCount", reference.PdoEntryCount, candidate.PdoEntryCount, reference.PdoEntryCount == candidate.PdoEntryCount),
+            new("MappingInfoCount", reference.MappingInfoCount, candidate.MappingInfoCount, reference.MappingInfoCount == candidate.MappingInfoCount),
+            new("OwnerACount", reference.OwnerACount, candidate.OwnerACount, reference.OwnerACount == candidate.OwnerACount),
+            new("RootMappingLinkCount", reference.RootMappingLinkCount, candidate.RootMappingLinkCount, reference.RootMappingLinkCount == candidate.RootMappingLinkCount)
+        ];
+
+        List<IoTopologyDifference> differences = [];
+        bool truncated = false;
+        AddDeviceDifferences(reference.Devices, candidate.Devices, differences, request.MaxDifferences, ref truncated);
+        AddBoxDifferences(reference.Boxes, candidate.Boxes, differences, request.MaxDifferences, ref truncated);
+        AddImageDifferences(reference.Images, candidate.Images, differences, request.MaxDifferences, ref truncated);
+        if (request.IncludePdos)
+        {
+            AddPdoDifferences(reference.Pdos, candidate.Pdos, differences, request.MaxDifferences, ref truncated);
+        }
+
+        if (request.IncludeMappings)
+        {
+            AddMappingInfoDifferences(reference.MappingInfos, candidate.MappingInfos, differences, request.MaxDifferences, ref truncated);
+            AddOwnerDifferences(reference.Owners, candidate.Owners, differences, request.MaxDifferences, ref truncated);
+            AddMappingLinkDifferences(reference.MappingLinks, candidate.MappingLinks, differences, request.MaxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyCountComparison count in counts.Where(item => !item.Matches))
+        {
+            AddDifference(
+                differences,
+                new IoTopologyDifference("Count", count.Name, "Value", count.Reference.ToString(CultureInfo.InvariantCulture), count.Candidate.ToString(CultureInfo.InvariantCulture)),
+                request.MaxDifferences,
+                ref truncated);
+        }
+
+        bool succeeded = counts.All(item => item.Matches) && differences.Count == 0 && !truncated;
+        string summary = succeeded
+            ? "IO topology comparison matched."
+            : $"IO topology comparison found {differences.Count} difference(s)" + (truncated ? " before truncation." : ".");
+
+        return new CompareIoTopologyResult(
+            succeeded,
+            Path.GetFullPath(request.ReferenceProjectPath),
+            Path.GetFullPath(candidateTsprojPath),
+            counts,
+            differences,
+            truncated,
+            summary);
+    }
+
     public void EnsureTaskPouOid(string tsprojPath, EnsureTaskPouOidRequest request)
     {
         ValidateRequiredText(request.PlcProjectName, nameof(request.PlcProjectName));
@@ -1307,6 +1965,20 @@ public sealed class TwinCatTsprojMutationService
             ApplyIoImageDefinition(device, image);
         }
 
+        if ((request.EtherCatAttributes?.Count ?? 0) > 0 || (request.EtherCatElements?.Count ?? 0) > 0)
+        {
+            XElement etherCat = GetOrCreateChildElement(device, "EtherCAT");
+            ApplyXmlAttributes(etherCat, request.EtherCatAttributes, replaceExisting: true);
+            ApplyStructuredElements(etherCat, request.EtherCatElements, request.ReplaceEtherCatElements);
+        }
+
+        if ((request.EthernetAttributes?.Count ?? 0) > 0 || (request.EthernetElements?.Count ?? 0) > 0)
+        {
+            XElement ethernet = GetOrCreateChildElement(device, "Ethernet");
+            ApplyXmlAttributes(ethernet, request.EthernetAttributes, replaceExisting: true);
+            ApplyStructuredElements(ethernet, request.EthernetElements, request.ReplaceEthernetElements);
+        }
+
         ApplyIoRawFragments(device, request.ExtraFragments, $"Project/Io/Device[@Id='{deviceIdText}']");
     }
 
@@ -1339,6 +2011,12 @@ public sealed class TwinCatTsprojMutationService
             XElement etherCat = GetOrCreateChildElement(box, "EtherCAT");
             ApplyXmlAttributes(etherCat, request.EtherCatAttributes, replaceExisting: true);
             ApplyXmlChildValues(etherCat, request.EtherCatChildValues);
+        }
+
+        if ((request.EtherCatElements?.Count ?? 0) > 0)
+        {
+            XElement etherCat = GetOrCreateChildElement(box, "EtherCAT");
+            ApplyStructuredElements(etherCat, request.EtherCatElements, request.ReplaceEtherCatElements);
         }
 
         ApplyIoRawFragments(box, request.ExtraFragments, $"Project/Io/Device[@Id='{request.DeviceId}']/Box[@Id='{boxIdText}']");
@@ -1519,6 +2197,27 @@ public sealed class TwinCatTsprojMutationService
         }
     }
 
+    private static void ApplySystemCpuSetting(XElement settings, SystemCpuSetting cpuEntry)
+    {
+        if (cpuEntry.CpuId.HasValue && cpuEntry.CpuId.Value < 0)
+        {
+            throw new InvalidOperationException("System CPU CpuId must be greater than or equal to zero.");
+        }
+
+        string? cpuIdText = cpuEntry.CpuId?.ToString(CultureInfo.InvariantCulture);
+        XElement cpu = settings.Elements().FirstOrDefault(element =>
+                element.Name.LocalName == "Cpu" &&
+                string.Equals(GetAttributeValue(element, "CpuId"), cpuIdText, StringComparison.OrdinalIgnoreCase))
+            ?? AddChild(settings, "Cpu");
+
+        if (cpuEntry.CpuId.HasValue)
+        {
+            cpu.SetAttributeValue("CpuId", cpuIdText);
+        }
+
+        ApplyXmlAttributes(cpu, cpuEntry.Attributes, replaceExisting: true, ignoredNames: ["CpuId"]);
+    }
+
     private static void ApplyIoImageDefinition(XElement device, IoImageDefinition image)
     {
         ValidatePositive(image.Id, nameof(image.Id));
@@ -1535,9 +2234,54 @@ public sealed class TwinCatTsprojMutationService
         imageElement.SetAttributeValue("Id", imageIdText);
         imageElement.SetAttributeValue("AddrType", image.AddrType.ToString(CultureInfo.InvariantCulture));
         imageElement.SetAttributeValue("ImageType", image.ImageType.ToString(CultureInfo.InvariantCulture));
+        SetOptionalStringAttribute(imageElement, "ImageFlags", image.ImageFlags);
         SetOptionalIntAttribute(imageElement, "SizeIn", image.SizeIn);
         SetOptionalIntAttribute(imageElement, "SizeOut", image.SizeOut);
         SetOrCreateChildElementValue(imageElement, "Name", image.Name);
+    }
+
+    private static void ApplyStructuredElements(XElement parent, IReadOnlyList<IoStructuredElement>? elements, bool replaceExisting)
+    {
+        if (elements is null || elements.Count == 0)
+        {
+            return;
+        }
+
+        if (replaceExisting)
+        {
+            HashSet<string> names = elements
+                .Select(item => item.ElementName)
+                .Where(item => !string.IsNullOrWhiteSpace(item))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            foreach (XElement existing in parent.Elements().Where(element => names.Contains(element.Name.LocalName)).ToList())
+            {
+                existing.Remove();
+            }
+        }
+
+        foreach (IoStructuredElement element in elements)
+        {
+            parent.Add(CreateStructuredElement(parent.GetDefaultNamespace(), element));
+        }
+    }
+
+    private static XElement CreateStructuredElement(XNamespace ns, IoStructuredElement request)
+    {
+        ValidateRequiredText(request.ElementName, nameof(request.ElementName));
+        XElement element = new(ns + request.ElementName);
+        ApplyXmlAttributes(element, request.Attributes, replaceExisting: true);
+        if (request.Value is not null)
+        {
+            element.Value = request.Value;
+        }
+
+        foreach (IoStructuredElement child in request.Children ?? Array.Empty<IoStructuredElement>())
+        {
+            element.Add(CreateStructuredElement(ns, child));
+        }
+
+        return element;
     }
 
     private static void ApplyIoPdoEntry(XElement pdo, IoPdoEntry entryRequest, bool entriesWereReplaced)
@@ -1960,6 +2704,17 @@ public sealed class TwinCatTsprojMutationService
 
         uint imageObjectId = 0x03040000u | ((uint)imageId << 4);
         return "#x" + imageObjectId.ToString("X8", CultureInfo.InvariantCulture);
+    }
+
+    public static string DeriveTaskObjectId(int taskId)
+    {
+        if (taskId <= 0)
+        {
+            throw new InvalidOperationException("Task Id must be greater than zero.");
+        }
+
+        uint taskObjectId = 0x02010000u | ((uint)taskId << 4);
+        return "#x" + taskObjectId.ToString("X8", CultureInfo.InvariantCulture);
     }
 
     public static string DeriveNextObjectId(string currentObjectId, uint increment = 1)
@@ -2562,6 +3317,884 @@ public sealed class TwinCatTsprojMutationService
             element.Name.LocalName == "Data" &&
             int.TryParse(GetAttributeValue(element, "ArrayIndex"), out int existingIndex) &&
             existingIndex == arrayIndex);
+
+    private static IReadOnlyList<DataPointerValueShape> ReadDataPointerShapes(XElement? dataPointerValues)
+    {
+        if (dataPointerValues is null)
+        {
+            return Array.Empty<DataPointerValueShape>();
+        }
+
+        List<DataPointerValueShape> result = [];
+        foreach (XElement value in dataPointerValues.Elements().Where(element => element.Name.LocalName == "Value"))
+        {
+            string? pointerName = GetChildElementValue(value, "Name");
+            if (string.IsNullOrWhiteSpace(pointerName))
+            {
+                continue;
+            }
+
+            List<XElement> dataRecords = value.Elements().Where(element => element.Name.LocalName == "Data").ToList();
+            int recordCount = dataRecords.Count > 0 ? dataRecords.Count : HasInlineDataPointerRecord(value) ? 1 : 0;
+            List<int> arrayIndexes = dataRecords
+                .Select(element => GetAttributeValue(element, "ArrayIndex"))
+                .Where(text => int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out _))
+                .Select(text => int.Parse(text!, CultureInfo.InvariantCulture))
+                .OrderBy(index => index)
+                .ToList();
+
+            result.Add(new DataPointerValueShape(pointerName, recordCount, arrayIndexes));
+        }
+
+        return result;
+    }
+
+    private static bool HasInlineDataPointerRecord(XElement value) =>
+        value.Elements().Any(element => element.Name.LocalName is "OTCID" or "AreaNo" or "ByteOffs" or "ByteSize");
+
+    private static IReadOnlyList<MappingLinkShape> ReadRootMappingLinks(XDocument document)
+    {
+        XElement? root = document.Root;
+        if (root is null)
+        {
+            return Array.Empty<MappingLinkShape>();
+        }
+
+        List<MappingLinkShape> result = [];
+        foreach (XElement mappings in root.Elements().Where(element => element.Name.LocalName == "Mappings"))
+        {
+            foreach (XElement ownerA in mappings.Elements().Where(element => element.Name.LocalName == "OwnerA"))
+            {
+                string ownerAName = GetAttributeValue(ownerA, "Name") ?? string.Empty;
+                foreach (XElement ownerB in ownerA.Elements().Where(element => element.Name.LocalName == "OwnerB"))
+                {
+                    string ownerBName = GetAttributeValue(ownerB, "Name") ?? string.Empty;
+                    foreach (XElement link in ownerB.Elements().Where(element => element.Name.LocalName == "Link"))
+                    {
+                        string varA = GetAttributeValue(link, "VarA") ?? string.Empty;
+                        string varB = GetAttributeValue(link, "VarB") ?? string.Empty;
+                        result.Add(new MappingLinkShape(ownerAName, ownerBName, varA, varB));
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsDataPointerMappingLink(MappingLinkShape link) =>
+        link.VarA.Contains("Data Pointer^", StringComparison.OrdinalIgnoreCase) ||
+        link.VarB.Contains("Data Pointer^", StringComparison.OrdinalIgnoreCase);
+
+    private static IReadOnlyList<IoDeviceShape> ReadIoDeviceShapes(XDocument document)
+    {
+        XElement? io = FindProjectIo(document);
+        if (io is null)
+        {
+            return Array.Empty<IoDeviceShape>();
+        }
+
+        List<IoDeviceShape> result = [];
+        foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+        {
+            if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+            {
+                continue;
+            }
+
+            string name = GetChildElementValue(device, "Name") ?? string.Empty;
+            int boxCount = device.Descendants().Count(element => element.Name.LocalName == "Box");
+            string? infoImageId = GetAttributeValue(device, "InfoImageId");
+            int imageCount = device.Descendants().Count(element => element.Name.LocalName == "Image");
+            XElement? etherCat = device.Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT");
+            XElement? ethernet = device.Elements().FirstOrDefault(element => element.Name.LocalName == "Ethernet");
+            result.Add(new IoDeviceShape(
+                deviceId,
+                name,
+                boxCount,
+                infoImageId,
+                imageCount,
+                device.Elements().Count(element => element.Name.LocalName == "Box"),
+                device.Elements().Count(element => element.Name.LocalName == "Image"),
+                CountDirectChildElements(device),
+                CountDirectChildElements(etherCat),
+                CountDirectChildElements(ethernet)));
+        }
+
+        return result.OrderBy(device => device.DeviceId).ToList();
+    }
+
+    private static IReadOnlyList<IoBoxShape> ReadIoBoxShapes(XDocument document)
+    {
+        XElement? io = FindProjectIo(document);
+        if (io is null)
+        {
+            return Array.Empty<IoBoxShape>();
+        }
+
+        List<IoBoxShape> result = [];
+        foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+        {
+            if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+            {
+                continue;
+            }
+
+            foreach (XElement box in device.Descendants().Where(element => element.Name.LocalName == "Box"))
+            {
+                if (!int.TryParse(GetAttributeValue(box, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int boxId))
+                {
+                    continue;
+                }
+
+                string name = GetChildElementValue(box, "Name") ?? string.Empty;
+                IReadOnlyList<XElement> pdos = ReadDirectBoxPdos(box);
+                string? imageId = GetChildElementValue(box, "ImageId");
+                XElement? etherCat = box.Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT");
+                result.Add(new IoBoxShape(
+                    deviceId,
+                    TryReadNearestBoxId(box.Parent),
+                    boxId,
+                    name,
+                    pdos.Count,
+                    imageId,
+                    GetAttributeValue(box, "BoxFlags"),
+                    pdos.Sum(pdo => pdo.Elements().Count(element => element.Name.LocalName == "Entry")),
+                    box.Elements().Count(element => element.Name.LocalName == "Box"),
+                    box.Descendants().Count(element => element.Name.LocalName == "Box"),
+                    CountDirectChildElements(box),
+                    CountDirectChildElements(etherCat)));
+            }
+        }
+
+        return result.OrderBy(box => box.DeviceId).ThenBy(box => box.BoxId).ToList();
+    }
+
+    private static IReadOnlyList<IoTopologyDeviceDescription> DescribeIoDevices(XDocument document, bool includeAttributes)
+    {
+        XElement? io = FindProjectIo(document);
+        if (io is null)
+        {
+            return Array.Empty<IoTopologyDeviceDescription>();
+        }
+
+        List<IoTopologyDeviceDescription> result = [];
+        foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+        {
+            if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+            {
+                continue;
+            }
+
+            XElement? etherCat = device.Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT");
+            XElement? ethernet = device.Elements().FirstOrDefault(element => element.Name.LocalName == "Ethernet");
+            result.Add(new IoTopologyDeviceDescription(
+                deviceId,
+                GetChildElementValue(device, "Name") ?? string.Empty,
+                GetAttributeValue(device, "DevType"),
+                IsTrueAttribute(device, "Disabled"),
+                GetAttributeValue(device, "DevFlags"),
+                GetAttributeValue(device, "AmsPort"),
+                GetAttributeValue(device, "AmsNetId"),
+                GetAttributeValue(device, "RemoteName"),
+                GetAttributeValue(device, "InfoImageId"),
+                device.Elements().Count(element => element.Name.LocalName == "Box"),
+                device.Descendants().Count(element => element.Name.LocalName == "Box"),
+                device.Elements().Count(element => element.Name.LocalName == "Image"),
+                device.Descendants().Count(element => element.Name.LocalName == "Image"),
+                CountDirectChildElements(device),
+                CountDirectChildElements(etherCat),
+                CountDirectChildElements(ethernet),
+                includeAttributes ? ReadAttributes(device) : Array.Empty<IoTopologyAttributeDescription>(),
+                includeAttributes ? ReadAttributes(etherCat) : Array.Empty<IoTopologyAttributeDescription>(),
+                includeAttributes ? ReadAttributes(ethernet) : Array.Empty<IoTopologyAttributeDescription>()));
+        }
+
+        return result.OrderBy(device => device.DeviceId).ToList();
+    }
+
+    private static IReadOnlyList<IoTopologyBoxDescription> DescribeIoBoxes(XDocument document, bool includeAttributes)
+    {
+        XElement? io = FindProjectIo(document);
+        if (io is null)
+        {
+            return Array.Empty<IoTopologyBoxDescription>();
+        }
+
+        List<IoTopologyBoxDescription> result = [];
+        foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+        {
+            if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+            {
+                continue;
+            }
+
+            foreach (XElement box in device.Descendants().Where(element => element.Name.LocalName == "Box"))
+            {
+                if (!int.TryParse(GetAttributeValue(box, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int boxId))
+                {
+                    continue;
+                }
+
+                int? parentBoxId = TryReadNearestBoxId(box.Parent);
+                XElement? etherCat = box.Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT");
+                IReadOnlyList<XElement> pdos = ReadDirectBoxPdos(box);
+                result.Add(new IoTopologyBoxDescription(
+                    deviceId,
+                    parentBoxId,
+                    boxId,
+                    GetChildElementValue(box, "Name") ?? string.Empty,
+                    GetAttributeValue(box, "BoxType"),
+                    IsTrueAttribute(box, "Disabled"),
+                    GetAttributeValue(box, "BoxFlags"),
+                    GetChildElementValue(box, "ImageId"),
+                    box.Elements().Count(element => element.Name.LocalName == "Box"),
+                    box.Descendants().Count(element => element.Name.LocalName == "Box"),
+                    pdos.Count,
+                    pdos.Sum(pdo => pdo.Elements().Count(element => element.Name.LocalName == "Entry")),
+                    CountDirectChildElements(box),
+                    CountDirectChildElements(etherCat),
+                    includeAttributes ? ReadAttributes(box) : Array.Empty<IoTopologyAttributeDescription>(),
+                    includeAttributes ? ReadAttributes(etherCat) : Array.Empty<IoTopologyAttributeDescription>()));
+            }
+        }
+
+        return result.OrderBy(box => box.DeviceId).ThenBy(box => box.BoxId).ToList();
+    }
+
+    private static IReadOnlyList<IoTopologyImageDescription> DescribeIoImages(XDocument document, bool includeAttributes)
+    {
+        XElement? io = FindProjectIo(document);
+        if (io is null)
+        {
+            return Array.Empty<IoTopologyImageDescription>();
+        }
+
+        List<IoTopologyImageDescription> result = [];
+        foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+        {
+            if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+            {
+                continue;
+            }
+
+            foreach (XElement image in device.Descendants().Where(element => element.Name.LocalName == "Image"))
+            {
+                XElement? parent = image.Parent;
+                int? parentBoxId = parent?.Name.LocalName == "Box"
+                    ? TryReadNearestBoxId(parent)
+                    : null;
+                result.Add(new IoTopologyImageDescription(
+                    deviceId,
+                    parent?.Name.LocalName,
+                    parentBoxId,
+                    GetAttributeValue(image, "Id") ?? string.Empty,
+                    GetAttributeValue(image, "AddrType"),
+                    GetAttributeValue(image, "ImageType"),
+                    GetAttributeValue(image, "ImageFlags"),
+                    GetAttributeValue(image, "SizeIn"),
+                    GetAttributeValue(image, "SizeOut"),
+                    GetChildElementValue(image, "Name") ?? string.Empty,
+                    includeAttributes ? ReadAttributes(image) : Array.Empty<IoTopologyAttributeDescription>()));
+            }
+        }
+
+        return result
+            .OrderBy(image => image.DeviceId)
+            .ThenBy(image => image.ParentKind, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(image => image.ParentBoxId ?? 0)
+            .ThenBy(image => image.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static IReadOnlyList<IoTopologyPdoDescription> DescribeIoPdos(XDocument document, bool includeAttributes)
+    {
+        XElement? io = FindProjectIo(document);
+        if (io is null)
+        {
+            return Array.Empty<IoTopologyPdoDescription>();
+        }
+
+        List<IoTopologyPdoDescription> result = [];
+        foreach (XElement device in io.Elements().Where(element => element.Name.LocalName == "Device"))
+        {
+            if (!int.TryParse(GetAttributeValue(device, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int deviceId))
+            {
+                continue;
+            }
+
+            foreach (XElement box in device.Descendants().Where(element => element.Name.LocalName == "Box"))
+            {
+                if (!int.TryParse(GetAttributeValue(box, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int boxId))
+                {
+                    continue;
+                }
+
+                string boxName = GetChildElementValue(box, "Name") ?? string.Empty;
+                foreach (XElement pdo in ReadDirectBoxPdos(box))
+                {
+                    IReadOnlyList<IoTopologyPdoEntryDescription> entries = pdo.Elements()
+                        .Where(element => element.Name.LocalName == "Entry")
+                        .Select(entry => new IoTopologyPdoEntryDescription(
+                            GetAttributeValue(entry, "Name"),
+                            GetAttributeValue(entry, "Index"),
+                            GetAttributeValue(entry, "Sub"),
+                            GetAttributeValue(entry, "Type"),
+                            GetAttributeValue(entry, "BitLen") ?? GetChildElementValue(entry, "BitLen"),
+                            includeAttributes ? ReadAttributes(entry) : Array.Empty<IoTopologyAttributeDescription>()))
+                        .ToList();
+                    result.Add(new IoTopologyPdoDescription(
+                        deviceId,
+                        boxId,
+                        boxName,
+                        GetAttributeValue(pdo, "Name") ?? string.Empty,
+                        GetAttributeValue(pdo, "Index") ?? string.Empty,
+                        GetAttributeValue(pdo, "InOut"),
+                        GetAttributeValue(pdo, "Flags"),
+                        GetAttributeValue(pdo, "SyncMan"),
+                        entries.Count,
+                        entries,
+                        includeAttributes ? ReadAttributes(pdo) : Array.Empty<IoTopologyAttributeDescription>()));
+                }
+            }
+        }
+
+        return result
+            .OrderBy(pdo => pdo.DeviceId)
+            .ThenBy(pdo => pdo.BoxId)
+            .ThenBy(pdo => pdo.Index, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(pdo => pdo.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static IReadOnlyList<IoTopologyMappingInfoDescription> DescribeMappingInfos(XDocument document, bool includeAttributes)
+    {
+        List<IoTopologyMappingInfoDescription> result = [];
+        foreach (XElement mappings in ReadRootMappings(document))
+        {
+            foreach (XElement mappingInfo in mappings.Elements().Where(element => element.Name.LocalName == "MappingInfo"))
+            {
+                result.Add(new IoTopologyMappingInfoDescription(
+                    GetAttributeValue(mappingInfo, "Identifier") ?? string.Empty,
+                    GetAttributeValue(mappingInfo, "Id") ?? string.Empty,
+                    includeAttributes ? ReadAttributes(mappingInfo) : Array.Empty<IoTopologyAttributeDescription>()));
+            }
+        }
+
+        return result
+            .OrderBy(mappingInfo => mappingInfo.Identifier, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(mappingInfo => mappingInfo.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static IReadOnlyList<IoTopologyOwnerDescription> DescribeMappingOwners(XDocument document)
+    {
+        List<IoTopologyOwnerDescription> result = [];
+        foreach (XElement mappings in ReadRootMappings(document))
+        {
+            foreach (XElement ownerA in mappings.Elements().Where(element => element.Name.LocalName == "OwnerA"))
+            {
+                result.Add(new IoTopologyOwnerDescription(
+                    GetAttributeValue(ownerA, "Name") ?? string.Empty,
+                    GetAttributeValue(ownerA, "Prefix"),
+                    GetAttributeValue(ownerA, "Type"),
+                    ownerA.Elements().Count(element => element.Name.LocalName == "OwnerB"),
+                    ownerA.Descendants().Count(element => element.Name.LocalName == "Link")));
+            }
+        }
+
+        return result.OrderBy(owner => owner.OwnerAName, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private static IReadOnlyList<XElement> ReadDirectBoxPdos(XElement box)
+    {
+        XElement? etherCat = box.Elements().FirstOrDefault(element => element.Name.LocalName == "EtherCAT");
+        return etherCat is null
+            ? Array.Empty<XElement>()
+            : etherCat.Elements().Where(element => element.Name.LocalName == "Pdo").ToList();
+    }
+
+    private static void AddDeviceDifferences(
+        IReadOnlyList<IoTopologyDeviceDescription> reference,
+        IReadOnlyList<IoTopologyDeviceDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        Dictionary<int, IoTopologyDeviceDescription> candidateById = candidate.ToDictionary(device => device.DeviceId);
+        foreach (IoTopologyDeviceDescription referenceDevice in reference)
+        {
+            string key = referenceDevice.DeviceId.ToString(CultureInfo.InvariantCulture);
+            if (!candidateById.TryGetValue(referenceDevice.DeviceId, out IoTopologyDeviceDescription? candidateDevice))
+            {
+                AddDifference(differences, new IoTopologyDifference("Device", key, "Missing", referenceDevice.Name, null), maxDifferences, ref truncated);
+                continue;
+            }
+
+            AddStringDifference(differences, "Device", key, "Name", referenceDevice.Name, candidateDevice.Name, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Device", key, "DevType", referenceDevice.DevType, candidateDevice.DevType, maxDifferences, ref truncated);
+            AddBoolDifference(differences, "Device", key, "Disabled", referenceDevice.Disabled, candidateDevice.Disabled, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Device", key, "DevFlags", referenceDevice.DevFlags, candidateDevice.DevFlags, maxDifferences, ref truncated);
+            AddIntDifference(differences, "Device", key, "TotalBoxCount", referenceDevice.TotalBoxCount, candidateDevice.TotalBoxCount, maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyDeviceDescription extra in candidate.Where(device => !reference.Any(referenceDevice => referenceDevice.DeviceId == device.DeviceId)))
+        {
+            AddDifference(
+                differences,
+                new IoTopologyDifference("Device", extra.DeviceId.ToString(CultureInfo.InvariantCulture), "Extra", null, extra.Name),
+                maxDifferences,
+                ref truncated);
+        }
+    }
+
+    private static void AddBoxDifferences(
+        IReadOnlyList<IoTopologyBoxDescription> reference,
+        IReadOnlyList<IoTopologyBoxDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        Dictionary<string, IoTopologyBoxDescription> candidateByKey = candidate.ToDictionary(BoxKey, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = new(StringComparer.OrdinalIgnoreCase);
+        foreach (IoTopologyBoxDescription referenceBox in reference)
+        {
+            string key = BoxKey(referenceBox);
+            referenceKeys.Add(key);
+            if (!candidateByKey.TryGetValue(key, out IoTopologyBoxDescription? candidateBox))
+            {
+                AddDifference(differences, new IoTopologyDifference("Box", key, "Missing", referenceBox.Name, null), maxDifferences, ref truncated);
+                continue;
+            }
+
+            AddStringDifference(differences, "Box", key, "Name", referenceBox.Name, candidateBox.Name, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Box", key, "BoxType", referenceBox.BoxType, candidateBox.BoxType, maxDifferences, ref truncated);
+            AddBoolDifference(differences, "Box", key, "Disabled", referenceBox.Disabled, candidateBox.Disabled, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Box", key, "BoxFlags", referenceBox.BoxFlags, candidateBox.BoxFlags, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Box", key, "ImageId", referenceBox.ImageId, candidateBox.ImageId, maxDifferences, ref truncated);
+            AddIntDifference(differences, "Box", key, "PdoCount", referenceBox.PdoCount, candidateBox.PdoCount, maxDifferences, ref truncated);
+            AddIntDifference(differences, "Box", key, "PdoEntryCount", referenceBox.PdoEntryCount, candidateBox.PdoEntryCount, maxDifferences, ref truncated);
+            AddIntDictionaryDifference(differences, "Box", key, "EtherCatChildElementCounts", referenceBox.EtherCatChildElementCounts, candidateBox.EtherCatChildElementCounts, maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyBoxDescription extra in candidate.Where(box => !referenceKeys.Contains(BoxKey(box))))
+        {
+            AddDifference(differences, new IoTopologyDifference("Box", BoxKey(extra), "Extra", null, extra.Name), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddImageDifferences(
+        IReadOnlyList<IoTopologyImageDescription> reference,
+        IReadOnlyList<IoTopologyImageDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        Dictionary<string, IoTopologyImageDescription> candidateByKey = candidate.ToDictionary(ImageKey, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = new(StringComparer.OrdinalIgnoreCase);
+        foreach (IoTopologyImageDescription referenceImage in reference)
+        {
+            string key = ImageKey(referenceImage);
+            referenceKeys.Add(key);
+            if (!candidateByKey.TryGetValue(key, out IoTopologyImageDescription? candidateImage))
+            {
+                AddDifference(differences, new IoTopologyDifference("Image", key, "Missing", referenceImage.Name, null), maxDifferences, ref truncated);
+                continue;
+            }
+
+            AddStringDifference(differences, "Image", key, "Name", referenceImage.Name, candidateImage.Name, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Image", key, "AddrType", referenceImage.AddrType, candidateImage.AddrType, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Image", key, "ImageType", referenceImage.ImageType, candidateImage.ImageType, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Image", key, "ImageFlags", referenceImage.ImageFlags, candidateImage.ImageFlags, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Image", key, "SizeIn", referenceImage.SizeIn, candidateImage.SizeIn, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Image", key, "SizeOut", referenceImage.SizeOut, candidateImage.SizeOut, maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyImageDescription extra in candidate.Where(image => !referenceKeys.Contains(ImageKey(image))))
+        {
+            AddDifference(differences, new IoTopologyDifference("Image", ImageKey(extra), "Extra", null, extra.Name), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddPdoDifferences(
+        IReadOnlyList<IoTopologyPdoDescription> reference,
+        IReadOnlyList<IoTopologyPdoDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        Dictionary<string, IoTopologyPdoDescription> candidateByKey = candidate.ToDictionary(PdoKey, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = new(StringComparer.OrdinalIgnoreCase);
+        foreach (IoTopologyPdoDescription referencePdo in reference)
+        {
+            string key = PdoKey(referencePdo);
+            referenceKeys.Add(key);
+            if (!candidateByKey.TryGetValue(key, out IoTopologyPdoDescription? candidatePdo))
+            {
+                AddDifference(differences, new IoTopologyDifference("Pdo", key, "Missing", referencePdo.Name, null), maxDifferences, ref truncated);
+                continue;
+            }
+
+            AddStringDifference(differences, "Pdo", key, "InOut", referencePdo.InOut, candidatePdo.InOut, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Pdo", key, "Flags", referencePdo.Flags, candidatePdo.Flags, maxDifferences, ref truncated);
+            AddStringDifference(differences, "Pdo", key, "SyncMan", referencePdo.SyncMan, candidatePdo.SyncMan, maxDifferences, ref truncated);
+            AddIntDifference(differences, "Pdo", key, "EntryCount", referencePdo.EntryCount, candidatePdo.EntryCount, maxDifferences, ref truncated);
+            AddPdoEntryDifferences(key, referencePdo.Entries, candidatePdo.Entries, differences, maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyPdoDescription extra in candidate.Where(pdo => !referenceKeys.Contains(PdoKey(pdo))))
+        {
+            AddDifference(differences, new IoTopologyDifference("Pdo", PdoKey(extra), "Extra", null, extra.Name), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddPdoEntryDifferences(
+        string pdoKey,
+        IReadOnlyList<IoTopologyPdoEntryDescription> reference,
+        IReadOnlyList<IoTopologyPdoEntryDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        Dictionary<string, IoTopologyPdoEntryDescription> candidateByKey = candidate.ToDictionary(PdoEntryKey, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = new(StringComparer.OrdinalIgnoreCase);
+        foreach (IoTopologyPdoEntryDescription referenceEntry in reference)
+        {
+            string entryKey = PdoEntryKey(referenceEntry);
+            string key = pdoKey + "/" + entryKey;
+            referenceKeys.Add(entryKey);
+            if (!candidateByKey.TryGetValue(entryKey, out IoTopologyPdoEntryDescription? candidateEntry))
+            {
+                AddDifference(differences, new IoTopologyDifference("PdoEntry", key, "Missing", referenceEntry.Name, null), maxDifferences, ref truncated);
+                continue;
+            }
+
+            AddStringDifference(differences, "PdoEntry", key, "Name", referenceEntry.Name, candidateEntry.Name, maxDifferences, ref truncated);
+            AddStringDifference(differences, "PdoEntry", key, "Index", referenceEntry.Index, candidateEntry.Index, maxDifferences, ref truncated);
+            AddStringDifference(differences, "PdoEntry", key, "Sub", referenceEntry.Sub, candidateEntry.Sub, maxDifferences, ref truncated);
+            AddStringDifference(differences, "PdoEntry", key, "Type", referenceEntry.Type, candidateEntry.Type, maxDifferences, ref truncated);
+            AddStringDifference(differences, "PdoEntry", key, "BitLen", referenceEntry.BitLen, candidateEntry.BitLen, maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyPdoEntryDescription extra in candidate.Where(entry => !referenceKeys.Contains(PdoEntryKey(entry))))
+        {
+            AddDifference(
+                differences,
+                new IoTopologyDifference("PdoEntry", pdoKey + "/" + PdoEntryKey(extra), "Extra", null, extra.Name),
+                maxDifferences,
+                ref truncated);
+        }
+    }
+
+    private static void AddMappingInfoDifferences(
+        IReadOnlyList<IoTopologyMappingInfoDescription> reference,
+        IReadOnlyList<IoTopologyMappingInfoDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        HashSet<string> candidateKeys = candidate.Select(MappingInfoKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = reference.Select(MappingInfoKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (IoTopologyMappingInfoDescription item in reference.Where(item => !candidateKeys.Contains(MappingInfoKey(item))))
+        {
+            AddDifference(differences, new IoTopologyDifference("MappingInfo", MappingInfoKey(item), "Missing", item.Id, null), maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyMappingInfoDescription item in candidate.Where(item => !referenceKeys.Contains(MappingInfoKey(item))))
+        {
+            AddDifference(differences, new IoTopologyDifference("MappingInfo", MappingInfoKey(item), "Extra", null, item.Id), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddOwnerDifferences(
+        IReadOnlyList<IoTopologyOwnerDescription> reference,
+        IReadOnlyList<IoTopologyOwnerDescription> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        Dictionary<string, IoTopologyOwnerDescription> candidateByKey = candidate.ToDictionary(owner => owner.OwnerAName, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = new(StringComparer.OrdinalIgnoreCase);
+        foreach (IoTopologyOwnerDescription referenceOwner in reference)
+        {
+            string key = referenceOwner.OwnerAName;
+            referenceKeys.Add(key);
+            if (!candidateByKey.TryGetValue(key, out IoTopologyOwnerDescription? candidateOwner))
+            {
+                AddDifference(differences, new IoTopologyDifference("OwnerA", key, "Missing", referenceOwner.LinkCount.ToString(CultureInfo.InvariantCulture), null), maxDifferences, ref truncated);
+                continue;
+            }
+
+            AddIntDifference(differences, "OwnerA", key, "OwnerBCount", referenceOwner.OwnerBCount, candidateOwner.OwnerBCount, maxDifferences, ref truncated);
+            AddIntDifference(differences, "OwnerA", key, "LinkCount", referenceOwner.LinkCount, candidateOwner.LinkCount, maxDifferences, ref truncated);
+        }
+
+        foreach (IoTopologyOwnerDescription extra in candidate.Where(owner => !referenceKeys.Contains(owner.OwnerAName)))
+        {
+            AddDifference(differences, new IoTopologyDifference("OwnerA", extra.OwnerAName, "Extra", null, extra.LinkCount.ToString(CultureInfo.InvariantCulture)), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddMappingLinkDifferences(
+        IReadOnlyList<MappingLinkShape> reference,
+        IReadOnlyList<MappingLinkShape> candidate,
+        List<IoTopologyDifference> differences,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        HashSet<string> candidateKeys = candidate.Select(MappingLinkKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HashSet<string> referenceKeys = reference.Select(MappingLinkKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (MappingLinkShape item in reference.Where(item => !candidateKeys.Contains(MappingLinkKey(item))))
+        {
+            AddDifference(differences, new IoTopologyDifference("MappingLink", MappingLinkKey(item), "Missing", item.VarB, null), maxDifferences, ref truncated);
+        }
+
+        foreach (MappingLinkShape item in candidate.Where(item => !referenceKeys.Contains(MappingLinkKey(item))))
+        {
+            AddDifference(differences, new IoTopologyDifference("MappingLink", MappingLinkKey(item), "Extra", null, item.VarB), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddStringDifference(
+        List<IoTopologyDifference> differences,
+        string kind,
+        string key,
+        string field,
+        string? reference,
+        string? candidate,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        if (!string.Equals(reference ?? string.Empty, candidate ?? string.Empty, StringComparison.OrdinalIgnoreCase))
+        {
+            AddDifference(differences, new IoTopologyDifference(kind, key, field, reference, candidate), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddBoolDifference(
+        List<IoTopologyDifference> differences,
+        string kind,
+        string key,
+        string field,
+        bool reference,
+        bool candidate,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        if (reference != candidate)
+        {
+            AddDifference(differences, new IoTopologyDifference(kind, key, field, reference ? "true" : "false", candidate ? "true" : "false"), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddIntDifference(
+        List<IoTopologyDifference> differences,
+        string kind,
+        string key,
+        string field,
+        int reference,
+        int candidate,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        if (reference != candidate)
+        {
+            AddDifference(differences, new IoTopologyDifference(kind, key, field, reference.ToString(CultureInfo.InvariantCulture), candidate.ToString(CultureInfo.InvariantCulture)), maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddIntDictionaryDifference(
+        List<IoTopologyDifference> differences,
+        string kind,
+        string key,
+        string field,
+        IReadOnlyDictionary<string, int> reference,
+        IReadOnlyDictionary<string, int> candidate,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        foreach (string name in reference.Keys.Concat(candidate.Keys).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(item => item, StringComparer.OrdinalIgnoreCase))
+        {
+            reference.TryGetValue(name, out int referenceValue);
+            candidate.TryGetValue(name, out int candidateValue);
+            AddIntDifference(differences, kind, key, field + "/" + name, referenceValue, candidateValue, maxDifferences, ref truncated);
+        }
+    }
+
+    private static void AddDifference(
+        List<IoTopologyDifference> differences,
+        IoTopologyDifference difference,
+        int maxDifferences,
+        ref bool truncated)
+    {
+        if (maxDifferences > 0 && differences.Count >= maxDifferences)
+        {
+            truncated = true;
+            return;
+        }
+
+        differences.Add(difference);
+    }
+
+    private static string BoxKey(IoTopologyBoxDescription box) =>
+        $"{box.DeviceId}/{box.BoxId}";
+
+    private static string ImageKey(IoTopologyImageDescription image) =>
+        $"{image.DeviceId}/{image.ParentKind}/{image.ParentBoxId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty}/{image.Id}";
+
+    private static string PdoKey(IoTopologyPdoDescription pdo) =>
+        $"{pdo.DeviceId}/{pdo.BoxId}/{pdo.Index}/{pdo.Name}";
+
+    private static string PdoEntryKey(IoTopologyPdoEntryDescription entry) =>
+        $"{entry.Index}/{entry.Sub}/{entry.Name}";
+
+    private static string MappingInfoKey(IoTopologyMappingInfoDescription mappingInfo) =>
+        mappingInfo.Identifier + "|" + mappingInfo.Id;
+
+    private static string MappingLinkKey(MappingLinkShape link) =>
+        link.OwnerAName + "|" + link.OwnerBName + "|" + link.VarA + "|" + link.VarB;
+
+    private static IReadOnlyList<T> LimitCollection<T>(IReadOnlyList<T> values, int maxItems, ref bool truncated)
+    {
+        if (maxItems <= 0 || values.Count <= maxItems)
+        {
+            return values;
+        }
+
+        truncated = true;
+        return values.Take(maxItems).ToList();
+    }
+
+    private static IReadOnlyDictionary<string, int> CountDirectChildElements(XElement? element)
+    {
+        if (element is null)
+        {
+            return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        return element.Elements()
+            .GroupBy(child => child.Name.LocalName, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void AssertExpectedElementCounts(
+        IReadOnlyDictionary<string, int>? expected,
+        IReadOnlyDictionary<string, int> actual,
+        string context,
+        List<string> errors)
+    {
+        if (expected is null || expected.Count == 0)
+        {
+            return;
+        }
+
+        foreach (KeyValuePair<string, int> item in expected.OrderBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(item.Key))
+            {
+                throw new InvalidOperationException($"{context} element-count key must not be empty.");
+            }
+
+            if (item.Value < 0)
+            {
+                throw new InvalidOperationException($"{context} element-count '{item.Key}' must be greater than or equal to zero.");
+            }
+
+            actual.TryGetValue(item.Key, out int actualCount);
+            if (actualCount != item.Value)
+            {
+                errors.Add($"{context} element '{item.Key}' count is {actualCount}, expected {item.Value}.");
+            }
+        }
+    }
+
+    private static IReadOnlyList<IoTopologyAttributeDescription> ReadAttributes(XElement? element)
+    {
+        if (element is null)
+        {
+            return Array.Empty<IoTopologyAttributeDescription>();
+        }
+
+        return element.Attributes()
+            .OrderBy(attribute => attribute.Name.LocalName, StringComparer.OrdinalIgnoreCase)
+            .Select(attribute => new IoTopologyAttributeDescription(attribute.Name.LocalName, attribute.Value))
+            .ToList();
+    }
+
+    private static int? TryReadNearestBoxId(XElement? element)
+    {
+        XElement? current = element;
+        while (current is not null)
+        {
+            if (current.Name.LocalName == "Box" &&
+                int.TryParse(GetAttributeValue(current, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int id))
+            {
+                return id;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
+    private static int? TryReadNearestDeviceId(XElement? element)
+    {
+        XElement? current = element;
+        while (current is not null)
+        {
+            if (current.Name.LocalName == "Device" &&
+                int.TryParse(GetAttributeValue(current, "Id"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int id))
+            {
+                return id;
+            }
+
+            current = current.Parent;
+        }
+
+        return null;
+    }
+
+    private static HashSet<string> ReadRootImageDataIds(XDocument document)
+    {
+        XElement? imageDatas = document.Root?.Elements().FirstOrDefault(element => element.Name.LocalName == "ImageDatas");
+        return imageDatas is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : imageDatas.Elements()
+                .Where(element => element.Name.LocalName == "ImageData")
+                .Select(element => GetAttributeValue(element, "Id"))
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTrueAttribute(XElement element, string attributeName)
+    {
+        string? value = GetAttributeValue(element, attributeName);
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(value, "1", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ReadRootMappingInfoCount(XDocument document) =>
+        ReadRootMappings(document).Sum(mappings => mappings.Elements().Count(element => element.Name.LocalName == "MappingInfo"));
+
+    private static int ReadRootOwnerACount(XDocument document) =>
+        ReadRootMappings(document).Sum(mappings => mappings.Elements().Count(element => element.Name.LocalName == "OwnerA"));
+
+    private static IReadOnlyList<XElement> ReadRootMappings(XDocument document)
+    {
+        XElement? root = document.Root;
+        return root is null
+            ? Array.Empty<XElement>()
+            : root.Elements().Where(element => element.Name.LocalName == "Mappings").ToList();
+    }
+
+    private static XElement? FindProjectIo(XDocument document)
+    {
+        XElement? project = document.Root?.Elements().FirstOrDefault(element => element.Name.LocalName == "Project");
+        return project?.Elements().FirstOrDefault(element => element.Name.LocalName == "Io");
+    }
 
     private static XElement CreateNamedValue(XElement container, string name)
     {

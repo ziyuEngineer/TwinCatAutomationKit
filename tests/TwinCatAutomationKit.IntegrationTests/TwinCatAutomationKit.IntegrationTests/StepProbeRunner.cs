@@ -142,6 +142,8 @@ internal static class StepProbeRunner
         try
         {
             if (kind.StartsWith("engineering.", StringComparison.OrdinalIgnoreCase) ||
+                kind.StartsWith("ethercat.", StringComparison.OrdinalIgnoreCase) ||
+                kind.StartsWith("scope.", StringComparison.OrdinalIgnoreCase) ||
                 kind.StartsWith("validation.", StringComparison.OrdinalIgnoreCase))
             {
                 return RunEngineeringProbe(kind, ctx, options, outputs, artifacts);
@@ -177,6 +179,19 @@ internal static class StepProbeRunner
                 artifacts.Add(Path.Combine(ctx.RunDirectory, "launch-ok.txt"));
                 return Succeeded(ctx, "Visual Studio launch probe succeeded.", outputs, artifacts);
 
+            case "engineering.cleanup-dte-host-processes":
+            {
+                CleanupDteHostProcessesResult result = ctx.Engineering.CleanupDteHostProcesses(
+                    new CleanupDteHostProcessesRequest(DryRun: true));
+                outputs["dryRun"] = result.DryRun ? "true" : "false";
+                outputs["matchedCount"] = result.MatchedCount.ToString(CultureInfo.InvariantCulture);
+                outputs["killedCount"] = result.KilledCount.ToString(CultureInfo.InvariantCulture);
+                string resultPath = Path.Combine(ctx.RunDirectory, "dte-host-cleanup.json");
+                File.WriteAllText(resultPath, JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true }));
+                artifacts.Add(resultPath);
+                return Succeeded(ctx, "engineering.cleanup-dte-host-processes dry-run probe succeeded.", outputs, artifacts);
+            }
+
             case "engineering.create-xae-solution":
                 EnsureSolution(ctx);
                 outputs["solutionPath"] = ctx.ProjectInfo!.SolutionPath;
@@ -194,6 +209,169 @@ internal static class StepProbeRunner
             case "engineering.create-cpp-project":
                 EnsureCppProject(ctx);
                 return Succeeded(ctx, "Create C++ project probe succeeded.", outputs, artifacts);
+
+            case "engineering.create-scope-project":
+                EnsureSolution(ctx);
+                ScopeProjectInfo scopeProject = ctx.Engineering.CreateScopeProject(
+                    ctx.Session!,
+                    new CreateScopeProjectRequest("Scope", ConfigurationFileName: "Scope Project1.tcscopex"));
+                outputs["projectFilePath"] = scopeProject.ProjectFilePath;
+                outputs["projectGuid"] = scopeProject.ProjectGuid;
+                outputs["configurationFilePath"] = scopeProject.ConfigurationFilePath;
+                outputs["usedSolutionFileFallback"] = scopeProject.UsedSolutionFileFallback ? "true" : "false";
+                artifacts.Add(scopeProject.ProjectFilePath);
+                if (!string.IsNullOrWhiteSpace(scopeProject.ConfigurationFilePath))
+                {
+                    artifacts.Add(scopeProject.ConfigurationFilePath);
+                }
+
+                return Succeeded(ctx, "Create Scope project probe succeeded.", outputs, artifacts);
+
+            case "engineering.create-io-device":
+                EnsureSolution(ctx);
+                TwinCatNodeInfo ioDevice = ctx.Engineering.CreateIoDevice(
+                    ctx.Session!,
+                    new CreateIoDeviceRequest(
+                        "Probe Device 90 (EtherCAT)",
+                        SubType: 111,
+                        ParentTreeItemPath: "TIID",
+                        Disabled: true));
+                outputs["treeItemPath"] = ioDevice.TreeItemPath;
+                outputs["displayName"] = ioDevice.DisplayName;
+                outputs["objectId"] = ioDevice.ObjectId;
+                return Succeeded(ctx, "engineering.create-io-device probe succeeded.", outputs, artifacts);
+
+            case "engineering.create-ethercat-box":
+                EnsureSolution(ctx);
+                TwinCatNodeInfo parentDevice = ctx.Engineering.CreateIoDevice(
+                    ctx.Session!,
+                    new CreateIoDeviceRequest(
+                        "Probe Device 91 (EtherCAT)",
+                        SubType: 111,
+                        ParentTreeItemPath: "TIID",
+                        Disabled: true));
+                TwinCatNodeInfo ethercatBox = ctx.Engineering.CreateEthercatBox(
+                    ctx.Session!,
+                    new CreateEthercatBoxRequest(
+                        parentDevice.TreeItemPath,
+                        "Probe Box 9101 (EK1100)",
+                        ProductRevision: "EK1100-0000-0017",
+                        Disabled: true));
+                outputs["parentTreeItemPath"] = parentDevice.TreeItemPath;
+                outputs["treeItemPath"] = ethercatBox.TreeItemPath;
+                outputs["displayName"] = ethercatBox.DisplayName;
+                outputs["objectId"] = ethercatBox.ObjectId;
+                return Succeeded(ctx, "engineering.create-ethercat-box probe succeeded.", outputs, artifacts);
+
+            case "engineering.generate-io-mappings":
+                EnsureSolution(ctx);
+                EngineeringCommandResult mappings = ctx.Engineering.GenerateIoMappings(
+                    ctx.Session!,
+                    new GenerateIoMappingsRequest(TimeoutMs: 120000));
+                outputs["command"] = mappings.Command;
+                outputs["attemptedCommands"] = string.Join(";", mappings.AttemptedCommands);
+                return Succeeded(ctx, "engineering.generate-io-mappings probe succeeded.", outputs, artifacts);
+
+            case "engineering.search-io-devices":
+                EnsureSolution(ctx);
+                EngineeringCommandResult search = ctx.Engineering.SearchIoDevices(
+                    ctx.Session!,
+                    new SearchIoDevicesRequest(TimeoutMs: 120000));
+                outputs["command"] = search.Command;
+                outputs["attemptedCommands"] = string.Join(";", search.AttemptedCommands);
+                return Succeeded(ctx, "engineering.search-io-devices probe succeeded.", outputs, artifacts);
+
+            case "engineering.reload-io-devices":
+                EnsureSolution(ctx);
+                EngineeringCommandResult reload = ctx.Engineering.ReloadIoDevices(
+                    ctx.Session!,
+                    new ReloadIoDevicesRequest(TimeoutMs: 120000));
+                outputs["command"] = reload.Command;
+                outputs["attemptedCommands"] = string.Join(";", reload.AttemptedCommands);
+                return Succeeded(ctx, "engineering.reload-io-devices probe succeeded.", outputs, artifacts);
+
+            case "engineering.apply-io-tree-plan":
+                EnsureSolution(ctx);
+                ApplyIoTreePlanResult ioTreePlan = ctx.Engineering.ApplyIoTreePlan(
+                    ctx.Session!,
+                    new ApplyIoTreePlanRequest(
+                        Devices:
+                        [
+                            new CreateIoDeviceRequest(
+                                "Probe Device 92 (EtherCAT)",
+                                SubType: 111,
+                                ParentTreeItemPath: "TIID",
+                                Disabled: true)
+                        ],
+                        Boxes:
+                        [
+                            new CreateEthercatBoxRequest(
+                                "TIID^Probe Device 92 (EtherCAT)",
+                                "Probe Box 9201 (EK1100)",
+                                ProductRevision: "EK1100-0000-0017",
+                                Disabled: true)
+                        ]));
+                outputs["deviceCount"] = ioTreePlan.DeviceCount.ToString(CultureInfo.InvariantCulture);
+                outputs["boxCount"] = ioTreePlan.BoxCount.ToString(CultureInfo.InvariantCulture);
+                outputs["treeItemPaths"] = string.Join(";", ioTreePlan.Nodes.Select(node => node.TreeItemPath));
+                return Succeeded(ctx, "engineering.apply-io-tree-plan probe succeeded.", outputs, artifacts);
+
+            case "ethercat.assert-product-revisions":
+            {
+                TwinCatEtherCatDeviceDescriptionService esi = new();
+                AssertEtherCatProductRevisionsResult result = esi.AssertProductRevisions(
+                    new AssertEtherCatProductRevisionsRequest(
+                        ProductRevisions:
+                        [
+                            "EK1100-0000-0018",
+                            "AX5125-0000-0214"
+                        ]));
+                if (!result.Succeeded)
+                {
+                    throw new InvalidOperationException(result.Summary);
+                }
+
+                outputs["requestedCount"] = result.RequestedCount.ToString(CultureInfo.InvariantCulture);
+                outputs["matchedCount"] = result.MatchedCount.ToString(CultureInfo.InvariantCulture);
+                outputs["scannedFileCount"] = result.ScannedFileCount.ToString(CultureInfo.InvariantCulture);
+                return Succeeded(ctx, "ethercat.assert-product-revisions probe succeeded.", outputs, artifacts);
+            }
+
+            case "scope.ensure-configuration":
+            {
+                string scopePath = Path.Combine(ctx.WorkDirectory, "Scope", "Scope Project1.tcscopex");
+                TwinCatScopeConfigurationService scope = new();
+                ScopeConfigurationResult result = scope.EnsureConfiguration(CreateProbeScopeConfigurationRequest(scopePath));
+                ScopeConfigurationShapeResult shape = scope.AssertConfigurationShape(CreateProbeScopeShapeRequest(scopePath));
+                if (!shape.Succeeded)
+                {
+                    throw new InvalidOperationException(shape.Summary);
+                }
+
+                outputs["configurationFilePath"] = result.ConfigurationFilePath;
+                outputs["adsChannelCount"] = result.AdsChannelCount.ToString(CultureInfo.InvariantCulture);
+                outputs["chartChannelCount"] = result.ChartChannelCount.ToString(CultureInfo.InvariantCulture);
+                artifacts.Add(result.ConfigurationFilePath);
+                return Succeeded(ctx, "scope.ensure-configuration probe succeeded.", outputs, artifacts);
+            }
+
+            case "scope.assert-configuration-shape":
+            {
+                string scopePath = Path.Combine(ctx.WorkDirectory, "Scope", "Scope Project1.tcscopex");
+                TwinCatScopeConfigurationService scope = new();
+                scope.EnsureConfiguration(CreateProbeScopeConfigurationRequest(scopePath));
+                ScopeConfigurationShapeResult shape = scope.AssertConfigurationShape(CreateProbeScopeShapeRequest(scopePath));
+                if (!shape.Succeeded)
+                {
+                    throw new InvalidOperationException(shape.Summary);
+                }
+
+                outputs["configurationFilePath"] = shape.ConfigurationFilePath;
+                outputs["adsChannelCount"] = shape.AdsChannelCount.ToString(CultureInfo.InvariantCulture);
+                outputs["chartChannelCount"] = shape.ChartChannelCount.ToString(CultureInfo.InvariantCulture);
+                artifacts.Add(scopePath);
+                return Succeeded(ctx, "scope.assert-configuration-shape probe succeeded.", outputs, artifacts);
+            }
 
             case "engineering.create-plc-project":
                 EnsurePlcProject(ctx);
@@ -319,6 +497,82 @@ internal static class StepProbeRunner
                     JsonSerializer.Serialize(adsSymbols, new JsonSerializerOptions { WriteIndented = true }));
                 artifacts.Add(adsSymbolsResultPath);
                 return Succeeded(ctx, "ADS read symbols probe executed.", outputs, artifacts);
+
+            case "validation.assert-ads-state":
+                AssertAdsStateResult adsState = ctx.Ads.AssertStates(new AssertAdsStateRequest(
+                    ctx.Config.AmsNetId,
+                    [new ExpectedAdsPortState(ctx.Config.AdsPort, "Run")]));
+                outputs["adsStateSucceededCount"] = adsState.SucceededCount.ToString(CultureInfo.InvariantCulture);
+                outputs["adsStateFailedCount"] = adsState.FailedCount.ToString(CultureInfo.InvariantCulture);
+                outputs["adsStates"] = string.Join(
+                    "; ",
+                    adsState.Ports.Select(port =>
+                        port.Succeeded
+                            ? $"{port.Port}={port.ActualAdsState}"
+                            : $"{port.Port}=<failed: {port.ErrorMessage}>"));
+                string adsStateResultPath = Path.Combine(ctx.RunDirectory, "ads-state-assertion.json");
+                File.WriteAllText(adsStateResultPath,
+                    JsonSerializer.Serialize(adsState, new JsonSerializerOptions { WriteIndented = true }));
+                artifacts.Add(adsStateResultPath);
+                return Succeeded(ctx, "ADS state assertion probe executed.", outputs, artifacts);
+
+            case "validation.mark-event-log-window":
+            {
+                string markerPath = Path.Combine(ctx.RunDirectory, "event-log-marker.json");
+                EventLogWindowMarker marker = ctx.Ads.MarkEventLogWindow(new MarkEventLogWindowRequest(MarkerFilePath: markerPath));
+                outputs["markerId"] = marker.MarkerId;
+                outputs["lastEntryIndex"] = marker.LastEntryIndex?.ToString(CultureInfo.InvariantCulture);
+                artifacts.Add(markerPath);
+                return Succeeded(ctx, "Event log window marker probe succeeded.", outputs, artifacts);
+            }
+
+            case "validation.assert-event-log-window":
+            {
+                string markerPath = Path.Combine(ctx.RunDirectory, "event-log-marker.json");
+                ctx.Ads.MarkEventLogWindow(new MarkEventLogWindowRequest(MarkerFilePath: markerPath));
+                AssertEventLogWindowResult eventWindow = ctx.Ads.AssertEventLogWindow(
+                    new AssertEventLogWindowRequest(
+                        MarkerFilePath: markerPath,
+                        MaxEvents: 5));
+                outputs["eventWindowSucceeded"] = eventWindow.Succeeded ? "true" : "false";
+                outputs["observedEventCount"] = eventWindow.ObservedEventCount.ToString(CultureInfo.InvariantCulture);
+                outputs["errorOrCriticalCount"] = eventWindow.ErrorOrCriticalCount.ToString(CultureInfo.InvariantCulture);
+                string eventWindowResultPath = Path.Combine(ctx.RunDirectory, "event-log-window.json");
+                File.WriteAllText(eventWindowResultPath,
+                    JsonSerializer.Serialize(eventWindow, new JsonSerializerOptions { WriteIndented = true }));
+                artifacts.Add(markerPath);
+                artifacts.Add(eventWindowResultPath);
+                if (!eventWindow.Succeeded)
+                {
+                    throw new InvalidOperationException(eventWindow.Summary);
+                }
+
+                return Succeeded(ctx, "Event log window assertion probe succeeded.", outputs, artifacts);
+            }
+
+            case "validation.assert-process-crash-window":
+            {
+                string markerPath = Path.Combine(ctx.RunDirectory, "process-crash-marker.json");
+                ctx.Ads.MarkEventLogWindow(new MarkEventLogWindowRequest(MarkerFilePath: markerPath));
+                AssertProcessCrashWindowResult crashWindow = ctx.Ads.AssertProcessCrashWindow(
+                    new AssertProcessCrashWindowRequest(
+                        MarkerFilePath: markerPath,
+                        MaxEvents: 20));
+                outputs["processCrashWindowSucceeded"] = crashWindow.Succeeded ? "true" : "false";
+                outputs["observedEventCount"] = crashWindow.ObservedEventCount.ToString(CultureInfo.InvariantCulture);
+                outputs["matchingEventCount"] = crashWindow.MatchingEventCount.ToString(CultureInfo.InvariantCulture);
+                string crashWindowResultPath = Path.Combine(ctx.RunDirectory, "process-crash-window.json");
+                File.WriteAllText(crashWindowResultPath,
+                    JsonSerializer.Serialize(crashWindow, new JsonSerializerOptions { WriteIndented = true }));
+                artifacts.Add(markerPath);
+                artifacts.Add(crashWindowResultPath);
+                if (!crashWindow.Succeeded)
+                {
+                    throw new InvalidOperationException(crashWindow.Summary);
+                }
+
+                return Succeeded(ctx, "Process crash window assertion probe succeeded.", outputs, artifacts);
+            }
         }
 
         throw new InvalidOperationException($"No engineering probe scenario implemented for '{kind}'.");
@@ -784,6 +1038,317 @@ internal static class StepProbeRunner
                     ctx.Mutation.EnsureMappingLink(path, new EnsureMappingLinkRequest("A", "B", "v1", "v2")));
                 return Succeeded(ctx, "tsproj.ensure-mapping-link probe succeeded.", outputs, artifacts);
 
+            case "tsproj.assert-data-pointer-shape":
+                EnsureFileOnlyCppInstance(ctx);
+                AddSnapshotArtifacts(ctx, "assert-data-pointer-shape", artifacts, path =>
+                {
+                    ctx.Mutation.EnsureCppInstance(path, new EnsureCppInstanceRequest(
+                        ctx.CppProjectName,
+                        ctx.InstanceName!,
+                        ctx.InstanceObjectId!,
+                        ContextName: "ProbeCtx"));
+                    ctx.Mutation.EnsureDataPointerValue(path, new EnsureDataPointerValueRequest(
+                        ctx.InstanceName!,
+                        "DataIn",
+                        "#x02010050",
+                        3,
+                        0,
+                        8,
+                        0));
+                    ctx.Mutation.EnsureMappingLink(path, new EnsureMappingLinkRequest("A", "B", "v1", "v2"));
+                    AssertDataPointerShapeResult result = ctx.Mutation.AssertDataPointerShape(
+                        path,
+                        new AssertDataPointerShapeRequest(
+                            ctx.InstanceName!,
+                            [new ExpectedDataPointerValueShape("DataIn", 1, [0])],
+                            ExpectedDataPointerRecordCount: 1,
+                            MappingLinks: [new ExpectedMappingLinkShape("A", "B", "v1", "v2")],
+                            ExpectedRootMappingLinkCount: 1));
+                    if (!result.Succeeded)
+                    {
+                        throw new InvalidOperationException(result.Summary + " " + string.Join("; ", result.Errors));
+                    }
+                });
+                return Succeeded(ctx, "tsproj.assert-data-pointer-shape probe succeeded.", outputs, artifacts);
+
+            case "tsproj.assert-io-topology-shape":
+                EnsureFileOnlyProject(ctx);
+                AddSnapshotArtifacts(ctx, "assert-io-topology-shape", artifacts, path =>
+                {
+                    ctx.Mutation.ApplyIoTopologyPlan(
+                        path,
+                        new ApplyIoTopologyPlanRequest(
+                            Devices:
+                            [
+                                new EnsureIoDeviceRequest(
+                                    41,
+                                    "Probe Device 41 (EtherCAT)",
+                                    111,
+                                    InfoImageId: 41,
+                                    Images: [new IoImageDefinition(40, 9, 3, "Probe Process Image")])
+                            ],
+                            Boxes:
+                            [
+                                new EnsureEthercatBoxRequest(41, null, 4101, "Probe Box 4101 (EK1100)", 9099)
+                            ],
+                            Pdos:
+                            [
+                                new EnsureIoPdoRequest(41, 4101, "Channel 1", "#x1600", Entries:
+                                [
+                                    new IoPdoEntry("Output", "#x7000", "#x01", "BIT")
+                                ])
+                            ],
+                            MappingInfos:
+                            [
+                                new EnsureMappingInfoRequest("{00000000-0020-0201-4000-010141000101}", "#x02030041")
+                            ],
+                            Links:
+                            [
+                                new EnsureIoMappingLinkRequest(
+                                    "TIID^Probe Device 41 (EtherCAT)",
+                                    "TIXC^Probe^Obj",
+                                    "Probe Box 4101 (EK1100)^Channel 1^Output",
+                                    "Inputs^Value")
+                            ]));
+
+                    AssertIoTopologyShapeResult result = ctx.Mutation.AssertIoTopologyShape(
+                        path,
+                        new AssertIoTopologyShapeRequest(
+                            ExpectedDeviceCount: 1,
+                            ExpectedBoxCount: 1,
+                            ExpectedImageCount: 1,
+                            ExpectedPdoCount: 1,
+                            ExpectedPdoEntryCount: 1,
+                            ExpectedMappingInfoCount: 1,
+                            ExpectedOwnerACount: 1,
+                            ExpectedRootMappingLinkCount: 1,
+                            Devices:
+                            [
+                                new ExpectedIoDeviceShape(
+                                    41,
+                                    "Probe Device 41 (EtherCAT)",
+                                    1,
+                                    "41",
+                                    1,
+                                    DirectBoxCount: 1,
+                                    DirectImageCount: 1,
+                                    DirectChildElementCounts: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                                    {
+                                        ["Box"] = 1,
+                                        ["Image"] = 1,
+                                        ["Name"] = 1
+                                    })
+                            ],
+                            Boxes:
+                            [
+                                new ExpectedIoBoxShape(
+                                    41,
+                                    4101,
+                                    "Probe Box 4101 (EK1100)",
+                                    1,
+                                    ParentBoxId: null,
+                                    PdoEntryCount: 1,
+                                    DirectChildBoxCount: 0,
+                                    TotalChildBoxCount: 0,
+                                    DirectChildElementCounts: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                                    {
+                                        ["EtherCAT"] = 1,
+                                        ["Name"] = 1
+                                    },
+                                    EtherCatChildElementCounts: new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+                                    {
+                                        ["Pdo"] = 1
+                                    })
+                            ],
+                            MappingLinks:
+                            [
+                                new ExpectedMappingLinkShape(
+                                    "TIID^Probe Device 41 (EtherCAT)",
+                                    "TIXC^Probe^Obj",
+                                    "Probe Box 4101 (EK1100)^Channel 1^Output",
+                                    "Inputs^Value")
+                            ]));
+                    if (!result.Succeeded)
+                    {
+                        throw new InvalidOperationException(result.Summary + " " + string.Join("; ", result.Errors));
+                    }
+                });
+                return Succeeded(ctx, "tsproj.assert-io-topology-shape probe succeeded.", outputs, artifacts);
+
+            case "tsproj.assert-io-image-references":
+                EnsureFileOnlyProject(ctx);
+                AddSnapshotArtifacts(ctx, "assert-io-image-references", artifacts, path =>
+                {
+                    ctx.Mutation.ApplyIoTopologyPlan(
+                        path,
+                        new ApplyIoTopologyPlanRequest(
+                            Devices:
+                            [
+                                new EnsureIoDeviceRequest(
+                                    43,
+                                    "Probe Device 43 (EtherCAT)",
+                                    111,
+                                    InfoImageId: 43,
+                                    Images: [new IoImageDefinition(42, 9, 3, "Probe Process Image")])
+                            ],
+                            Boxes:
+                            [
+                                new EnsureEthercatBoxRequest(43, null, 4301, "Probe Box 4301 (EK1100)", 9099, ImageId: 43)
+                            ]));
+
+                    AssertIoImageReferencesResult result = ctx.Mutation.AssertIoImageReferences(
+                        path,
+                        new AssertIoImageReferencesRequest(
+                            ExpectedRootImageDataCount: 0,
+                            ExpectedDeviceImageCount: 1,
+                            ExpectedImageReferenceCount: 1));
+                    if (!result.Succeeded)
+                    {
+                        throw new InvalidOperationException(result.Summary + " " + string.Join("; ", result.Errors));
+                    }
+                });
+                return Succeeded(ctx, "tsproj.assert-io-image-references probe succeeded.", outputs, artifacts);
+
+            case "tsproj.describe-io-topology":
+                EnsureFileOnlyProject(ctx);
+                AddSnapshotArtifacts(ctx, "describe-io-topology", artifacts, path =>
+                {
+                    ctx.Mutation.ApplyIoTopologyPlan(
+                        path,
+                        new ApplyIoTopologyPlanRequest(
+                            Devices:
+                            [
+                                new EnsureIoDeviceRequest(
+                                    42,
+                                    "Probe Device 42 (EtherCAT)",
+                                    111,
+                                    DevFlags: "#x0003",
+                                    AmsPort: 28642,
+                                    Images:
+                                    [
+                                        new IoImageDefinition(42, 9, 3, "Probe Process Image", ImageFlags: "#x00000030")
+                                    ],
+                                    EtherCatAttributes: [new TsprojXmlAttribute("Desc", "ProbeDevice")])
+                            ],
+                            Boxes:
+                            [
+                                new EnsureEthercatBoxRequest(
+                                    42,
+                                    null,
+                                    4201,
+                                    "Probe Box 4201 (EK1100)",
+                                    9099,
+                                    ImageId: 420,
+                                    EtherCatAttributes: [new TsprojXmlAttribute("Desc", "EK1100")])
+                            ],
+                            Pdos:
+                            [
+                                new EnsureIoPdoRequest(42, 4201, "Channel 1", "#x1600", InOut: "1", Entries:
+                                [
+                                    new IoPdoEntry("Output", "#x7000", "#x01", "BIT")
+                                ])
+                            ],
+                            MappingInfos:
+                            [
+                                new EnsureMappingInfoRequest("{00000000-0020-0201-4000-010142000101}", "#x02030042")
+                            ],
+                            Links:
+                            [
+                                new EnsureIoMappingLinkRequest(
+                                    "TIID^Probe Device 42 (EtherCAT)",
+                                    "TIXC^Probe^Obj",
+                                    "Probe Box 4201 (EK1100)^Channel 1^Output",
+                                    "Inputs^Value")
+                            ]));
+
+                    DescribeIoTopologyResult result = ctx.Mutation.DescribeIoTopology(
+                        path,
+                        new DescribeIoTopologyRequest(IncludeAttributes: true));
+                    if (result.DeviceCount != 1 ||
+                        result.BoxCount != 1 ||
+                        result.ImageCount != 1 ||
+                        result.PdoCount != 1 ||
+                        result.PdoEntryCount != 1 ||
+                        result.MappingInfoCount != 1 ||
+                        result.RootMappingLinkCount != 1 ||
+                        result.Devices.Count != 1 ||
+                        result.Images.Count != 1 ||
+                        result.Boxes.Count != 1 ||
+                        result.Pdos.Count != 1)
+                    {
+                        throw new InvalidOperationException(result.Summary);
+                    }
+                });
+                return Succeeded(ctx, "tsproj.describe-io-topology probe succeeded.", outputs, artifacts);
+
+            case "tsproj.compare-io-topology":
+                EnsureFileOnlyProject(ctx);
+                AddSnapshotArtifacts(ctx, "compare-io-topology-candidate", artifacts, path =>
+                {
+                    string referencePath = Path.Combine(ctx.RunDirectory, "compare-io-topology.reference.tsproj");
+                    File.Copy(path, referencePath, overwrite: true);
+
+                    ctx.Mutation.ApplyIoTopologyPlan(
+                        referencePath,
+                        new ApplyIoTopologyPlanRequest(
+                            Devices:
+                            [
+                                new EnsureIoDeviceRequest(
+                                    51,
+                                    "Probe Reference Device 51 (EtherCAT)",
+                                    111,
+                                    Images:
+                                    [
+                                        new IoImageDefinition(51, 9, 3, "Probe Reference Image", ImageFlags: "#x00000030")
+                                    ])
+                            ],
+                            Boxes:
+                            [
+                                new EnsureEthercatBoxRequest(51, null, 5101, "Probe Reference Box 5101 (EK1100)", 9099)
+                            ],
+                            Pdos:
+                            [
+                                new EnsureIoPdoRequest(51, 5101, "Channel 1", "#x1600", Entries:
+                                [
+                                    new IoPdoEntry("Output", "#x7000", "#x01", "BIT")
+                                ])
+                            ],
+                            MappingInfos:
+                            [
+                                new EnsureMappingInfoRequest("{00000000-0020-0201-5000-010151000101}", "#x02030051")
+                            ],
+                            Links:
+                            [
+                                new EnsureIoMappingLinkRequest(
+                                    "TIID^Probe Reference Device 51 (EtherCAT)",
+                                    "TIXC^Probe^Obj",
+                                    "Probe Reference Box 5101 (EK1100)^Channel 1^Output",
+                                    "Inputs^Value")
+                            ]));
+                    ctx.Mutation.ApplyIoTopologyPlan(
+                        path,
+                        new ApplyIoTopologyPlanRequest(
+                            Devices:
+                            [
+                                new EnsureIoDeviceRequest(51, "Probe Reference Device 51 (EtherCAT)", 111)
+                            ]));
+
+                    CompareIoTopologyResult result = ctx.Mutation.CompareIoTopology(
+                        path,
+                        new CompareIoTopologyRequest(referencePath, MaxDifferences: 20));
+                    if (result.Succeeded ||
+                        result.Differences.Count == 0 ||
+                        !result.Counts.Any(count => count.Name == "BoxCount" && !count.Matches) ||
+                        !result.Differences.Any(difference => difference.Kind == "Image" && difference.Field == "Missing"))
+                    {
+                        throw new InvalidOperationException("CompareIoTopology did not report the expected missing IO topology differences.");
+                    }
+
+                    outputs["comparisonJson"] = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
+                    artifacts.Add(referencePath);
+                });
+                return Succeeded(ctx, "tsproj.compare-io-topology probe succeeded.", outputs, artifacts);
+
             case "tsproj.merge-fragment":
                 EnsureSolution(ctx);
                 SaveAndCloseForFileMutation(ctx);
@@ -825,6 +1390,47 @@ internal static class StepProbeRunner
         ctx.ProjectInfo = ctx.Engineering.CreateTwinCatSolution(ctx.Session!,
             new CreateTwinCatSolutionRequest(ctx.WorkDirectory, "S", "S"));
         ctx.Engineering.SaveAll(ctx.Session!);
+    }
+
+    private static void EnsureFileOnlyCppInstance(ProbeContext ctx)
+    {
+        EnsureFileOnlyProject(ctx);
+        ctx.InstanceName = "Obj (CFallbackModule)";
+        ctx.InstanceObjectId = "#x02010010";
+        ctx.PendingFallbackCppInstance = false;
+    }
+
+    private static void EnsureFileOnlyProject(ProbeContext ctx)
+    {
+        if (ctx.ProjectInfo is null)
+        {
+            string solutionDirectory = Path.Combine(ctx.WorkDirectory, "S");
+            Directory.CreateDirectory(solutionDirectory);
+            string solutionPath = Path.Combine(solutionDirectory, "S.sln");
+            string projectPath = Path.Combine(solutionDirectory, "S.tsproj");
+            if (!File.Exists(solutionPath))
+            {
+                File.WriteAllText(solutionPath, "Microsoft Visual Studio Solution File, Format Version 12.00" + Environment.NewLine);
+            }
+
+            if (!File.Exists(projectPath))
+            {
+                XDocument document = new(
+                    new XElement(
+                        "TcSmProject",
+                        new XElement(
+                            "Project",
+                            new XElement(
+                                "Cpp",
+                                new XElement(
+                                    "Project",
+                                    new XAttribute("Name", ctx.CppProjectName),
+                                    new XElement("Name", ctx.CppProjectName))))));
+                document.Save(projectPath);
+            }
+
+            ctx.ProjectInfo = new TwinCatProjectInfo(solutionPath, projectPath, solutionDirectory);
+        }
     }
 
     private static void EnsureCppProject(ProbeContext ctx)
@@ -1383,4 +1989,69 @@ internal static class StepProbeRunner
 
         return options;
     }
+
+    private static EnsureScopeConfigurationRequest CreateProbeScopeConfigurationRequest(string scopePath) =>
+        new(
+            scopePath,
+            "Scope Project",
+            "127.0.0.1.1.1",
+            ReplaceChannels: true,
+            AdsChannels:
+            [
+                new ScopeAdsChannelDefinition(
+                    "BufferWriteAvailable",
+                    "CommandsExecuter.Data.StateData.BufferWriteAvailable",
+                    "199.4.42.250.1.1",
+                    351,
+                    "UINT32",
+                    16842880,
+                    2197815308),
+                new ScopeAdsChannelDefinition(
+                    "BufferReadAvailable",
+                    "CommandsExecuter.Data.StateData.BufferReadAvailable",
+                    "199.4.42.250.1.1",
+                    351,
+                    "UINT32",
+                    16842880,
+                    2197815312)
+            ],
+            ChartChannels:
+            [
+                new ScopeChartChannelDefinition(
+                    "BufferReadAvailable",
+                    "BufferReadAvailable",
+                    "-16744448",
+                    10),
+                new ScopeChartChannelDefinition(
+                    "BufferWriteAvailable",
+                    "BufferWriteAvailable",
+                    "-16776961",
+                    11)
+            ]);
+
+    private static AssertScopeConfigurationShapeRequest CreateProbeScopeShapeRequest(string scopePath) =>
+        new(
+            scopePath,
+            ExpectedAdsChannelCount: 2,
+            ExpectedChartChannelCount: 2,
+            ExpectedScopeName: "Scope Project",
+            ExpectedChartName: "YT Chart",
+            AdsChannels:
+            [
+                new ScopeConfigurationChannelShape(
+                    "BufferWriteAvailable",
+                    "CommandsExecuter.Data.StateData.BufferWriteAvailable"),
+                new ScopeConfigurationChannelShape(
+                    "BufferReadAvailable",
+                    "CommandsExecuter.Data.StateData.BufferReadAvailable")
+            ],
+            ChartChannels:
+            [
+                new ScopeConfigurationChannelShape(
+                    "BufferReadAvailable",
+                    AcquisitionName: "BufferReadAvailable"),
+                new ScopeConfigurationChannelShape(
+                    "BufferWriteAvailable",
+                    AcquisitionName: "BufferWriteAvailable")
+            ]);
 }

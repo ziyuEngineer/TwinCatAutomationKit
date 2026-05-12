@@ -25,25 +25,36 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `cpp` | `cpp.set-project-item-metadata` | Sets file-level MSBuild metadata for a C++ project item, such as PrecompiledHeader or ExcludedFromBuild. |
 | `cpp` | `cpp.set-project-property` | Sets a project-level or configuration-level MSBuild property in a C++ .vcxproj. |
 | `cpp` | `cpp.write-project-item-content` | Writes source/resource/text payload into an existing C++ project item file and returns its content hash. |
-| `engineering` | `engineering.activate-configuration` | Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback. |
+| `engineering` | `engineering.activate-configuration` | Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager; DTE command fallback is opt-in for interactive troubleshooting. |
 | `engineering` | `engineering.add-module-instance` | Adds a TcCOM instance from a project TMC by resolving the module GUID and calling CreateChild on the project node. |
+| `engineering` | `engineering.apply-io-tree-plan` | Applies a batch IO tree payload by orchestrating engineering.create-io-device and engineering.create-ethercat-box operations. |
 | `engineering` | `engineering.apply-tmc-module-model` | Applies a structured JSON module model to a TwinCAT C++ project .tmc without copying a whole known-good TMC file. |
-| `engineering` | `engineering.build-solution` | Runs SolutionBuild.Build and waits until the DTE build state reaches done. |
+| `engineering` | `engineering.build-solution` | Builds the loaded solution through DTE, an unattended devenv.com command-line build, or an MSBuild project sequence. |
+| `engineering` | `engineering.cleanup-dte-host-processes` | Lists or explicitly kills unattended Visual Studio/TcXaeShell host processes that can block DTE automation. |
 | `engineering` | `engineering.close-visual-studio` | Closes the current Visual Studio DTE session, optionally issuing SaveAll first. |
 | `engineering` | `engineering.create-cpp-project` | Creates a TwinCAT C++ project beneath TIXC using a specified Beckhoff wizard id. |
+| `engineering` | `engineering.create-ethercat-box` | Creates an EtherCAT box or terminal under an EtherCAT parent through ITcSmTreeItem.CreateChild. |
+| `engineering` | `engineering.create-io-device` | Creates an IO device under a TwinCAT tree parent through ITcSmTreeItem.CreateChild. |
 | `engineering` | `engineering.create-module` | Creates a module class inside a TwinCAT C++ project via the module wizard id. |
 | `engineering` | `engineering.create-plc-project` | Creates a PLC project using the first compatible Beckhoff PLC template available on the machine. |
+| `engineering` | `engineering.create-scope-project` | Creates a TwinCAT Scope project skeleton inside the current solution without copying an existing Scope project file. |
 | `engineering` | `engineering.create-vs-cpp-project` | Creates a regular Visual Studio C++ project inside the current solution, such as an AdsClient console application. |
 | `engineering` | `engineering.create-xae-solution` | Creates a fresh TwinCAT XAE solution and binds the automation session to its ITcSysManager root. |
 | `engineering` | `engineering.ensure-solution-project-dependency` | Ensures a Visual Studio solution ProjectDependencies entry exists from one project to another. |
 | `engineering` | `engineering.ensure-task` | Creates or reuses a Task under TIRT and normalizes its timing, priority, and AMS port. |
 | `engineering` | `engineering.export-tree-item-xml` | Exports ProduceXml output for any TwinCAT tree node as durable evidence. |
-| `engineering` | `engineering.launch-visual-studio` | Starts a new DTE session that later steps can use for XAE creation, build, and activation. |
+| `engineering` | `engineering.generate-io-mappings` | Invokes TwinCAT GenerateMappings so XAE can rebuild variable mappings from the current IO tree. |
+| `engineering` | `engineering.launch-visual-studio` | Starts or attaches a DTE session that later steps can use for XAE creation, build, and activation. |
 | `engineering` | `engineering.open-xae-solution` | Re-opens an existing TwinCAT solution and re-attaches COM references after .tsproj file mutations. |
 | `engineering` | `engineering.publish-modules` | Invokes the TwinCAT C++ project PublishModules method so updated module source regenerates TMC metadata. |
+| `engineering` | `engineering.reload-io-devices` | Invokes TwinCAT ReloadDevices through ITcSmCommands so XAE can reload IO device metadata without using menu commands. |
 | `engineering` | `engineering.save-all` | Flushes pending Visual Studio document and solution changes before build, reopen, or .tsproj file mutation steps. |
+| `engineering` | `engineering.search-io-devices` | Invokes TwinCAT SearchDevices through ITcSmCommands so XAE can scan local IO devices without using menu commands. |
 | `engineering` | `engineering.start-tmc-code-generator` | Invokes the TwinCAT C++ project StartTmcCodeGenerator method so source annotations regenerate TMC metadata. |
 | `engineering` | `engineering.verify-tmc-data-areas` | Reads a TwinCAT C++ .tmc file and verifies expected module DataAreas and symbols before instances are created. |
+| `ethercat` | `ethercat.assert-product-revisions` | Asserts that EtherCAT productRevision strings used for CreateChild are present in the installed Beckhoff ESI/device-description XML files. |
+| `scope` | `scope.assert-configuration-shape` | Reads a TwinCAT Scope .tcscopex configuration and asserts typed channel/chart shape without mutating it. |
+| `scope` | `scope.ensure-configuration` | Creates or updates a TwinCAT Scope .tcscopex configuration from typed chart, channel, and ADS symbol definitions. |
 | `signing` | `signing.grant-certificate` | Grants or removes local TcSignTool authorization for a TwinCAT signing certificate. |
 | `signing` | `signing.set-license` | Writes TwinCAT C++ project signing license settings used by MSBuild/TcSignTool. |
 | `signing` | `signing.sign-twincat-binary` | Signs one or more built TwinCAT C++ binaries with Beckhoff TcSignTool. |
@@ -53,6 +64,9 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `tsproj` | `tsproj.apply-instance-parameter-plan` | Applies a batch of instance parameter writes in one deterministic .tsproj mutation pass. |
 | `tsproj` | `tsproj.apply-io-topology-plan` | Applies a batch IO topology payload by orchestrating dedicated IO Device, Box, PDO, MappingInfo, and Link primitives. |
 | `tsproj` | `tsproj.apply-mutation-plan` | Applies generic element and fragment upserts in one deterministic .tsproj mutation pass. |
+| `tsproj` | `tsproj.assert-data-pointer-shape` | Reads a .tsproj and asserts that C++ instance DataPointerValues and root Mappings links still match the requested shape. |
+| `tsproj` | `tsproj.assert-io-image-references` | Reads a .tsproj and asserts IO process-image references without mutating TwinCAT metadata. |
+| `tsproj` | `tsproj.assert-io-topology-shape` | Reads a .tsproj and asserts the Project/Io topology and root Mappings shape without mutating TwinCAT metadata. |
 | `tsproj` | `tsproj.bind-instance-context` | Writes Instance TmcDesc Context/ManualConfig binding with configurable context id/name and CyclicCaller behavior. |
 | `tsproj` | `tsproj.bind-instance-task` | Writes ManualConfig/OTCID and context timing values back into an instance TmcDesc, optionally also updating CyclicCaller. |
 | `tsproj` | `tsproj.bind-plc-instance-task` | Writes PLC instance Context/ManualConfig binding so PLC execution context tracks an explicit task object id. |
@@ -64,6 +78,8 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `tsproj` | `tsproj.clear-plc-task-pou-oids` | Clears all TaskPouOid entries under a PLC Instance TaskPouOids section. |
 | `tsproj` | `tsproj.clear-task-layout` | Removes Vars and/or Image child nodes from a Task so task layout can be rebuilt deterministically. |
 | `tsproj` | `tsproj.clear-unrestored-var-links` | Removes stale UnrestoredVarLinks blocks so unresolved TwinCAT links do not survive into activation. |
+| `tsproj` | `tsproj.compare-io-topology` | Compares two .tsproj files through normalized IO topology facts and reports stable count/key/field differences. |
+| `tsproj` | `tsproj.describe-io-topology` | Reads a .tsproj and emits a normalized IO topology summary without copying or mutating TwinCAT metadata XML. |
 | `tsproj` | `tsproj.ensure-cpp-instance` | Ensures a named C++ Instance node exists under Cpp/Project and carries a minimal TmcDesc skeleton. |
 | `tsproj` | `tsproj.ensure-data-pointer` | Writes or updates a DataPointerValues entry beneath an instance TmcDesc. |
 | `tsproj` | `tsproj.ensure-ethercat-box` | Creates or updates an EtherCAT Box under a Device or parent Box, preserving nested topology. |
@@ -100,6 +116,10 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 | `validation` | `validation.ads-read` | Reads a PLC or TcCOM symbol over ADS so the engineering pipeline can close the loop with a runtime assertion. |
 | `validation` | `validation.ads-read-symbols` | Reads multiple PLC or TcCOM symbols over ADS and prints their values as a runtime validation checkpoint. |
 | `validation` | `validation.ads-scan` | Scans ADS target ports and reports whether the runtime endpoint is reachable before symbol-level ADS reads are attempted. |
+| `validation` | `validation.assert-ads-state` | Asserts that specific ADS ports are reachable and in the expected ADS state, turning activation false positives into hard failures. |
+| `validation` | `validation.assert-event-log-window` | Asserts that no forbidden TcSysSrv Windows event-log entries appeared after a marker or within a recent time window. |
+| `validation` | `validation.assert-process-crash-window` | Asserts that no matching Windows Application crash events appeared after a marker or within a recent time window. |
+| `validation` | `validation.mark-event-log-window` | Marks the current Windows event-log position so a later step can assert only events from the same activation window. |
 
 ## 详细接口 / Step Details
 
@@ -239,16 +259,19 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 
 - 方法 Method: `TwinCatEngineeringService.ActivateConfiguration`
 - 分类 Category: `engineering`
-- 功能摘要 Summary: Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback.
+- 功能摘要 Summary: Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager; DTE command fallback is opt-in for interactive troubleshooting.
 - 前置条件 Preconditions:
   - A solution must be loaded and its ITcSysManager must be available.
 - 输入 Inputs:
   - `SaveConfigurationArchive` (`bool`): Whether to attempt SaveConfiguration before activate. Example: `true`.
   - `ConfigurationArchivePath` (`string`): Optional override for the generated .tszip path.
+  - `SuppressUi` (`bool`): Whether DTE.SuppressUI should be enabled before activation. Example: `true`.
+  - `AllowDteCommandFallback` (`bool`): Whether activation may fall back to DTE ExecuteCommand names that can show interactive prompts. Example: `false`.
+  - `ActivationTimeoutMs` (`int`): Maximum wall-clock time for ActivateConfiguration plus StartRestartTwinCAT before failing unattended. Example: `120000`.
 - 输出 Outputs:
   - `activationCommand` (`string`): The command or fallback path used for activation.
 - 验证 Verification:
-  - Confirm that either ITcSysManager.ActivateConfiguration or a DTE command succeeded.
+  - Do not treat this step alone as runtime proof; follow with ADS state assertions and TcSysSrv error-window checks.
 
 ### `engineering.add-module-instance`
 
@@ -268,6 +291,26 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `objectId` (`string`): Resolved instance ObjectId / OTCID.
 - 验证 Verification:
   - Export the instance XML and confirm that the expected CLSID and Name are present.
+
+### `engineering.apply-io-tree-plan`
+
+- 方法 Method: `TwinCatEngineeringService.ApplyIoTreePlan`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Applies a batch IO tree payload by orchestrating engineering.create-io-device and engineering.create-ethercat-box operations.
+- 前置条件 Preconditions:
+  - A bound XAE solution must be open.
+  - The payload is a convenience wrapper around CreateChild operations only; it must not contain .tsproj XML metadata.
+  - Use this for large IO trees, then save/export/describe topology to prove what XAE generated.
+- 输入 Inputs:
+  - `Devices` (`IReadOnlyList<CreateIoDeviceRequest>`): IO device CreateChild requests to apply in order.
+  - `Boxes` (`IReadOnlyList<CreateEthercatBoxRequest>`): EtherCAT box/terminal CreateChild requests to apply in order.
+- 输出 Outputs:
+  - `deviceCount` (`int`): Number of device requests applied.
+  - `boxCount` (`int`): Number of box requests applied.
+  - `treeItemPaths` (`string`): Semicolon-separated tree paths returned by XAE.
+  - `nodesJson` (`json`): Serialized node info returned by the underlying CreateChild operations.
+- 验证 Verification:
+  - Run tsproj.describe-io-topology or export TIID after SaveAll; this wrapper does not prove PDO/process-image parity by itself.
 
 ### `engineering.apply-tmc-module-model`
 
@@ -297,15 +340,49 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 
 - 方法 Method: `TwinCatEngineeringService.BuildCurrentSolution`
 - 分类 Category: `engineering`
-- 功能摘要 Summary: Runs SolutionBuild.Build and waits until the DTE build state reaches done.
+- 功能摘要 Summary: Builds the loaded solution through DTE, an unattended devenv.com command-line build, or an MSBuild project sequence.
 - 前置条件 Preconditions:
-  - A solution must be loaded in the DTE session.
+  - DTE engine requires a loaded solution.
+  - CommandLine engine requires a solution path and installed Visual Studio/XAE command-line build support.
+  - MsBuildProjects engine requires C++ project paths that can be built outside the XAE solution shell.
 - 输入 Inputs:
   - `TimeoutMs` (`int`): Maximum build wait time. Example: `300000`.
+  - `BuildEngine` (`BuildSolutionEngine`): Build backend: Dte, CommandLine, or MsBuildProjects. Example: `Dte`.
+  - `Configuration` (`string`): Solution configuration for command-line build. Example: `Release`.
+  - `Platform` (`string`): Solution platform for command-line build. Example: `TwinCAT OS (x64)`.
+  - `DevenvPath` (`string`): Optional explicit devenv.com path for command-line build.
+  - `MsBuildPath` (`string`): Optional explicit MSBuild.exe path for MSBuildProjects engine.
+  - `ProjectPaths` (`string[]`): Semicolon-separated C++ project path sequence for MSBuildProjects engine. Relative paths are resolved from the solution directory. Example: `OptcncTwinCAT\Ruckig\Ruckig.vcxproj;OptcncTwinCAT\Tinyxml2\Tinyxml2.vcxproj;OptcncTwinCAT\MotionControl\MotionControl.vcxproj`.
+  - `LogFilePath` (`string`): Optional devenv /Out log destination.
 - 输出 Outputs:
-  - `lastBuildInfo` (`int`): DTE LastBuildInfo value.
+  - `lastBuildInfo` (`int`): DTE LastBuildInfo value, or command-line exit code for CommandLine engine.
+  - `buildEngine` (`string`): Build backend used.
+  - `exitCode` (`int`): Process exit code when CommandLine engine is used.
+  - `logFilePath` (`string`): Build log path when available.
 - 验证 Verification:
-  - Treat LastBuildInfo == 0 as the engineering success condition.
+  - Treat LastBuildInfo == 0 or process exit code 0 as the engineering success condition.
+  - For unattended runs, CommandLine and MsBuildProjects avoid Visual Studio confirmation dialogs blocking DTE automation.
+
+### `engineering.cleanup-dte-host-processes`
+
+- 方法 Method: `TwinCatEngineeringService.CleanupDteHostProcesses`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Lists or explicitly kills unattended Visual Studio/TcXaeShell host processes that can block DTE automation.
+- 前置条件 Preconditions:
+  - Use dry-run first.
+  - Default matching only targets host processes without a main window title; windowed IDEs require IncludeWindowed=true or explicit ProcessIds.
+- 输入 Inputs:
+  - `ProcessNames` (`string[]`): Process names to inspect, separated by ';' or '|'. Example: `devenv;TcXaeShell`.
+  - `ProcessIds` (`int[]`): Optional explicit process ids to match.
+  - `DryRun` (`bool`): Whether to only report candidates without killing them. Example: `true`.
+  - `IncludeWindowed` (`bool`): Whether processes with a main window title are also candidates. Example: `false`.
+  - `KillProcessTree` (`bool`): Whether to kill the full process tree for matched processes. Example: `true`.
+- 输出 Outputs:
+  - `matchedCount` (`int`): Number of candidate processes.
+  - `killedCount` (`int`): Number of processes killed when DryRun=false.
+  - `processesJson` (`json`): Per-process match/cleanup details.
+- 验证 Verification:
+  - Run before unattended DTE launch if previous tests left headless devenv/TcXaeShell processes; follow with engineering.launch-visual-studio.
 
 ### `engineering.close-visual-studio`
 
@@ -336,6 +413,57 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `projectFilePath` (`string`): Expected .vcxproj path.
 - 验证 Verification:
   - Verify the TIXC child exists and the .vcxproj file lands on disk.
+
+### `engineering.create-ethercat-box`
+
+- 方法 Method: `TwinCatEngineeringService.CreateEthercatBox`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Creates an EtherCAT box or terminal under an EtherCAT parent through ITcSmTreeItem.CreateChild.
+- 前置条件 Preconditions:
+  - An EtherCAT device or parent box path must already exist.
+  - Use subtype 9099 for E-Bus terminals/boxes whose product identity comes from ProductRevision/vInfo.
+  - This step asks XAE/ESI to generate box metadata; it must not be replaced by copied sample XML.
+- 输入 Inputs:
+  - `ParentTreeItemPath` (`string`): TwinCAT parent path, for example TIID^Device 3 (EtherCAT).
+  - `Name` (`string`): Box or terminal display name to create or find.
+  - `SubType` (`int`): TwinCAT CreateChild subtype. 9099 is the Automation Interface subtype for product-revision based EtherCAT boxes. Example: `9099`.
+  - `Before` (`string`): Optional sibling name/path passed to CreateChild before insertion.
+  - `ProductRevision` (`string`): Product/revision identity passed as vInfo when VInfo is not set, for example EK1100-0000-0017.
+  - `VInfo` (`string`): Optional raw CreateChild vInfo string when Beckhoff documents a different identity payload.
+  - `Disabled` (`bool?`): Optional Disabled state to apply after creation or lookup.
+  - `AllowExisting` (`bool`): Whether an existing child at ParentTreeItemPath^Name is accepted instead of failing. Example: `true`.
+  - `PostCreateDelayMs` (`int`): Delay after CreateChild so XAE can generate PDO/SyncMan/FMMU metadata. Example: `500`.
+- 输出 Outputs:
+  - `treeItemPath` (`string`): Created or existing tree item path.
+  - `displayName` (`string`): Resolved TwinCAT display name.
+  - `objectId` (`string`): Tree item ObjectId when XAE exposes one.
+- 验证 Verification:
+  - Export or describe the EtherCAT tree after SaveAll; PDO/process-image metadata should come from XAE/ESI generation rather than a copied .tsproj fragment.
+
+### `engineering.create-io-device`
+
+- 方法 Method: `TwinCatEngineeringService.CreateIoDevice`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Creates an IO device under a TwinCAT tree parent through ITcSmTreeItem.CreateChild.
+- 前置条件 Preconditions:
+  - A bound XAE solution must be open.
+  - This is an engineering COM/XAE operation; use command timeouts and unattended dialog auto-dismiss for headless runs.
+  - For an EtherCAT master use ParentTreeItemPath=TIID and SubType=111.
+- 输入 Inputs:
+  - `Name` (`string`): Device display name to create or find.
+  - `SubType` (`int`): TwinCAT CreateChild subtype, for example 111 for an EtherCAT master. Example: `111`.
+  - `ParentTreeItemPath` (`string`): TwinCAT tree parent path. Example: `TIID`.
+  - `Before` (`string`): Optional sibling name/path passed to CreateChild before insertion.
+  - `VInfo` (`string`): Optional CreateChild vInfo payload for device-specific identity fields.
+  - `Disabled` (`bool?`): Optional Disabled state to apply after creation or lookup.
+  - `AllowExisting` (`bool`): Whether an existing child at ParentTreeItemPath^Name is accepted instead of failing. Example: `true`.
+  - `PostCreateDelayMs` (`int`): Delay after CreateChild so XAE can persist generated IO metadata. Example: `500`.
+- 输出 Outputs:
+  - `treeItemPath` (`string`): Created or existing tree item path.
+  - `displayName` (`string`): Resolved TwinCAT display name.
+  - `objectId` (`string`): Tree item ObjectId when XAE exposes one.
+- 验证 Verification:
+  - Export or describe TIID after SaveAll; the created Device should appear without copying a Project/Io XML section.
 
 ### `engineering.create-module`
 
@@ -370,6 +498,27 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `projectFilePath` (`string`): Expected .plcproj path.
 - 验证 Verification:
   - Check that the PLC node exists and that the .plcproj file was created.
+
+### `engineering.create-scope-project`
+
+- 方法 Method: `TwinCatEngineeringService.CreateScopeProject`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Creates a TwinCAT Scope project skeleton inside the current solution without copying an existing Scope project file.
+- 前置条件 Preconditions:
+  - A solution must already be loaded in the DTE session.
+- 输入 Inputs:
+  - `ProjectName` (`string`): Scope project name.
+  - `ProjectDirectory` (`string`): Optional project directory. Defaults to SolutionDirectory/ProjectName.
+  - `ConfigurationFileName` (`string`): Optional .tcscopex file name to include. Example: `<ProjectName>.tcscopex`.
+  - `CreateEmptyConfiguration` (`bool`): Whether to create a minimal empty .tcscopex configuration file. Example: `true`.
+  - `AllowSolutionFileFallback` (`bool`): Whether to write a typed .sln project entry if DTE AddFromFile does not accept the .tcmproj. Example: `true`.
+- 输出 Outputs:
+  - `projectFilePath` (`string`): Absolute .tcmproj path.
+  - `projectGuid` (`string`): Project GUID registered in the .tcmproj/.sln.
+  - `configurationFilePath` (`string`): Optional generated .tcscopex path.
+  - `usedSolutionFileFallback` (`bool`): Whether the .sln entry fallback path was used.
+- 验证 Verification:
+  - Verify the .tcmproj exists, optional .tcscopex exists, and the saved .sln contains the Scope project GUID and relative path.
 
 ### `engineering.create-vs-cpp-project`
 
@@ -464,21 +613,50 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 验证 Verification:
   - Re-open the XML file and verify it contains the expected node metadata.
 
+### `engineering.generate-io-mappings`
+
+- 方法 Method: `TwinCatEngineeringService.GenerateIoMappings`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Invokes TwinCAT GenerateMappings so XAE can rebuild variable mappings from the current IO tree.
+- 前置条件 Preconditions:
+  - A bound XAE solution with IO topology must be open.
+  - The step first requires ITcSmCommands.GenerateMappings on the current SysManager COM object.
+  - DTE command fallback is disabled by default because menu commands can show interactive prompts.
+- 输入 Inputs:
+  - `SuppressUi` (`bool`): Whether DTE.SuppressUI should be set before invoking the command. Example: `true`.
+  - `AllowDteCommandFallback` (`bool`): Whether to try TwinCAT GenerateMappings DTE commands if ITcSmCommands is not available. Example: `false`.
+  - `TimeoutMs` (`int`): Maximum time allowed for the GenerateMappings operation. Example: `120000`.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether GenerateMappings completed.
+  - `command` (`string`): The COM or DTE command path that completed.
+  - `attemptedCommands` (`string`): Semicolon-separated attempted command paths.
+- 验证 Verification:
+  - Save and describe/compare the IO topology and root Mappings after this step; do not treat command success alone as IO parity.
+
 ### `engineering.launch-visual-studio`
 
 - 方法 Method: `TwinCatEngineeringService.LaunchVisualStudio`
 - 分类 Category: `engineering`
-- 功能摘要 Summary: Starts a new DTE session that later steps can use for XAE creation, build, and activation.
+- 功能摘要 Summary: Starts or attaches a DTE session that later steps can use for XAE creation, build, and activation.
 - 前置条件 Preconditions:
   - Visual Studio with TwinCAT XAE must be installed on the machine.
 - 输入 Inputs:
   - `ProgId` (`string`): Visual Studio DTE ProgId. Example: `VisualStudio.DTE.17.0`.
   - `StartupDelayMs` (`int`): Warm-up delay before the DTE session is used. Example: `5000`.
   - `Visible` (`bool`): Whether the launched Visual Studio window should be visible. Example: `true`.
+  - `SuppressUi` (`bool`): Whether DTE.SuppressUI should be enabled for unattended runs. Example: `true`.
+  - `LaunchTimeoutMs` (`int`): Maximum time allowed for DTE COM activation before failing the step. Example: `60000`.
+  - `EnableDialogAutoDismiss` (`bool`): Whether unattended runs should monitor selected VS/TcXaeShell host processes during DTE COM activation, fallback launch, startup delay, and the active session, then close known modal confirmation dialogs by title or message text. Example: `true`.
+  - `DialogPollIntervalMs` (`int`): Polling interval for the unattended dialog auto-dismiss watcher. Example: `500`.
+  - `AttachToExisting` (`bool`): Whether launch may attach to an already running DTE session. Keep false for unattended runs so stale headless Visual Studio hosts are not reused. Example: `false`.
+  - `RootSuffix` (`string`): Optional Visual Studio /RootSuffix used by explicit fallback launch to isolate a broken user registry hive or profile during unattended DTE startup.
+  - `DteHostPath` (`string`): Optional explicit devenv.exe or TcXaeShell.exe path used for fallback DTE host launch when COM activation does not return promptly.
+  - `PreferDteHostLaunch` (`bool`): Whether to start the explicit DTE host first and attach through the ROT before attempting Activator.CreateInstance. Useful when COM activation is known to show an unattended registry/profile error. Example: `false`.
 - 输出 Outputs:
   - `session` (`TwinCatEngineeringSession`): Live DTE session stored in pipeline state.
 - 验证 Verification:
   - Read back DTE version or solution state to confirm the COM server is reachable.
+  - For unattended runs, inspect targetProcessIds and autoDismissedDialogs outputs to confirm which host was monitored and whether launch/session modal dialogs were dismissed.
 
 ### `engineering.open-xae-solution`
 
@@ -516,6 +694,25 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 验证 Verification:
   - Check that the .tmc is readable and contains the expected module classes; updated=true means the timestamp or content changed during this publish call.
 
+### `engineering.reload-io-devices`
+
+- 方法 Method: `TwinCatEngineeringService.ReloadIoDevices`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Invokes TwinCAT ReloadDevices through ITcSmCommands so XAE can reload IO device metadata without using menu commands.
+- 前置条件 Preconditions:
+  - A bound XAE solution with IO devices must be open.
+  - This operation can regenerate IO metadata from installed device descriptions.
+  - No DTE menu fallback is provided; unattended runs must rely on the COM command, timeout, suppress-ui, and dialog auto-dismiss.
+- 输入 Inputs:
+  - `SuppressUi` (`bool`): Whether DTE.SuppressUI should be set before invoking the command. Example: `true`.
+  - `TimeoutMs` (`int`): Maximum time allowed for ReloadDevices. Example: `120000`.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether ReloadDevices completed.
+  - `command` (`string`): The COM command path that completed.
+  - `attemptedCommands` (`string`): Semicolon-separated attempted command paths.
+- 验证 Verification:
+  - Save, export TIID, and compare/describe IO topology after this step. Reopen with XAE or run topology guards before activation.
+
 ### `engineering.save-all`
 
 - 方法 Method: `TwinCatEngineeringService.SaveAll`
@@ -529,6 +726,25 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-check file timestamps or solution dirtiness after the command.
+
+### `engineering.search-io-devices`
+
+- 方法 Method: `TwinCatEngineeringService.SearchIoDevices`
+- 分类 Category: `engineering`
+- 功能摘要 Summary: Invokes TwinCAT SearchDevices through ITcSmCommands so XAE can scan local IO devices without using menu commands.
+- 前置条件 Preconditions:
+  - A bound XAE solution must be open.
+  - This operation can change the IO tree and can depend on local hardware/driver state.
+  - No DTE menu fallback is provided; unattended runs must rely on the COM command, timeout, suppress-ui, and dialog auto-dismiss.
+- 输入 Inputs:
+  - `SuppressUi` (`bool`): Whether DTE.SuppressUI should be set before invoking the command. Example: `true`.
+  - `TimeoutMs` (`int`): Maximum time allowed for SearchDevices. Example: `120000`.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether SearchDevices completed.
+  - `command` (`string`): The COM command path that completed.
+  - `attemptedCommands` (`string`): Semicolon-separated attempted command paths.
+- 验证 Verification:
+  - Save, export TIID, and compare/describe IO topology after this step. A successful scan command is not enough to claim OptCNC IO parity.
 
 ### `engineering.start-tmc-code-generator`
 
@@ -566,6 +782,78 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `errorsJson` (`json`): Detailed mismatch list when verification fails.
 - 验证 Verification:
   - Use this after C++ code generation and before add-module-instance; a fallback skeleton TMC with Input/DataIn and Output/DataOut should fail this step.
+
+### `ethercat.assert-product-revisions`
+
+- 方法 Method: `TwinCatEtherCatDeviceDescriptionService.AssertProductRevisions`
+- 分类 Category: `ethercat`
+- 功能摘要 Summary: Asserts that EtherCAT productRevision strings used for CreateChild are present in the installed Beckhoff ESI/device-description XML files.
+- 前置条件 Preconditions:
+  - The machine must have Beckhoff EtherCAT device description XML files installed.
+  - This step is file-only; it does not launch XAE and does not mutate a .tsproj.
+  - Use it before engineering.create-ethercat-box or engineering.apply-io-tree-plan when a JSON plan depends on productRevision/vInfo values.
+- 输入 Inputs:
+  - `ProductRevisions` (`IReadOnlyList<string>`): ProductRevision/vInfo values to verify, such as EK1100-0000-0018 or AX5125-0000-0214.
+  - `Items` (`IReadOnlyList<EtherCatProductRevisionRequirement>`): Structured productRevision checks with optional ProductCode and RevisionNo constraints.
+  - `SearchDirectories` (`IReadOnlyList<string>`): Optional EtherCAT ESI XML directories. Defaults to Beckhoff TwinCAT install/program-data locations.
+  - `IncludeHiddenTypes` (`bool`): Whether HideType elements should count as matches. Example: `false`.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether all requested product revisions were found.
+  - `requestedCount` (`int`): Number of requested product revisions.
+  - `matchedCount` (`int`): Number of matched product revisions.
+  - `missingCount` (`int`): Number of missing product revisions.
+  - `scannedFileCount` (`int`): Number of ESI XML files scanned.
+  - `assertionsJson` (`json`): Per-product match result including ProductCode, RevisionNo and source file.
+- 验证 Verification:
+  - Run before XAE CreateChild IO tree steps; a match proves the local ESI catalog contains the requested productRevision string, but final IO topology still needs XAE tree and .tsproj guards.
+
+### `scope.assert-configuration-shape`
+
+- 方法 Method: `TwinCatScopeConfigurationService.AssertConfigurationShape`
+- 分类 Category: `scope`
+- 功能摘要 Summary: Reads a TwinCAT Scope .tcscopex configuration and asserts typed channel/chart shape without mutating it.
+- 前置条件 Preconditions:
+  - The .tcscopex file must exist.
+- 输入 Inputs:
+  - `ConfigurationFilePath` (`string`): Absolute .tcscopex file path to inspect.
+  - `ExpectedScopeName` (`string`): Expected Scope display name.
+  - `ExpectedChartName` (`string`): Expected YT chart name.
+  - `ExpectedAdsChannelCount` (`int`): Expected ADS acquisition channel count.
+  - `ExpectedChartChannelCount` (`int`): Expected chart channel count.
+  - `AdsChannels` (`ScopeConfigurationChannelShape[]`): Expected ADS channel names and optional SymbolName values.
+  - `ChartChannels` (`ScopeConfigurationChannelShape[]`): Expected chart channel names and optional acquisition names.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether every requested shape condition matched.
+  - `adsChannelCount` (`int`): Observed ADS acquisition channel count.
+  - `chartChannelCount` (`int`): Observed chart channel count.
+  - `shapeJson` (`json`): Observed shape and error details.
+- 验证 Verification:
+  - Use after scope.ensure-configuration or after XAE reopen/save to prove the generated channels were retained.
+
+### `scope.ensure-configuration`
+
+- 方法 Method: `TwinCatScopeConfigurationService.EnsureConfiguration`
+- 分类 Category: `scope`
+- 功能摘要 Summary: Creates or updates a TwinCAT Scope .tcscopex configuration from typed chart, channel, and ADS symbol definitions.
+- 前置条件 Preconditions:
+  - The Scope project directory must exist or be creatable.
+  - Callers must provide typed JSON or explicit fields; do not pass copied .tcscopex XML.
+- 输入 Inputs:
+  - `ConfigurationFilePath` (`string`): Absolute .tcscopex file path to create or update.
+  - `ScopeName` (`string`): Scope display name. Example: `Scope Project`.
+  - `MainServer` (`string`): Scope main server AMS NetId. Example: `127.0.0.1.1.1`.
+  - `RecordTime` (`long`): Scope record time in 100 ns units. Example: `6000000000`.
+  - `StopMode` (`string`): Scope stop mode. Example: `AutoStop`.
+  - `ChartName` (`string`): YT chart name. Example: `YT Chart`.
+  - `ReplaceChannels` (`bool`): Whether existing ADS acquisitions and chart channels should be replaced. Example: `false`.
+  - `AdsChannels` (`ScopeAdsChannelDefinition[]`): Typed ADS acquisition channel definitions.
+  - `ChartChannels` (`ScopeChartChannelDefinition[]`): Typed YT chart channel definitions.
+- 输出 Outputs:
+  - `configurationFilePath` (`string`): Generated .tcscopex path.
+  - `adsChannelCount` (`int`): Number of ADS acquisition channels in the resulting file.
+  - `chartChannelCount` (`int`): Number of chart channels in the resulting file.
+- 验证 Verification:
+  - Re-read the .tcscopex file and assert the requested ADS symbol channels and chart channels exist; do not compare against a copied sample file.
 
 ### `signing.grant-certificate`
 
@@ -733,6 +1021,90 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - (none)
 - 验证 Verification:
   - Re-open the .tsproj and verify all requested low-level mutations landed; FailOnConflict aborts the plan.
+
+### `tsproj.assert-data-pointer-shape`
+
+- 方法 Method: `TwinCatTsprojMutationService.AssertDataPointerShape`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Reads a .tsproj and asserts that C++ instance DataPointerValues and root Mappings links still match the requested shape.
+- 前置条件 Preconditions:
+  - Use after data pointer and mapping steps, and again after XAE save/activate, to catch TwinCAT deleting unresolved DataPointerValues.
+- 输入 Inputs:
+  - `InstanceName` (`string`): Exact C++ instance display name to inspect.
+  - `DataPointers` (`IReadOnlyList<ExpectedDataPointerValueShape>`): Required DataPointerValues entries, optional per-entry record count, and optional ArrayIndex set.
+  - `ExpectedDataPointerRecordCount` (`int?`): Expected total number of data pointer records across all DataPointerValues entries.
+  - `MappingLinks` (`IReadOnlyList<ExpectedMappingLinkShape>`): Root Mappings OwnerA/OwnerB/Link entries that must be present.
+  - `ExpectedDataPointerMappingLinkCount` (`int?`): Expected number of root Mappings Link entries whose VarA or VarB is a Data Pointer reference.
+  - `ExpectedRootMappingLinkCount` (`int?`): Expected total root Mappings Link count.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether all requested shape assertions passed.
+  - `dataPointerRecordCount` (`int`): Total DataPointerValues record count for the inspected instance.
+  - `dataPointerMappingLinkCount` (`int`): Root Mappings Link count limited to Data Pointer links.
+  - `rootMappingLinkCount` (`int`): Total root Mappings Link count.
+  - `errorsText` (`string`): Human-readable assertion failures.
+  - `shapeJson` (`json`): Full observed shape and error details.
+- 验证 Verification:
+  - Run against the generated .tsproj before activation and after activation/save; for OptCNC, AxesGroup0 should retain six data pointer records and eight data pointer mapping links.
+
+### `tsproj.assert-io-image-references`
+
+- 方法 Method: `TwinCatTsprojMutationService.AssertIoImageReferences`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Reads a .tsproj and asserts IO process-image references without mutating TwinCAT metadata.
+- 前置条件 Preconditions:
+  - Use after IO topology creation to catch half-populated process-image shape, for example Device InfoImageId without a direct Image node or ImageId values with no known backing.
+- 输入 Inputs:
+  - `ExpectedRootImageDataCount` (`int?`): Expected root TcSmProject/ImageDatas/ImageData count.
+  - `ExpectedDeviceImageCount` (`int?`): Expected direct Device/Image count under Project/Io.
+  - `ExpectedImageReferenceCount` (`int?`): Expected ImageId reference count under Project/Io.
+  - `RequireDeviceImageForInfoImageId` (`bool`): Fail when a Device has InfoImageId but no direct Image node. Example: `true`.
+  - `RequireImageIdBacking` (`bool`): Fail when an ImageId does not match root ImageData, direct Device Image, Device InfoImageId, or AllowedUnbackedImageIds. Example: `true`.
+  - `AllowedUnbackedImageIds` (`IReadOnlyList<string>`): Known system image ids that are valid without root ImageData, for example TwinSAFE module image id 118.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether all requested IO image reference assertions passed.
+  - `rootImageDataCount` (`int`): Observed root ImageData count.
+  - `deviceImageCount` (`int`): Observed direct Device/Image count.
+  - `deviceWithInfoImageCount` (`int`): Observed Device count with InfoImageId.
+  - `deviceInfoWithoutImageCount` (`int`): Observed Device count with InfoImageId but no direct Image node.
+  - `imageReferenceCount` (`int`): Observed Project/Io ImageId reference count.
+  - `unbackedImageReferenceCount` (`int`): Observed ImageId reference count without known backing.
+  - `errorsText` (`string`): Human-readable assertion failures.
+  - `shapeJson` (`json`): Full observed IO image reference shape and error details.
+- 验证 Verification:
+  - For OptCNC sample parity, require four direct Device/Image nodes and allow only documented system image ids as unbacked.
+
+### `tsproj.assert-io-topology-shape`
+
+- 方法 Method: `TwinCatTsprojMutationService.AssertIoTopologyShape`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Reads a .tsproj and asserts the Project/Io topology and root Mappings shape without mutating TwinCAT metadata.
+- 前置条件 Preconditions:
+  - Use after dedicated IO topology primitives or after XAE import/scan evidence; this step is a guard and does not create devices or copy IO XML.
+- 输入 Inputs:
+  - `ExpectedDeviceCount` (`int?`): Expected Project/Io Device count.
+  - `ExpectedBoxCount` (`int?`): Expected total Box count under Project/Io.
+  - `ExpectedImageCount` (`int?`): Expected total Image count under Project/Io.
+  - `ExpectedPdoCount` (`int?`): Expected total Pdo count under Project/Io.
+  - `ExpectedPdoEntryCount` (`int?`): Expected total Pdo Entry count under Project/Io.
+  - `ExpectedMappingInfoCount` (`int?`): Expected root Mappings/MappingInfo count.
+  - `ExpectedOwnerACount` (`int?`): Expected root Mappings/OwnerA count.
+  - `ExpectedRootMappingLinkCount` (`int?`): Expected total root Mappings Link count.
+  - `Devices` (`IReadOnlyList<ExpectedIoDeviceShape>`): Specific Device Id/name/box-count/InfoImageId/Image-count/direct-child-count assertions.
+  - `Boxes` (`IReadOnlyList<ExpectedIoBoxShape>`): Specific Device/Box Id/name/ImageId/BoxFlags/parent/PDO/PDO-entry/direct-child-count assertions.
+  - `MappingLinks` (`IReadOnlyList<ExpectedMappingLinkShape>`): Root Mappings OwnerA/OwnerB/Link entries that must be present.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether all requested IO shape assertions passed.
+  - `deviceCount` (`int`): Observed Project/Io Device count.
+  - `boxCount` (`int`): Observed total Box count.
+  - `imageCount` (`int`): Observed total Image count.
+  - `pdoCount` (`int`): Observed total Pdo count.
+  - `pdoEntryCount` (`int`): Observed total Pdo Entry count.
+  - `mappingInfoCount` (`int`): Observed root Mappings/MappingInfo count.
+  - `rootMappingLinkCount` (`int`): Observed root Mappings Link count.
+  - `errorsText` (`string`): Human-readable assertion failures.
+  - `shapeJson` (`json`): Full observed shape and error details.
+- 验证 Verification:
+  - For OptCNC sample parity, use this to prove the generated .tsproj has the expected 5 Device / 28 Box / 107 PDO / 2 MappingInfo skeleton before claiming IO parity.
 
 ### `tsproj.bind-instance-context`
 
@@ -915,6 +1287,55 @@ English API text is intentionally preserved for stability. 中文标签只帮助
 - 验证 Verification:
   - Re-open the .tsproj and verify no UnrestoredVarLinks nodes remain before rebuilding mappings.
 
+### `tsproj.compare-io-topology`
+
+- 方法 Method: `TwinCatTsprojMutationService.CompareIoTopology`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Compares two .tsproj files through normalized IO topology facts and reports stable count/key/field differences.
+- 前置条件 Preconditions:
+  - This is a read-only guard for evidence and acceptance. It never imports the reference topology, never emits raw IO XML, and must not be used as a metadata copy path.
+- 输入 Inputs:
+  - `ReferenceProjectPath` (`string`): Reference .tsproj path to compare against the candidate project path.
+  - `IncludeMappings` (`bool`): Whether root Mappings/MappingInfo/OwnerA/Link facts should be compared. Example: `true`.
+  - `IncludePdos` (`bool`): Whether PDO and PDO Entry facts should be compared. Example: `true`.
+  - `IncludeAttributes` (`bool`): Whether normalized attributes should be included in the underlying descriptions. Example: `false`.
+  - `MaxDifferences` (`int`): Maximum number of differences to return; zero means no cap. Example: `200`.
+- 输出 Outputs:
+  - `succeeded` (`bool`): Whether all compared IO topology facts match.
+  - `differenceCount` (`int`): Number of reported differences.
+  - `truncated` (`bool`): Whether differences were truncated by MaxDifferences.
+  - `comparisonJson` (`json`): Count comparisons and stable topology differences.
+- 验证 Verification:
+  - Use after generation and again after XAE save/activate; it compares process-image and PDO-entry facts as normalized fields, so a mismatch proves IO parity is not complete without requiring or exposing sample metadata XML.
+
+### `tsproj.describe-io-topology`
+
+- 方法 Method: `TwinCatTsprojMutationService.DescribeIoTopology`
+- 分类 Category: `tsproj`
+- 功能摘要 Summary: Reads a .tsproj and emits a normalized IO topology summary without copying or mutating TwinCAT metadata XML.
+- 前置条件 Preconditions:
+  - Use this as evidence before designing IO topology steps; it reports stable IDs, names, counts, process images, PDO entries, mapping owners, and optional attributes but never returns raw XML fragments.
+- 输入 Inputs:
+  - `IncludeDevices` (`bool`): Whether Device summaries should be included. Example: `true`.
+  - `IncludeBoxes` (`bool`): Whether Box summaries should be included. Example: `true`.
+  - `IncludePdos` (`bool`): Whether PDO and PDO Entry summaries should be included. Example: `true`.
+  - `IncludeMappings` (`bool`): Whether root Mappings/MappingInfo/OwnerA/Link summaries should be included. Example: `true`.
+  - `IncludeAttributes` (`bool`): Whether normalized attribute name/value summaries should be included for inspected nodes. Example: `false`.
+  - `MaxItemsPerCollection` (`int`): Optional cap per output collection; zero means no truncation. Example: `0`.
+- 输出 Outputs:
+  - `deviceCount` (`int`): Observed Project/Io Device count.
+  - `boxCount` (`int`): Observed total Box count.
+  - `imageCount` (`int`): Observed normalized IO Image summary count in the output JSON.
+  - `pdoCount` (`int`): Observed total Pdo count.
+  - `pdoEntryCount` (`int`): Observed total Pdo Entry count.
+  - `mappingInfoCount` (`int`): Observed root Mappings/MappingInfo count.
+  - `ownerACount` (`int`): Observed root Mappings/OwnerA count.
+  - `rootMappingLinkCount` (`int`): Observed root Mappings Link count.
+  - `truncated` (`bool`): Whether collection output was truncated by MaxItemsPerCollection.
+  - `shapeJson` (`json`): Normalized IO topology description for evidence and diffing.
+- 验证 Verification:
+  - Run on the target sample and generated .tsproj, compare shapeJson counts and selected IDs/names, then design missing typed IO steps without using copied metadata XML.
+
 ### `tsproj.ensure-cpp-instance`
 
 - 方法 Method: `TwinCatTsprojMutationService.EnsureCppInstance`
@@ -974,6 +1395,8 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `ImageId` (`int?`): Optional ImageId child value.
   - `EtherCatAttributes` (`IReadOnlyList<TsprojXmlAttribute>`): Structured attributes for the Box/EtherCAT child.
   - `EtherCatChildValues` (`IReadOnlyList<TsprojXmlChildValue>`): Simple child values for Box/EtherCAT, such as SyncMan or Fmmu only when their meaning is known.
+  - `EtherCatElements` (`IReadOnlyList<IoStructuredElement>`): Structured repeated Box/EtherCAT child elements such as SyncMan, Fmmu, DcMode, BootStrapData, MBoxUserCmdData, CoeProfile, DcData, or Slot.
+  - `ReplaceEtherCatElements` (`bool`): Whether same-name Box/EtherCAT child elements are replaced before EtherCatElements are added. Example: `true`.
   - `ExtraFragments` (`IReadOnlyList<IoRawXmlFragment>`): Known-good extra Box child fragments with required source/meaning/evidence metadata.
 - 输出 Outputs:
   - (none)
@@ -1054,6 +1477,12 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `InfoImageId` (`int?`): Optional InfoImageId attribute.
   - `AddressInfo` (`IoAddressInfo`): Structured TcCom/Pnp AddressInfo or documented raw AddressInfo XML.
   - `Images` (`IReadOnlyList<IoImageDefinition>`): Optional direct Image children for process images.
+  - `EtherCatAttributes` (`IReadOnlyList<TsprojXmlAttribute>`): Structured attributes for a direct Device/EtherCAT child.
+  - `EtherCatElements` (`IReadOnlyList<IoStructuredElement>`): Structured repeated Device/EtherCAT child elements such as DcMode when their meaning is known.
+  - `ReplaceEtherCatElements` (`bool`): Whether same-name Device/EtherCAT child elements are replaced before EtherCatElements are added. Example: `true`.
+  - `EthernetAttributes` (`IReadOnlyList<TsprojXmlAttribute>`): Structured attributes for a direct Device/Ethernet child.
+  - `EthernetElements` (`IReadOnlyList<IoStructuredElement>`): Structured repeated Device/Ethernet child elements such as Esl.
+  - `ReplaceEthernetElements` (`bool`): Whether same-name Device/Ethernet child elements are replaced before EthernetElements are added. Example: `true`.
   - `ExtraFragments` (`IReadOnlyList<IoRawXmlFragment>`): Known-good extra Device child fragments with required source/meaning/evidence metadata.
 - 输出 Outputs:
   - (none)
@@ -1248,6 +1677,10 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `CpuId` (`int?`): Optional System/Settings/Cpu CpuId attribute.
   - `IoIdleTaskPriority` (`int?`): Optional System/Settings/IoIdleTask Priority attribute.
   - `InsertBeforeTasks` (`bool`): Whether to insert Settings before System/Tasks when Settings is created and Tasks exists. Example: `true`.
+  - `MaxCpus` (`int?`): Optional System/Settings MaxCpus attribute.
+  - `NonWinCpus` (`int?`): Optional System/Settings NonWinCpus attribute.
+  - `CpuEntries` (`IReadOnlyList<SystemCpuSetting>`): Optional full Cpu entry list, including entries without CpuId.
+  - `ReplaceCpuEntries` (`bool`): Whether existing Cpu children are replaced before CpuEntries are added. Example: `false`.
 - 输出 Outputs:
   - (none)
 - 验证 Verification:
@@ -1266,8 +1699,12 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `CycleTimeNs` (`int`): Task cycle time in nanoseconds.
   - `AmsPort` (`int`): Assigned AMS port.
   - `IoAtBegin` (`bool`): Optional TaskDef IoAtBegin setting. Example: `true`.
+  - `TaskId` (`int?`): Optional Task Id attribute for matching a known runtime object id layout.
 - 输出 Outputs:
-  - (none)
+  - `projectPath` (`string`): Updated .tsproj path.
+  - `taskName` (`string`): Task node name.
+  - `taskId` (`int?`): Task Id attribute when provided.
+  - `objectId` (`string?`): Derived task ObjectId when TaskId is provided, for example #x02010020.
 - 验证 Verification:
   - Re-open the .tsproj and verify the Task attributes match the requested values.
 
@@ -1616,4 +2053,97 @@ English API text is intentionally preserved for stability. 中文标签只帮助
   - `portsJson` (`json`): Per-port ADS state or error message.
 - 验证 Verification:
   - If 100 or 10000 are not reachable, treat later PLC symbol read failures as runtime/router/permission failures rather than symbol-path failures.
+
+### `validation.assert-ads-state`
+
+- 方法 Method: `AdsValidationService.AssertStates`
+- 分类 Category: `validation`
+- 功能摘要 Summary: Asserts that specific ADS ports are reachable and in the expected ADS state, turning activation false positives into hard failures.
+- 前置条件 Preconditions:
+  - TwinCAT runtime or router must be installed on the target machine.
+  - Use after activation when a plan needs exact ports such as 10000, 200, and 300 to be Run.
+- 输入 Inputs:
+  - `NetId` (`string`): AMS NetId, or local for the local router. Example: `local`.
+  - `ExpectedPorts` (`IReadOnlyList<ExpectedAdsPortState>`): Port/state assertions. Direct CLI accepts --expected=10000=Run;200=Run;300=Run, --ports=10000,200,300 --ads-state=Run, or --json-file.
+  - `DeviceState` (`short?`): Optional device state assertion per port.
+- 输出 Outputs:
+  - `succeededCount` (`int`): Number of ports that matched the expected state.
+  - `failedCount` (`int`): Number of ports that were unreachable or mismatched.
+  - `statesText` (`string`): Human-readable port=state assertions.
+  - `statesJson` (`json`): Per-port expected and actual ADS/device state.
+- 验证 Verification:
+  - For OptCNC activation proof, require 10000=Run and system ports 200/300=Run instead of accepting a generic activation step success.
+
+### `validation.assert-event-log-window`
+
+- 方法 Method: `AdsValidationService.AssertEventLogWindow`
+- 分类 Category: `validation`
+- 功能摘要 Summary: Asserts that no forbidden TcSysSrv Windows event-log entries appeared after a marker or within a recent time window.
+- 前置条件 Preconditions:
+  - Use after activation and ADS state checks.
+  - By default it fails on Error/Critical TcSysSrv events and AdsState: >15< Config messages.
+- 输入 Inputs:
+  - `Marker` (`EventLogWindowMarker?`): Inline marker returned by validation.mark-event-log-window.
+  - `MarkerFilePath` (`string?`): Marker JSON file written by validation.mark-event-log-window.
+  - `LogName` (`string`): Windows event log name when no marker is supplied. Example: `Application`.
+  - `ProviderName` (`string`): Event source/provider when no marker is supplied. Example: `TcSysSrv`.
+  - `LookbackSeconds` (`int`): Fallback lookback window when no marker is supplied. Example: `300`.
+  - `FailOnErrorOrCritical` (`bool`): Whether Error/Critical entries fail the step. Example: `true`.
+  - `FailOnConfigAdsState` (`bool`): Whether AdsState: >15< Config messages fail the step. Example: `true`.
+  - `FailMessageContains` (`IReadOnlyList<string>?`): Additional message substrings that should fail the step.
+  - `MaxEvents` (`int`): Maximum events to include in output; zero means no cap. Example: `50`.
+- 输出 Outputs:
+  - `observedEventCount` (`int`): Provider event count observed in the window.
+  - `errorOrCriticalCount` (`int`): Error/Critical event count in the window.
+  - `configAdsStateCount` (`int`): AdsState >15< Config message count in the window.
+  - `errorsText` (`string`): Human-readable assertion failures.
+  - `assertionJson` (`json`): Full event window assertion result.
+- 验证 Verification:
+  - For OptCNC activation proof, this step closes the gap where engineering.activate-configuration succeeds but TcSysSrv immediately reports an error or returns to Config.
+
+### `validation.assert-process-crash-window`
+
+- 方法 Method: `AdsValidationService.AssertProcessCrashWindow`
+- 分类 Category: `validation`
+- 功能摘要 Summary: Asserts that no matching Windows Application crash events appeared after a marker or within a recent time window.
+- 前置条件 Preconditions:
+  - Use after Visual Studio/XAE launch, solution open, build, or activation when unattended runs must distinguish a COM/RPC disconnect from a crashed IDE host.
+  - By default it checks Application Error, .NET Runtime, and Windows Error Reporting events for devenv.exe, TcXaeShell.exe, and TwinCAT System Manager modules.
+- 输入 Inputs:
+  - `Marker` (`EventLogWindowMarker?`): Inline marker returned by validation.mark-event-log-window.
+  - `MarkerFilePath` (`string?`): Marker JSON file written by validation.mark-event-log-window.
+  - `LogName` (`string`): Windows event log name. Example: `Application`.
+  - `LookbackSeconds` (`int`): Fallback lookback window when no marker is supplied. Example: `300`.
+  - `ProviderNames` (`IReadOnlyList<string>?`): Event sources to scan. Direct CLI accepts semicolon-separated provider names.
+  - `ProcessNames` (`IReadOnlyList<string>?`): Process names that should fail when found in an event message.
+  - `ModuleNames` (`IReadOnlyList<string>?`): Fault module names that should fail when found in an event message.
+  - `MessageContains` (`IReadOnlyList<string>?`): Additional message substrings that should fail the step.
+  - `MaxEvents` (`int`): Maximum events to include in output; zero means no cap. Example: `100`.
+- 输出 Outputs:
+  - `observedEventCount` (`int`): Application event count observed in the window.
+  - `matchingEventCount` (`int`): Crash event count matching the requested process/module/message filters.
+  - `errorsText` (`string`): Human-readable assertion failures.
+  - `matchingEventsJson` (`json`): Matching crash event snapshots.
+  - `assertionJson` (`json`): Full process crash assertion result.
+- 验证 Verification:
+  - For OptCNC, use the same marker file as the activation TcSysSrv event guard so a Visual Studio/XAE crash becomes an explicit validation failure instead of only an RPC error.
+
+### `validation.mark-event-log-window`
+
+- 方法 Method: `AdsValidationService.MarkEventLogWindow`
+- 分类 Category: `validation`
+- 功能摘要 Summary: Marks the current Windows event-log position so a later step can assert only events from the same activation window.
+- 前置条件 Preconditions:
+  - Use immediately before engineering.activate-configuration.
+  - This step is read-only and does not require Visual Studio or ADS.
+- 输入 Inputs:
+  - `LogName` (`string`): Windows event log name. Example: `Application`.
+  - `ProviderName` (`string`): Event source/provider to mark. Example: `TcSysSrv`.
+  - `MarkerFilePath` (`string?`): Optional JSON file path where the marker should be written for a later plan step.
+- 输出 Outputs:
+  - `markedAt` (`datetime`): Marker timestamp.
+  - `lastEntryIndex` (`int?`): Last observed provider event index at marker time.
+  - `markerJson` (`json`): Marker payload usable by validation.assert-event-log-window.
+- 验证 Verification:
+  - For OptCNC, write the marker to evidenceDir before activation, then pass the marker file to validation.assert-event-log-window after ADS assertions.
 

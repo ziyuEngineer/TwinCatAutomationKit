@@ -16,11 +16,33 @@ dotnet run --project .\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\Twi
 
 ```powershell
 --dry-run=true
+--dry-run
 --stop-on-failure=true
+--command-timeout-ms=300000
+--reuse-engineering-session=true
 --summary=.artifacts\complex-plan-summary.json
+--var:root=D:\t\my_run
 ```
 
+CLI 参数同时支持 `--key=value` 和 `--key value`；boolean flag 也可以直接写成 `--dry-run`。无人值守脚本建议统一使用显式值或 quoted 参数，尤其是 PowerShell 中包含 `;` 的参数值。
+
 第一次永远先跑 `--dry-run=true`。Dry-run 会解析变量和 step options，但不会写 payload files、打开 Visual Studio 或修改 TwinCAT project。
+
+`--var:name=value` 可以覆盖 plan 里的变量，不需要改 JSON 文件。例如目标目录不可写时，可以用 `--var:root=D:\t\optcnc-probe` 在短路径工作区跑同一个 plan。也可以用 `--var="root=D:\t\a;includeBuild=false"` 一次覆盖多个变量；PowerShell 中包含 `;` 时要加引号。
+
+无人值守运行建议设置 `--command-timeout-ms`。这是 `run-plan` 对每个 step 的外层 wall-clock 保险：即使某个 Visual Studio/TwinCAT COM 调用因为确认弹窗或 UI prompt 没有返回，CLI 也会按时把该 step 判定为 timeout failure，而不是无限等待。超时后 CLI 会清理本次 step 超时窗口中新启动的 `devenv.exe` / `TcXaeShell.exe` host；运行前已经存在的 IDE 不会被清理。单个 step 可以在 `steps[].options.command-timeout-ms` 覆盖全局值。
+
+engineering steps 默认还会启用 `enable-dialog-auto-dismiss=true`：监控 DTE COM activation、fallback `/Embedding` launch、startup delay 和 active session 期间本轮新启动的 `devenv.exe` / `TcXaeShell.exe`，尝试关闭常见 TwinCAT/VS modal 确认框，并记录 `autoDismissedDialogs` 输出。这个 watcher 不会附着用户已经打开的 IDE；遇到未知弹窗仍以 step timeout 作为最终保险。
+
+如果 Visual Studio profile/registry hive 损坏导致 DTE 启动弹出“未知错误”或 ActivityLog 里出现 `Failed to initialize Registry Root Hive`，可以在 JSON defaults 或 CLI 中设置 `root-suffix`。该参数会传给显式 fallback launch 的 `/RootSuffix`，用于无人值守运行时隔离坏 profile；默认不启用。
+
+如果同一台机器同时装了 Visual Studio 和 Beckhoff `TcXaeShell`，或多个 VS 主版本导致 fallback 选错 host，可以设置 `dte-host-path` 指向具体的 `devenv.exe` 或 `TcXaeShell.exe`。该参数只影响 COM activation 超时后的显式 fallback launch；成功路径仍由 `prog-id` 决定 DTE COM server。
+
+如果 `Activator.CreateInstance` DTE COM activation 已知会先弹“未知错误”或卡住，可以同时设置 `prefer-dte-host-launch=true`。这样 runner 会先启动指定/解析出的 DTE host，再从 ROT attach；失败时仍输出 fallback host、arguments 和 ActivityLog，而不是先等待 COM activation probe。
+
+复杂工程生成建议使用 `--reuse-engineering-session=true`。该模式仍逐个执行 public step，但在同一个 `run-plan` 进程里复用连续 engineering/cpp steps 的 Visual Studio/XAE DTE session，避免每个 step 都重新打开 solution 后遇到 stale DTE、COM 接口丢失或额外确认弹窗。复用段内不会在每个 step 后立刻 SaveAll；遇到 `tsproj.*`、`signing.*`、`validation.*`、`scope.*` 等文件级或非 DTE step 前，runner 会先 SaveAll 并关闭复用 session，防止 XAE 旧内存状态覆盖直接文件 mutation。如果某个 step 已失败并且 `--stop-on-failure=true`，runner 会 abandon 当前 DTE COM session，不再尝试 SaveAll/Close，避免失败清理阶段因为 VS prompt 或 COM hang 卡住。启用复用时，低风险复用 engineering/cpp step 会关闭外层 timeout worker；`engineering.launch-visual-studio`、`engineering.open-xae-solution`、`engineering.export-tree-item-xml`、`engineering.build-solution` 和 `engineering.activate-configuration` 仍保留 `--command-timeout-ms`，超时后 abandon 复用 session 并清理本次 timeout 窗口中新启动的 IDE host。无人值守调用方仍应同时设置 `launch-timeout-ms`、build/activation 自身 timeout，并用外层 child-process/runner timeout 兜底。
+
+`--stop-on-failure=true` 后，后续普通 step 会被直接标记为 skipped；runner 不会再解析这些 skipped step 的 `options`、`enabled` 或未明确为 true 的 `runAfterFailure` 中的 `${steps.id.outputs.x}`。这能保留第一个真实失败，例如 DTE launch/activation failure，而不是被后续未执行 step 的 unresolved-token 错误覆盖。依赖未执行 step 输出的 `files[]` payload 也会延后不写，并在 summary 前输出 unresolved payload 计数。
 
 ## 文件结构
 
@@ -69,6 +91,7 @@ dotnet run --project .\src\TwinCatAutomationKit.Cli\TwinCatAutomationKit.Cli\Twi
 - `steps[].kind`：任何 `invoke-step` 支持的 kind。
 - `steps[].options`：CLI option 名，不写 `--`。
 - `steps[].enabled`：可选 boolean 或 `${variable}` string。禁用的 step 会被标记为 skipped。
+- `steps[].runAfterFailure`：可选 boolean。只有 read-only 诊断 step 应使用；当 `--stop-on-failure=true` 且前面某步失败后，普通 step 会 skipped，标了 `runAfterFailure=true` 的诊断 step 仍会继续执行，用于收集 event log、crash window 或只读状态证据。失败后这个字段必须能解析成 literal `true` 才会继续执行；如果它依赖未执行 step 的 output，runner 会把该 step skipped。
 
 ## Interpolation / 插值
 

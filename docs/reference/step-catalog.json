@@ -50,11 +50,22 @@
     "Keep deviations from RecommendedExecutionOrder intentional and explain them in plan comments or evidence."
   ],
   "RecommendedExecutionOrder": [
+    "engineering.cleanup-dte-host-processes",
     "engineering.launch-visual-studio",
     "engineering.create-xae-solution",
     "engineering.create-cpp-project",
     "engineering.create-vs-cpp-project",
+    "engineering.create-scope-project",
+    "scope.ensure-configuration",
+    "scope.assert-configuration-shape",
     "engineering.ensure-solution-project-dependency",
+    "engineering.create-io-device",
+    "engineering.create-ethercat-box",
+    "engineering.apply-io-tree-plan",
+    "ethercat.assert-product-revisions",
+    "engineering.search-io-devices",
+    "engineering.reload-io-devices",
+    "engineering.generate-io-mappings",
     "cpp.remove-project-item",
     "cpp.create-project-item",
     "cpp.write-project-item-content",
@@ -115,6 +126,11 @@
     "tsproj.ensure-interface-pointer",
     "tsproj.ensure-data-pointer",
     "tsproj.ensure-mapping-link",
+    "tsproj.assert-data-pointer-shape",
+    "tsproj.assert-io-topology-shape",
+    "tsproj.assert-io-image-references",
+    "tsproj.describe-io-topology",
+    "tsproj.compare-io-topology",
     "tsproj.upsert-element",
     "tsproj.upsert-fragment",
     "tsproj.apply-mutation-plan",
@@ -127,6 +143,9 @@
     "signing.verify-twincat-binary",
     "engineering.activate-configuration",
     "validation.ads-scan",
+    "validation.assert-ads-state",
+    "validation.mark-event-log-window",
+    "validation.assert-event-log-window",
     "validation.ads-read",
     "validation.ads-read-symbols"
   ],
@@ -599,7 +618,7 @@
       "Kind": "engineering.activate-configuration",
       "MethodName": "TwinCatEngineeringService.ActivateConfiguration",
       "Category": "engineering",
-      "Summary": "Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager or DTE command fallback.",
+      "Summary": "Saves the current configuration archive when possible and then activates TwinCAT via ITcSysManager; DTE command fallback is opt-in for interactive troubleshooting.",
       "Preconditions": [
         "A solution must be loaded and its ITcSysManager must be available."
       ],
@@ -617,6 +636,27 @@
           "Required": false,
           "Description": "Optional override for the generated .tszip path.",
           "Example": null
+        },
+        {
+          "Name": "SuppressUi",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether DTE.SuppressUI should be enabled before activation.",
+          "Example": "true"
+        },
+        {
+          "Name": "AllowDteCommandFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether activation may fall back to DTE ExecuteCommand names that can show interactive prompts.",
+          "Example": "false"
+        },
+        {
+          "Name": "ActivationTimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum wall-clock time for ActivateConfiguration plus StartRestartTwinCAT before failing unattended.",
+          "Example": "120000"
         }
       ],
       "Outputs": [
@@ -627,7 +667,7 @@
         }
       ],
       "VerificationNotes": [
-        "Confirm that either ITcSysManager.ActivateConfiguration or a DTE command succeeded."
+        "Do not treat this step alone as runtime proof; follow with ADS state assertions and TcSysSrv error-window checks."
       ]
     },
     {
@@ -689,6 +729,58 @@
       ],
       "VerificationNotes": [
         "Export the instance XML and confirm that the expected CLSID and Name are present."
+      ]
+    },
+    {
+      "Kind": "engineering.apply-io-tree-plan",
+      "MethodName": "TwinCatEngineeringService.ApplyIoTreePlan",
+      "Category": "engineering",
+      "Summary": "Applies a batch IO tree payload by orchestrating engineering.create-io-device and engineering.create-ethercat-box operations.",
+      "Preconditions": [
+        "A bound XAE solution must be open.",
+        "The payload is a convenience wrapper around CreateChild operations only; it must not contain .tsproj XML metadata.",
+        "Use this for large IO trees, then save/export/describe topology to prove what XAE generated."
+      ],
+      "Inputs": [
+        {
+          "Name": "Devices",
+          "Type": "IReadOnlyList\u003CCreateIoDeviceRequest\u003E",
+          "Required": false,
+          "Description": "IO device CreateChild requests to apply in order.",
+          "Example": null
+        },
+        {
+          "Name": "Boxes",
+          "Type": "IReadOnlyList\u003CCreateEthercatBoxRequest\u003E",
+          "Required": false,
+          "Description": "EtherCAT box/terminal CreateChild requests to apply in order.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "deviceCount",
+          "Type": "int",
+          "Description": "Number of device requests applied."
+        },
+        {
+          "Name": "boxCount",
+          "Type": "int",
+          "Description": "Number of box requests applied."
+        },
+        {
+          "Name": "treeItemPaths",
+          "Type": "string",
+          "Description": "Semicolon-separated tree paths returned by XAE."
+        },
+        {
+          "Name": "nodesJson",
+          "Type": "json",
+          "Description": "Serialized node info returned by the underlying CreateChild operations."
+        }
+      ],
+      "VerificationNotes": [
+        "Run tsproj.describe-io-topology or export TIID after SaveAll; this wrapper does not prove PDO/process-image parity by itself."
       ]
     },
     {
@@ -785,9 +877,11 @@
       "Kind": "engineering.build-solution",
       "MethodName": "TwinCatEngineeringService.BuildCurrentSolution",
       "Category": "engineering",
-      "Summary": "Runs SolutionBuild.Build and waits until the DTE build state reaches done.",
+      "Summary": "Builds the loaded solution through DTE, an unattended devenv.com command-line build, or an MSBuild project sequence.",
       "Preconditions": [
-        "A solution must be loaded in the DTE session."
+        "DTE engine requires a loaded solution.",
+        "CommandLine engine requires a solution path and installed Visual Studio/XAE command-line build support.",
+        "MsBuildProjects engine requires C\u002B\u002B project paths that can be built outside the XAE solution shell."
       ],
       "Inputs": [
         {
@@ -796,17 +890,149 @@
           "Required": false,
           "Description": "Maximum build wait time.",
           "Example": "300000"
+        },
+        {
+          "Name": "BuildEngine",
+          "Type": "BuildSolutionEngine",
+          "Required": false,
+          "Description": "Build backend: Dte, CommandLine, or MsBuildProjects.",
+          "Example": "Dte"
+        },
+        {
+          "Name": "Configuration",
+          "Type": "string",
+          "Required": false,
+          "Description": "Solution configuration for command-line build.",
+          "Example": "Release"
+        },
+        {
+          "Name": "Platform",
+          "Type": "string",
+          "Required": false,
+          "Description": "Solution platform for command-line build.",
+          "Example": "TwinCAT OS (x64)"
+        },
+        {
+          "Name": "DevenvPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional explicit devenv.com path for command-line build.",
+          "Example": null
+        },
+        {
+          "Name": "MsBuildPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional explicit MSBuild.exe path for MSBuildProjects engine.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectPaths",
+          "Type": "string[]",
+          "Required": false,
+          "Description": "Semicolon-separated C\u002B\u002B project path sequence for MSBuildProjects engine. Relative paths are resolved from the solution directory.",
+          "Example": "OptcncTwinCAT\\Ruckig\\Ruckig.vcxproj;OptcncTwinCAT\\Tinyxml2\\Tinyxml2.vcxproj;OptcncTwinCAT\\MotionControl\\MotionControl.vcxproj"
+        },
+        {
+          "Name": "LogFilePath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional devenv /Out log destination.",
+          "Example": null
         }
       ],
       "Outputs": [
         {
           "Name": "lastBuildInfo",
           "Type": "int",
-          "Description": "DTE LastBuildInfo value."
+          "Description": "DTE LastBuildInfo value, or command-line exit code for CommandLine engine."
+        },
+        {
+          "Name": "buildEngine",
+          "Type": "string",
+          "Description": "Build backend used."
+        },
+        {
+          "Name": "exitCode",
+          "Type": "int",
+          "Description": "Process exit code when CommandLine engine is used."
+        },
+        {
+          "Name": "logFilePath",
+          "Type": "string",
+          "Description": "Build log path when available."
         }
       ],
       "VerificationNotes": [
-        "Treat LastBuildInfo == 0 as the engineering success condition."
+        "Treat LastBuildInfo == 0 or process exit code 0 as the engineering success condition.",
+        "For unattended runs, CommandLine and MsBuildProjects avoid Visual Studio confirmation dialogs blocking DTE automation."
+      ]
+    },
+    {
+      "Kind": "engineering.cleanup-dte-host-processes",
+      "MethodName": "TwinCatEngineeringService.CleanupDteHostProcesses",
+      "Category": "engineering",
+      "Summary": "Lists or explicitly kills unattended Visual Studio/TcXaeShell host processes that can block DTE automation.",
+      "Preconditions": [
+        "Use dry-run first.",
+        "Default matching only targets host processes without a main window title; windowed IDEs require IncludeWindowed=true or explicit ProcessIds."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProcessNames",
+          "Type": "string[]",
+          "Required": false,
+          "Description": "Process names to inspect, separated by \u0027;\u0027 or \u0027|\u0027.",
+          "Example": "devenv;TcXaeShell"
+        },
+        {
+          "Name": "ProcessIds",
+          "Type": "int[]",
+          "Required": false,
+          "Description": "Optional explicit process ids to match.",
+          "Example": null
+        },
+        {
+          "Name": "DryRun",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to only report candidates without killing them.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludeWindowed",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether processes with a main window title are also candidates.",
+          "Example": "false"
+        },
+        {
+          "Name": "KillProcessTree",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to kill the full process tree for matched processes.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "matchedCount",
+          "Type": "int",
+          "Description": "Number of candidate processes."
+        },
+        {
+          "Name": "killedCount",
+          "Type": "int",
+          "Description": "Number of processes killed when DryRun=false."
+        },
+        {
+          "Name": "processesJson",
+          "Type": "json",
+          "Description": "Per-process match/cleanup details."
+        }
+      ],
+      "VerificationNotes": [
+        "Run before unattended DTE launch if previous tests left headless devenv/TcXaeShell processes; follow with engineering.launch-visual-studio."
       ]
     },
     {
@@ -869,6 +1095,191 @@
       ],
       "VerificationNotes": [
         "Verify the TIXC child exists and the .vcxproj file lands on disk."
+      ]
+    },
+    {
+      "Kind": "engineering.create-ethercat-box",
+      "MethodName": "TwinCatEngineeringService.CreateEthercatBox",
+      "Category": "engineering",
+      "Summary": "Creates an EtherCAT box or terminal under an EtherCAT parent through ITcSmTreeItem.CreateChild.",
+      "Preconditions": [
+        "An EtherCAT device or parent box path must already exist.",
+        "Use subtype 9099 for E-Bus terminals/boxes whose product identity comes from ProductRevision/vInfo.",
+        "This step asks XAE/ESI to generate box metadata; it must not be replaced by copied sample XML."
+      ],
+      "Inputs": [
+        {
+          "Name": "ParentTreeItemPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "TwinCAT parent path, for example TIID^Device 3 (EtherCAT).",
+          "Example": null
+        },
+        {
+          "Name": "Name",
+          "Type": "string",
+          "Required": true,
+          "Description": "Box or terminal display name to create or find.",
+          "Example": null
+        },
+        {
+          "Name": "SubType",
+          "Type": "int",
+          "Required": false,
+          "Description": "TwinCAT CreateChild subtype. 9099 is the Automation Interface subtype for product-revision based EtherCAT boxes.",
+          "Example": "9099"
+        },
+        {
+          "Name": "Before",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional sibling name/path passed to CreateChild before insertion.",
+          "Example": null
+        },
+        {
+          "Name": "ProductRevision",
+          "Type": "string",
+          "Required": false,
+          "Description": "Product/revision identity passed as vInfo when VInfo is not set, for example EK1100-0000-0017.",
+          "Example": null
+        },
+        {
+          "Name": "VInfo",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional raw CreateChild vInfo string when Beckhoff documents a different identity payload.",
+          "Example": null
+        },
+        {
+          "Name": "Disabled",
+          "Type": "bool?",
+          "Required": false,
+          "Description": "Optional Disabled state to apply after creation or lookup.",
+          "Example": null
+        },
+        {
+          "Name": "AllowExisting",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether an existing child at ParentTreeItemPath^Name is accepted instead of failing.",
+          "Example": "true"
+        },
+        {
+          "Name": "PostCreateDelayMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Delay after CreateChild so XAE can generate PDO/SyncMan/FMMU metadata.",
+          "Example": "500"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "Created or existing tree item path."
+        },
+        {
+          "Name": "displayName",
+          "Type": "string",
+          "Description": "Resolved TwinCAT display name."
+        },
+        {
+          "Name": "objectId",
+          "Type": "string",
+          "Description": "Tree item ObjectId when XAE exposes one."
+        }
+      ],
+      "VerificationNotes": [
+        "Export or describe the EtherCAT tree after SaveAll; PDO/process-image metadata should come from XAE/ESI generation rather than a copied .tsproj fragment."
+      ]
+    },
+    {
+      "Kind": "engineering.create-io-device",
+      "MethodName": "TwinCatEngineeringService.CreateIoDevice",
+      "Category": "engineering",
+      "Summary": "Creates an IO device under a TwinCAT tree parent through ITcSmTreeItem.CreateChild.",
+      "Preconditions": [
+        "A bound XAE solution must be open.",
+        "This is an engineering COM/XAE operation; use command timeouts and unattended dialog auto-dismiss for headless runs.",
+        "For an EtherCAT master use ParentTreeItemPath=TIID and SubType=111."
+      ],
+      "Inputs": [
+        {
+          "Name": "Name",
+          "Type": "string",
+          "Required": true,
+          "Description": "Device display name to create or find.",
+          "Example": null
+        },
+        {
+          "Name": "SubType",
+          "Type": "int",
+          "Required": false,
+          "Description": "TwinCAT CreateChild subtype, for example 111 for an EtherCAT master.",
+          "Example": "111"
+        },
+        {
+          "Name": "ParentTreeItemPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "TwinCAT tree parent path.",
+          "Example": "TIID"
+        },
+        {
+          "Name": "Before",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional sibling name/path passed to CreateChild before insertion.",
+          "Example": null
+        },
+        {
+          "Name": "VInfo",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional CreateChild vInfo payload for device-specific identity fields.",
+          "Example": null
+        },
+        {
+          "Name": "Disabled",
+          "Type": "bool?",
+          "Required": false,
+          "Description": "Optional Disabled state to apply after creation or lookup.",
+          "Example": null
+        },
+        {
+          "Name": "AllowExisting",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether an existing child at ParentTreeItemPath^Name is accepted instead of failing.",
+          "Example": "true"
+        },
+        {
+          "Name": "PostCreateDelayMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Delay after CreateChild so XAE can persist generated IO metadata.",
+          "Example": "500"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "treeItemPath",
+          "Type": "string",
+          "Description": "Created or existing tree item path."
+        },
+        {
+          "Name": "displayName",
+          "Type": "string",
+          "Description": "Resolved TwinCAT display name."
+        },
+        {
+          "Name": "objectId",
+          "Type": "string",
+          "Description": "Tree item ObjectId when XAE exposes one."
+        }
+      ],
+      "VerificationNotes": [
+        "Export or describe TIID after SaveAll; the created Device should appear without copying a Project/Io XML section."
       ]
     },
     {
@@ -963,6 +1374,77 @@
       ],
       "VerificationNotes": [
         "Check that the PLC node exists and that the .plcproj file was created."
+      ]
+    },
+    {
+      "Kind": "engineering.create-scope-project",
+      "MethodName": "TwinCatEngineeringService.CreateScopeProject",
+      "Category": "engineering",
+      "Summary": "Creates a TwinCAT Scope project skeleton inside the current solution without copying an existing Scope project file.",
+      "Preconditions": [
+        "A solution must already be loaded in the DTE session."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProjectName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Scope project name.",
+          "Example": null
+        },
+        {
+          "Name": "ProjectDirectory",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional project directory. Defaults to SolutionDirectory/ProjectName.",
+          "Example": null
+        },
+        {
+          "Name": "ConfigurationFileName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional .tcscopex file name to include.",
+          "Example": "\u003CProjectName\u003E.tcscopex"
+        },
+        {
+          "Name": "CreateEmptyConfiguration",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to create a minimal empty .tcscopex configuration file.",
+          "Example": "true"
+        },
+        {
+          "Name": "AllowSolutionFileFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to write a typed .sln project entry if DTE AddFromFile does not accept the .tcmproj.",
+          "Example": "true"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "projectFilePath",
+          "Type": "string",
+          "Description": "Absolute .tcmproj path."
+        },
+        {
+          "Name": "projectGuid",
+          "Type": "string",
+          "Description": "Project GUID registered in the .tcmproj/.sln."
+        },
+        {
+          "Name": "configurationFilePath",
+          "Type": "string",
+          "Description": "Optional generated .tcscopex path."
+        },
+        {
+          "Name": "usedSolutionFileFallback",
+          "Type": "bool",
+          "Description": "Whether the .sln entry fallback path was used."
+        }
+      ],
+      "VerificationNotes": [
+        "Verify the .tcmproj exists, optional .tcscopex exists, and the saved .sln contains the Scope project GUID and relative path."
       ]
     },
     {
@@ -1239,10 +1721,64 @@
       ]
     },
     {
+      "Kind": "engineering.generate-io-mappings",
+      "MethodName": "TwinCatEngineeringService.GenerateIoMappings",
+      "Category": "engineering",
+      "Summary": "Invokes TwinCAT GenerateMappings so XAE can rebuild variable mappings from the current IO tree.",
+      "Preconditions": [
+        "A bound XAE solution with IO topology must be open.",
+        "The step first requires ITcSmCommands.GenerateMappings on the current SysManager COM object.",
+        "DTE command fallback is disabled by default because menu commands can show interactive prompts."
+      ],
+      "Inputs": [
+        {
+          "Name": "SuppressUi",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether DTE.SuppressUI should be set before invoking the command.",
+          "Example": "true"
+        },
+        {
+          "Name": "AllowDteCommandFallback",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to try TwinCAT GenerateMappings DTE commands if ITcSmCommands is not available.",
+          "Example": "false"
+        },
+        {
+          "Name": "TimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum time allowed for the GenerateMappings operation.",
+          "Example": "120000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether GenerateMappings completed."
+        },
+        {
+          "Name": "command",
+          "Type": "string",
+          "Description": "The COM or DTE command path that completed."
+        },
+        {
+          "Name": "attemptedCommands",
+          "Type": "string",
+          "Description": "Semicolon-separated attempted command paths."
+        }
+      ],
+      "VerificationNotes": [
+        "Save and describe/compare the IO topology and root Mappings after this step; do not treat command success alone as IO parity."
+      ]
+    },
+    {
       "Kind": "engineering.launch-visual-studio",
       "MethodName": "TwinCatEngineeringService.LaunchVisualStudio",
       "Category": "engineering",
-      "Summary": "Starts a new DTE session that later steps can use for XAE creation, build, and activation.",
+      "Summary": "Starts or attaches a DTE session that later steps can use for XAE creation, build, and activation.",
       "Preconditions": [
         "Visual Studio with TwinCAT XAE must be installed on the machine."
       ],
@@ -1267,6 +1803,62 @@
           "Required": false,
           "Description": "Whether the launched Visual Studio window should be visible.",
           "Example": "true"
+        },
+        {
+          "Name": "SuppressUi",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether DTE.SuppressUI should be enabled for unattended runs.",
+          "Example": "true"
+        },
+        {
+          "Name": "LaunchTimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum time allowed for DTE COM activation before failing the step.",
+          "Example": "60000"
+        },
+        {
+          "Name": "EnableDialogAutoDismiss",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether unattended runs should monitor selected VS/TcXaeShell host processes during DTE COM activation, fallback launch, startup delay, and the active session, then close known modal confirmation dialogs by title or message text.",
+          "Example": "true"
+        },
+        {
+          "Name": "DialogPollIntervalMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Polling interval for the unattended dialog auto-dismiss watcher.",
+          "Example": "500"
+        },
+        {
+          "Name": "AttachToExisting",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether launch may attach to an already running DTE session. Keep false for unattended runs so stale headless Visual Studio hosts are not reused.",
+          "Example": "false"
+        },
+        {
+          "Name": "RootSuffix",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional Visual Studio /RootSuffix used by explicit fallback launch to isolate a broken user registry hive or profile during unattended DTE startup.",
+          "Example": null
+        },
+        {
+          "Name": "DteHostPath",
+          "Type": "string",
+          "Required": false,
+          "Description": "Optional explicit devenv.exe or TcXaeShell.exe path used for fallback DTE host launch when COM activation does not return promptly.",
+          "Example": null
+        },
+        {
+          "Name": "PreferDteHostLaunch",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether to start the explicit DTE host first and attach through the ROT before attempting Activator.CreateInstance. Useful when COM activation is known to show an unattended registry/profile error.",
+          "Example": "false"
         }
       ],
       "Outputs": [
@@ -1277,7 +1869,8 @@
         }
       ],
       "VerificationNotes": [
-        "Read back DTE version or solution state to confirm the COM server is reachable."
+        "Read back DTE version or solution state to confirm the COM server is reachable.",
+        "For unattended runs, inspect targetProcessIds and autoDismissedDialogs outputs to confirm which host was monitored and whether launch/session modal dialogs were dismissed."
       ]
     },
     {
@@ -1381,6 +1974,53 @@
       ]
     },
     {
+      "Kind": "engineering.reload-io-devices",
+      "MethodName": "TwinCatEngineeringService.ReloadIoDevices",
+      "Category": "engineering",
+      "Summary": "Invokes TwinCAT ReloadDevices through ITcSmCommands so XAE can reload IO device metadata without using menu commands.",
+      "Preconditions": [
+        "A bound XAE solution with IO devices must be open.",
+        "This operation can regenerate IO metadata from installed device descriptions.",
+        "No DTE menu fallback is provided; unattended runs must rely on the COM command, timeout, suppress-ui, and dialog auto-dismiss."
+      ],
+      "Inputs": [
+        {
+          "Name": "SuppressUi",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether DTE.SuppressUI should be set before invoking the command.",
+          "Example": "true"
+        },
+        {
+          "Name": "TimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum time allowed for ReloadDevices.",
+          "Example": "120000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether ReloadDevices completed."
+        },
+        {
+          "Name": "command",
+          "Type": "string",
+          "Description": "The COM command path that completed."
+        },
+        {
+          "Name": "attemptedCommands",
+          "Type": "string",
+          "Description": "Semicolon-separated attempted command paths."
+        }
+      ],
+      "VerificationNotes": [
+        "Save, export TIID, and compare/describe IO topology after this step. Reopen with XAE or run topology guards before activation."
+      ]
+    },
+    {
       "Kind": "engineering.save-all",
       "MethodName": "TwinCatEngineeringService.SaveAll",
       "Category": "engineering",
@@ -1392,6 +2032,53 @@
       "Outputs": [],
       "VerificationNotes": [
         "Re-check file timestamps or solution dirtiness after the command."
+      ]
+    },
+    {
+      "Kind": "engineering.search-io-devices",
+      "MethodName": "TwinCatEngineeringService.SearchIoDevices",
+      "Category": "engineering",
+      "Summary": "Invokes TwinCAT SearchDevices through ITcSmCommands so XAE can scan local IO devices without using menu commands.",
+      "Preconditions": [
+        "A bound XAE solution must be open.",
+        "This operation can change the IO tree and can depend on local hardware/driver state.",
+        "No DTE menu fallback is provided; unattended runs must rely on the COM command, timeout, suppress-ui, and dialog auto-dismiss."
+      ],
+      "Inputs": [
+        {
+          "Name": "SuppressUi",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether DTE.SuppressUI should be set before invoking the command.",
+          "Example": "true"
+        },
+        {
+          "Name": "TimeoutMs",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum time allowed for SearchDevices.",
+          "Example": "120000"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether SearchDevices completed."
+        },
+        {
+          "Name": "command",
+          "Type": "string",
+          "Description": "The COM command path that completed."
+        },
+        {
+          "Name": "attemptedCommands",
+          "Type": "string",
+          "Description": "Semicolon-separated attempted command paths."
+        }
+      ],
+      "VerificationNotes": [
+        "Save, export TIID, and compare/describe IO topology after this step. A successful scan command is not enough to claim OptCNC IO parity."
       ]
     },
     {
@@ -1501,6 +2188,262 @@
       ],
       "VerificationNotes": [
         "Use this after C\u002B\u002B code generation and before add-module-instance; a fallback skeleton TMC with Input/DataIn and Output/DataOut should fail this step."
+      ]
+    },
+    {
+      "Kind": "ethercat.assert-product-revisions",
+      "MethodName": "TwinCatEtherCatDeviceDescriptionService.AssertProductRevisions",
+      "Category": "ethercat",
+      "Summary": "Asserts that EtherCAT productRevision strings used for CreateChild are present in the installed Beckhoff ESI/device-description XML files.",
+      "Preconditions": [
+        "The machine must have Beckhoff EtherCAT device description XML files installed.",
+        "This step is file-only; it does not launch XAE and does not mutate a .tsproj.",
+        "Use it before engineering.create-ethercat-box or engineering.apply-io-tree-plan when a JSON plan depends on productRevision/vInfo values."
+      ],
+      "Inputs": [
+        {
+          "Name": "ProductRevisions",
+          "Type": "IReadOnlyList\u003Cstring\u003E",
+          "Required": false,
+          "Description": "ProductRevision/vInfo values to verify, such as EK1100-0000-0018 or AX5125-0000-0214.",
+          "Example": null
+        },
+        {
+          "Name": "Items",
+          "Type": "IReadOnlyList\u003CEtherCatProductRevisionRequirement\u003E",
+          "Required": false,
+          "Description": "Structured productRevision checks with optional ProductCode and RevisionNo constraints.",
+          "Example": null
+        },
+        {
+          "Name": "SearchDirectories",
+          "Type": "IReadOnlyList\u003Cstring\u003E",
+          "Required": false,
+          "Description": "Optional EtherCAT ESI XML directories. Defaults to Beckhoff TwinCAT install/program-data locations.",
+          "Example": null
+        },
+        {
+          "Name": "IncludeHiddenTypes",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether HideType elements should count as matches.",
+          "Example": "false"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether all requested product revisions were found."
+        },
+        {
+          "Name": "requestedCount",
+          "Type": "int",
+          "Description": "Number of requested product revisions."
+        },
+        {
+          "Name": "matchedCount",
+          "Type": "int",
+          "Description": "Number of matched product revisions."
+        },
+        {
+          "Name": "missingCount",
+          "Type": "int",
+          "Description": "Number of missing product revisions."
+        },
+        {
+          "Name": "scannedFileCount",
+          "Type": "int",
+          "Description": "Number of ESI XML files scanned."
+        },
+        {
+          "Name": "assertionsJson",
+          "Type": "json",
+          "Description": "Per-product match result including ProductCode, RevisionNo and source file."
+        }
+      ],
+      "VerificationNotes": [
+        "Run before XAE CreateChild IO tree steps; a match proves the local ESI catalog contains the requested productRevision string, but final IO topology still needs XAE tree and .tsproj guards."
+      ]
+    },
+    {
+      "Kind": "scope.assert-configuration-shape",
+      "MethodName": "TwinCatScopeConfigurationService.AssertConfigurationShape",
+      "Category": "scope",
+      "Summary": "Reads a TwinCAT Scope .tcscopex configuration and asserts typed channel/chart shape without mutating it.",
+      "Preconditions": [
+        "The .tcscopex file must exist."
+      ],
+      "Inputs": [
+        {
+          "Name": "ConfigurationFilePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute .tcscopex file path to inspect.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedScopeName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Expected Scope display name.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedChartName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Expected YT chart name.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedAdsChannelCount",
+          "Type": "int",
+          "Required": false,
+          "Description": "Expected ADS acquisition channel count.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedChartChannelCount",
+          "Type": "int",
+          "Required": false,
+          "Description": "Expected chart channel count.",
+          "Example": null
+        },
+        {
+          "Name": "AdsChannels",
+          "Type": "ScopeConfigurationChannelShape[]",
+          "Required": false,
+          "Description": "Expected ADS channel names and optional SymbolName values.",
+          "Example": null
+        },
+        {
+          "Name": "ChartChannels",
+          "Type": "ScopeConfigurationChannelShape[]",
+          "Required": false,
+          "Description": "Expected chart channel names and optional acquisition names.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether every requested shape condition matched."
+        },
+        {
+          "Name": "adsChannelCount",
+          "Type": "int",
+          "Description": "Observed ADS acquisition channel count."
+        },
+        {
+          "Name": "chartChannelCount",
+          "Type": "int",
+          "Description": "Observed chart channel count."
+        },
+        {
+          "Name": "shapeJson",
+          "Type": "json",
+          "Description": "Observed shape and error details."
+        }
+      ],
+      "VerificationNotes": [
+        "Use after scope.ensure-configuration or after XAE reopen/save to prove the generated channels were retained."
+      ]
+    },
+    {
+      "Kind": "scope.ensure-configuration",
+      "MethodName": "TwinCatScopeConfigurationService.EnsureConfiguration",
+      "Category": "scope",
+      "Summary": "Creates or updates a TwinCAT Scope .tcscopex configuration from typed chart, channel, and ADS symbol definitions.",
+      "Preconditions": [
+        "The Scope project directory must exist or be creatable.",
+        "Callers must provide typed JSON or explicit fields; do not pass copied .tcscopex XML."
+      ],
+      "Inputs": [
+        {
+          "Name": "ConfigurationFilePath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Absolute .tcscopex file path to create or update.",
+          "Example": null
+        },
+        {
+          "Name": "ScopeName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Scope display name.",
+          "Example": "Scope Project"
+        },
+        {
+          "Name": "MainServer",
+          "Type": "string",
+          "Required": false,
+          "Description": "Scope main server AMS NetId.",
+          "Example": "127.0.0.1.1.1"
+        },
+        {
+          "Name": "RecordTime",
+          "Type": "long",
+          "Required": false,
+          "Description": "Scope record time in 100 ns units.",
+          "Example": "6000000000"
+        },
+        {
+          "Name": "StopMode",
+          "Type": "string",
+          "Required": false,
+          "Description": "Scope stop mode.",
+          "Example": "AutoStop"
+        },
+        {
+          "Name": "ChartName",
+          "Type": "string",
+          "Required": false,
+          "Description": "YT chart name.",
+          "Example": "YT Chart"
+        },
+        {
+          "Name": "ReplaceChannels",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether existing ADS acquisitions and chart channels should be replaced.",
+          "Example": "false"
+        },
+        {
+          "Name": "AdsChannels",
+          "Type": "ScopeAdsChannelDefinition[]",
+          "Required": false,
+          "Description": "Typed ADS acquisition channel definitions.",
+          "Example": null
+        },
+        {
+          "Name": "ChartChannels",
+          "Type": "ScopeChartChannelDefinition[]",
+          "Required": false,
+          "Description": "Typed YT chart channel definitions.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "configurationFilePath",
+          "Type": "string",
+          "Description": "Generated .tcscopex path."
+        },
+        {
+          "Name": "adsChannelCount",
+          "Type": "int",
+          "Description": "Number of ADS acquisition channels in the resulting file."
+        },
+        {
+          "Name": "chartChannelCount",
+          "Type": "int",
+          "Description": "Number of chart channels in the resulting file."
+        }
+      ],
+      "VerificationNotes": [
+        "Re-read the .tcscopex file and assert the requested ADS symbol channels and chart channels exist; do not compare against a copied sample file."
       ]
     },
     {
@@ -1955,6 +2898,340 @@
       ]
     },
     {
+      "Kind": "tsproj.assert-data-pointer-shape",
+      "MethodName": "TwinCatTsprojMutationService.AssertDataPointerShape",
+      "Category": "tsproj",
+      "Summary": "Reads a .tsproj and asserts that C\u002B\u002B instance DataPointerValues and root Mappings links still match the requested shape.",
+      "Preconditions": [
+        "Use after data pointer and mapping steps, and again after XAE save/activate, to catch TwinCAT deleting unresolved DataPointerValues."
+      ],
+      "Inputs": [
+        {
+          "Name": "InstanceName",
+          "Type": "string",
+          "Required": true,
+          "Description": "Exact C\u002B\u002B instance display name to inspect.",
+          "Example": null
+        },
+        {
+          "Name": "DataPointers",
+          "Type": "IReadOnlyList\u003CExpectedDataPointerValueShape\u003E",
+          "Required": false,
+          "Description": "Required DataPointerValues entries, optional per-entry record count, and optional ArrayIndex set.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedDataPointerRecordCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total number of data pointer records across all DataPointerValues entries.",
+          "Example": null
+        },
+        {
+          "Name": "MappingLinks",
+          "Type": "IReadOnlyList\u003CExpectedMappingLinkShape\u003E",
+          "Required": false,
+          "Description": "Root Mappings OwnerA/OwnerB/Link entries that must be present.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedDataPointerMappingLinkCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected number of root Mappings Link entries whose VarA or VarB is a Data Pointer reference.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedRootMappingLinkCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total root Mappings Link count.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether all requested shape assertions passed."
+        },
+        {
+          "Name": "dataPointerRecordCount",
+          "Type": "int",
+          "Description": "Total DataPointerValues record count for the inspected instance."
+        },
+        {
+          "Name": "dataPointerMappingLinkCount",
+          "Type": "int",
+          "Description": "Root Mappings Link count limited to Data Pointer links."
+        },
+        {
+          "Name": "rootMappingLinkCount",
+          "Type": "int",
+          "Description": "Total root Mappings Link count."
+        },
+        {
+          "Name": "errorsText",
+          "Type": "string",
+          "Description": "Human-readable assertion failures."
+        },
+        {
+          "Name": "shapeJson",
+          "Type": "json",
+          "Description": "Full observed shape and error details."
+        }
+      ],
+      "VerificationNotes": [
+        "Run against the generated .tsproj before activation and after activation/save; for OptCNC, AxesGroup0 should retain six data pointer records and eight data pointer mapping links."
+      ]
+    },
+    {
+      "Kind": "tsproj.assert-io-image-references",
+      "MethodName": "TwinCatTsprojMutationService.AssertIoImageReferences",
+      "Category": "tsproj",
+      "Summary": "Reads a .tsproj and asserts IO process-image references without mutating TwinCAT metadata.",
+      "Preconditions": [
+        "Use after IO topology creation to catch half-populated process-image shape, for example Device InfoImageId without a direct Image node or ImageId values with no known backing."
+      ],
+      "Inputs": [
+        {
+          "Name": "ExpectedRootImageDataCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected root TcSmProject/ImageDatas/ImageData count.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedDeviceImageCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected direct Device/Image count under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedImageReferenceCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected ImageId reference count under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "RequireDeviceImageForInfoImageId",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Fail when a Device has InfoImageId but no direct Image node.",
+          "Example": "true"
+        },
+        {
+          "Name": "RequireImageIdBacking",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Fail when an ImageId does not match root ImageData, direct Device Image, Device InfoImageId, or AllowedUnbackedImageIds.",
+          "Example": "true"
+        },
+        {
+          "Name": "AllowedUnbackedImageIds",
+          "Type": "IReadOnlyList\u003Cstring\u003E",
+          "Required": false,
+          "Description": "Known system image ids that are valid without root ImageData, for example TwinSAFE module image id 118.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether all requested IO image reference assertions passed."
+        },
+        {
+          "Name": "rootImageDataCount",
+          "Type": "int",
+          "Description": "Observed root ImageData count."
+        },
+        {
+          "Name": "deviceImageCount",
+          "Type": "int",
+          "Description": "Observed direct Device/Image count."
+        },
+        {
+          "Name": "deviceWithInfoImageCount",
+          "Type": "int",
+          "Description": "Observed Device count with InfoImageId."
+        },
+        {
+          "Name": "deviceInfoWithoutImageCount",
+          "Type": "int",
+          "Description": "Observed Device count with InfoImageId but no direct Image node."
+        },
+        {
+          "Name": "imageReferenceCount",
+          "Type": "int",
+          "Description": "Observed Project/Io ImageId reference count."
+        },
+        {
+          "Name": "unbackedImageReferenceCount",
+          "Type": "int",
+          "Description": "Observed ImageId reference count without known backing."
+        },
+        {
+          "Name": "errorsText",
+          "Type": "string",
+          "Description": "Human-readable assertion failures."
+        },
+        {
+          "Name": "shapeJson",
+          "Type": "json",
+          "Description": "Full observed IO image reference shape and error details."
+        }
+      ],
+      "VerificationNotes": [
+        "For OptCNC sample parity, require four direct Device/Image nodes and allow only documented system image ids as unbacked."
+      ]
+    },
+    {
+      "Kind": "tsproj.assert-io-topology-shape",
+      "MethodName": "TwinCatTsprojMutationService.AssertIoTopologyShape",
+      "Category": "tsproj",
+      "Summary": "Reads a .tsproj and asserts the Project/Io topology and root Mappings shape without mutating TwinCAT metadata.",
+      "Preconditions": [
+        "Use after dedicated IO topology primitives or after XAE import/scan evidence; this step is a guard and does not create devices or copy IO XML."
+      ],
+      "Inputs": [
+        {
+          "Name": "ExpectedDeviceCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected Project/Io Device count.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedBoxCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total Box count under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedImageCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total Image count under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedPdoCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total Pdo count under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedPdoEntryCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total Pdo Entry count under Project/Io.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedMappingInfoCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected root Mappings/MappingInfo count.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedOwnerACount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected root Mappings/OwnerA count.",
+          "Example": null
+        },
+        {
+          "Name": "ExpectedRootMappingLinkCount",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Expected total root Mappings Link count.",
+          "Example": null
+        },
+        {
+          "Name": "Devices",
+          "Type": "IReadOnlyList\u003CExpectedIoDeviceShape\u003E",
+          "Required": false,
+          "Description": "Specific Device Id/name/box-count/InfoImageId/Image-count/direct-child-count assertions.",
+          "Example": null
+        },
+        {
+          "Name": "Boxes",
+          "Type": "IReadOnlyList\u003CExpectedIoBoxShape\u003E",
+          "Required": false,
+          "Description": "Specific Device/Box Id/name/ImageId/BoxFlags/parent/PDO/PDO-entry/direct-child-count assertions.",
+          "Example": null
+        },
+        {
+          "Name": "MappingLinks",
+          "Type": "IReadOnlyList\u003CExpectedMappingLinkShape\u003E",
+          "Required": false,
+          "Description": "Root Mappings OwnerA/OwnerB/Link entries that must be present.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether all requested IO shape assertions passed."
+        },
+        {
+          "Name": "deviceCount",
+          "Type": "int",
+          "Description": "Observed Project/Io Device count."
+        },
+        {
+          "Name": "boxCount",
+          "Type": "int",
+          "Description": "Observed total Box count."
+        },
+        {
+          "Name": "imageCount",
+          "Type": "int",
+          "Description": "Observed total Image count."
+        },
+        {
+          "Name": "pdoCount",
+          "Type": "int",
+          "Description": "Observed total Pdo count."
+        },
+        {
+          "Name": "pdoEntryCount",
+          "Type": "int",
+          "Description": "Observed total Pdo Entry count."
+        },
+        {
+          "Name": "mappingInfoCount",
+          "Type": "int",
+          "Description": "Observed root Mappings/MappingInfo count."
+        },
+        {
+          "Name": "rootMappingLinkCount",
+          "Type": "int",
+          "Description": "Observed root Mappings Link count."
+        },
+        {
+          "Name": "errorsText",
+          "Type": "string",
+          "Description": "Human-readable assertion failures."
+        },
+        {
+          "Name": "shapeJson",
+          "Type": "json",
+          "Description": "Full observed shape and error details."
+        }
+      ],
+      "VerificationNotes": [
+        "For OptCNC sample parity, use this to prove the generated .tsproj has the expected 5 Device / 28 Box / 107 PDO / 2 MappingInfo skeleton before claiming IO parity."
+      ]
+    },
+    {
       "Kind": "tsproj.bind-instance-context",
       "MethodName": "TwinCatTsprojMutationService.BindInstanceContext",
       "Category": "tsproj",
@@ -2364,6 +3641,185 @@
       ]
     },
     {
+      "Kind": "tsproj.compare-io-topology",
+      "MethodName": "TwinCatTsprojMutationService.CompareIoTopology",
+      "Category": "tsproj",
+      "Summary": "Compares two .tsproj files through normalized IO topology facts and reports stable count/key/field differences.",
+      "Preconditions": [
+        "This is a read-only guard for evidence and acceptance. It never imports the reference topology, never emits raw IO XML, and must not be used as a metadata copy path."
+      ],
+      "Inputs": [
+        {
+          "Name": "ReferenceProjectPath",
+          "Type": "string",
+          "Required": true,
+          "Description": "Reference .tsproj path to compare against the candidate project path.",
+          "Example": null
+        },
+        {
+          "Name": "IncludeMappings",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether root Mappings/MappingInfo/OwnerA/Link facts should be compared.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludePdos",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether PDO and PDO Entry facts should be compared.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludeAttributes",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether normalized attributes should be included in the underlying descriptions.",
+          "Example": "false"
+        },
+        {
+          "Name": "MaxDifferences",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum number of differences to return; zero means no cap.",
+          "Example": "200"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeeded",
+          "Type": "bool",
+          "Description": "Whether all compared IO topology facts match."
+        },
+        {
+          "Name": "differenceCount",
+          "Type": "int",
+          "Description": "Number of reported differences."
+        },
+        {
+          "Name": "truncated",
+          "Type": "bool",
+          "Description": "Whether differences were truncated by MaxDifferences."
+        },
+        {
+          "Name": "comparisonJson",
+          "Type": "json",
+          "Description": "Count comparisons and stable topology differences."
+        }
+      ],
+      "VerificationNotes": [
+        "Use after generation and again after XAE save/activate; it compares process-image and PDO-entry facts as normalized fields, so a mismatch proves IO parity is not complete without requiring or exposing sample metadata XML."
+      ]
+    },
+    {
+      "Kind": "tsproj.describe-io-topology",
+      "MethodName": "TwinCatTsprojMutationService.DescribeIoTopology",
+      "Category": "tsproj",
+      "Summary": "Reads a .tsproj and emits a normalized IO topology summary without copying or mutating TwinCAT metadata XML.",
+      "Preconditions": [
+        "Use this as evidence before designing IO topology steps; it reports stable IDs, names, counts, process images, PDO entries, mapping owners, and optional attributes but never returns raw XML fragments."
+      ],
+      "Inputs": [
+        {
+          "Name": "IncludeDevices",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether Device summaries should be included.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludeBoxes",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether Box summaries should be included.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludePdos",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether PDO and PDO Entry summaries should be included.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludeMappings",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether root Mappings/MappingInfo/OwnerA/Link summaries should be included.",
+          "Example": "true"
+        },
+        {
+          "Name": "IncludeAttributes",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether normalized attribute name/value summaries should be included for inspected nodes.",
+          "Example": "false"
+        },
+        {
+          "Name": "MaxItemsPerCollection",
+          "Type": "int",
+          "Required": false,
+          "Description": "Optional cap per output collection; zero means no truncation.",
+          "Example": "0"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "deviceCount",
+          "Type": "int",
+          "Description": "Observed Project/Io Device count."
+        },
+        {
+          "Name": "boxCount",
+          "Type": "int",
+          "Description": "Observed total Box count."
+        },
+        {
+          "Name": "imageCount",
+          "Type": "int",
+          "Description": "Observed normalized IO Image summary count in the output JSON."
+        },
+        {
+          "Name": "pdoCount",
+          "Type": "int",
+          "Description": "Observed total Pdo count."
+        },
+        {
+          "Name": "pdoEntryCount",
+          "Type": "int",
+          "Description": "Observed total Pdo Entry count."
+        },
+        {
+          "Name": "mappingInfoCount",
+          "Type": "int",
+          "Description": "Observed root Mappings/MappingInfo count."
+        },
+        {
+          "Name": "ownerACount",
+          "Type": "int",
+          "Description": "Observed root Mappings/OwnerA count."
+        },
+        {
+          "Name": "rootMappingLinkCount",
+          "Type": "int",
+          "Description": "Observed root Mappings Link count."
+        },
+        {
+          "Name": "truncated",
+          "Type": "bool",
+          "Description": "Whether collection output was truncated by MaxItemsPerCollection."
+        },
+        {
+          "Name": "shapeJson",
+          "Type": "json",
+          "Description": "Normalized IO topology description for evidence and diffing."
+        }
+      ],
+      "VerificationNotes": [
+        "Run on the target sample and generated .tsproj, compare shapeJson counts and selected IDs/names, then design missing typed IO steps without using copied metadata XML."
+      ]
+    },
+    {
       "Kind": "tsproj.ensure-cpp-instance",
       "MethodName": "TwinCatTsprojMutationService.EnsureCppInstance",
       "Category": "tsproj",
@@ -2570,6 +4026,20 @@
           "Required": false,
           "Description": "Simple child values for Box/EtherCAT, such as SyncMan or Fmmu only when their meaning is known.",
           "Example": null
+        },
+        {
+          "Name": "EtherCatElements",
+          "Type": "IReadOnlyList\u003CIoStructuredElement\u003E",
+          "Required": false,
+          "Description": "Structured repeated Box/EtherCAT child elements such as SyncMan, Fmmu, DcMode, BootStrapData, MBoxUserCmdData, CoeProfile, DcData, or Slot.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceEtherCatElements",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether same-name Box/EtherCAT child elements are replaced before EtherCatElements are added.",
+          "Example": "true"
         },
         {
           "Name": "ExtraFragments",
@@ -2820,6 +4290,48 @@
           "Required": false,
           "Description": "Optional direct Image children for process images.",
           "Example": null
+        },
+        {
+          "Name": "EtherCatAttributes",
+          "Type": "IReadOnlyList\u003CTsprojXmlAttribute\u003E",
+          "Required": false,
+          "Description": "Structured attributes for a direct Device/EtherCAT child.",
+          "Example": null
+        },
+        {
+          "Name": "EtherCatElements",
+          "Type": "IReadOnlyList\u003CIoStructuredElement\u003E",
+          "Required": false,
+          "Description": "Structured repeated Device/EtherCAT child elements such as DcMode when their meaning is known.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceEtherCatElements",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether same-name Device/EtherCAT child elements are replaced before EtherCatElements are added.",
+          "Example": "true"
+        },
+        {
+          "Name": "EthernetAttributes",
+          "Type": "IReadOnlyList\u003CTsprojXmlAttribute\u003E",
+          "Required": false,
+          "Description": "Structured attributes for a direct Device/Ethernet child.",
+          "Example": null
+        },
+        {
+          "Name": "EthernetElements",
+          "Type": "IReadOnlyList\u003CIoStructuredElement\u003E",
+          "Required": false,
+          "Description": "Structured repeated Device/Ethernet child elements such as Esl.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceEthernetElements",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether same-name Device/Ethernet child elements are replaced before EthernetElements are added.",
+          "Example": "true"
         },
         {
           "Name": "ExtraFragments",
@@ -3388,6 +4900,34 @@
           "Required": false,
           "Description": "Whether to insert Settings before System/Tasks when Settings is created and Tasks exists.",
           "Example": "true"
+        },
+        {
+          "Name": "MaxCpus",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional System/Settings MaxCpus attribute.",
+          "Example": null
+        },
+        {
+          "Name": "NonWinCpus",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional System/Settings NonWinCpus attribute.",
+          "Example": null
+        },
+        {
+          "Name": "CpuEntries",
+          "Type": "IReadOnlyList\u003CSystemCpuSetting\u003E",
+          "Required": false,
+          "Description": "Optional full Cpu entry list, including entries without CpuId.",
+          "Example": null
+        },
+        {
+          "Name": "ReplaceCpuEntries",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether existing Cpu children are replaced before CpuEntries are added.",
+          "Example": "false"
         }
       ],
       "Outputs": [],
@@ -3438,9 +4978,37 @@
           "Required": false,
           "Description": "Optional TaskDef IoAtBegin setting.",
           "Example": "true"
+        },
+        {
+          "Name": "TaskId",
+          "Type": "int?",
+          "Required": false,
+          "Description": "Optional Task Id attribute for matching a known runtime object id layout.",
+          "Example": null
         }
       ],
-      "Outputs": [],
+      "Outputs": [
+        {
+          "Name": "projectPath",
+          "Type": "string",
+          "Description": "Updated .tsproj path."
+        },
+        {
+          "Name": "taskName",
+          "Type": "string",
+          "Description": "Task node name."
+        },
+        {
+          "Name": "taskId",
+          "Type": "int?",
+          "Description": "Task Id attribute when provided."
+        },
+        {
+          "Name": "objectId",
+          "Type": "string?",
+          "Description": "Derived task ObjectId when TaskId is provided, for example #x02010020."
+        }
+      ],
       "VerificationNotes": [
         "Re-open the .tsproj and verify the Task attributes match the requested values."
       ]
@@ -4423,6 +5991,327 @@
       ],
       "VerificationNotes": [
         "If 100 or 10000 are not reachable, treat later PLC symbol read failures as runtime/router/permission failures rather than symbol-path failures."
+      ]
+    },
+    {
+      "Kind": "validation.assert-ads-state",
+      "MethodName": "AdsValidationService.AssertStates",
+      "Category": "validation",
+      "Summary": "Asserts that specific ADS ports are reachable and in the expected ADS state, turning activation false positives into hard failures.",
+      "Preconditions": [
+        "TwinCAT runtime or router must be installed on the target machine.",
+        "Use after activation when a plan needs exact ports such as 10000, 200, and 300 to be Run."
+      ],
+      "Inputs": [
+        {
+          "Name": "NetId",
+          "Type": "string",
+          "Required": false,
+          "Description": "AMS NetId, or local for the local router.",
+          "Example": "local"
+        },
+        {
+          "Name": "ExpectedPorts",
+          "Type": "IReadOnlyList\u003CExpectedAdsPortState\u003E",
+          "Required": true,
+          "Description": "Port/state assertions. Direct CLI accepts --expected=10000=Run;200=Run;300=Run, --ports=10000,200,300 --ads-state=Run, or --json-file.",
+          "Example": null
+        },
+        {
+          "Name": "DeviceState",
+          "Type": "short?",
+          "Required": false,
+          "Description": "Optional device state assertion per port.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "succeededCount",
+          "Type": "int",
+          "Description": "Number of ports that matched the expected state."
+        },
+        {
+          "Name": "failedCount",
+          "Type": "int",
+          "Description": "Number of ports that were unreachable or mismatched."
+        },
+        {
+          "Name": "statesText",
+          "Type": "string",
+          "Description": "Human-readable port=state assertions."
+        },
+        {
+          "Name": "statesJson",
+          "Type": "json",
+          "Description": "Per-port expected and actual ADS/device state."
+        }
+      ],
+      "VerificationNotes": [
+        "For OptCNC activation proof, require 10000=Run and system ports 200/300=Run instead of accepting a generic activation step success."
+      ]
+    },
+    {
+      "Kind": "validation.assert-event-log-window",
+      "MethodName": "AdsValidationService.AssertEventLogWindow",
+      "Category": "validation",
+      "Summary": "Asserts that no forbidden TcSysSrv Windows event-log entries appeared after a marker or within a recent time window.",
+      "Preconditions": [
+        "Use after activation and ADS state checks.",
+        "By default it fails on Error/Critical TcSysSrv events and AdsState: \u003E15\u003C Config messages."
+      ],
+      "Inputs": [
+        {
+          "Name": "Marker",
+          "Type": "EventLogWindowMarker?",
+          "Required": false,
+          "Description": "Inline marker returned by validation.mark-event-log-window.",
+          "Example": null
+        },
+        {
+          "Name": "MarkerFilePath",
+          "Type": "string?",
+          "Required": false,
+          "Description": "Marker JSON file written by validation.mark-event-log-window.",
+          "Example": null
+        },
+        {
+          "Name": "LogName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Windows event log name when no marker is supplied.",
+          "Example": "Application"
+        },
+        {
+          "Name": "ProviderName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Event source/provider when no marker is supplied.",
+          "Example": "TcSysSrv"
+        },
+        {
+          "Name": "LookbackSeconds",
+          "Type": "int",
+          "Required": false,
+          "Description": "Fallback lookback window when no marker is supplied.",
+          "Example": "300"
+        },
+        {
+          "Name": "FailOnErrorOrCritical",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether Error/Critical entries fail the step.",
+          "Example": "true"
+        },
+        {
+          "Name": "FailOnConfigAdsState",
+          "Type": "bool",
+          "Required": false,
+          "Description": "Whether AdsState: \u003E15\u003C Config messages fail the step.",
+          "Example": "true"
+        },
+        {
+          "Name": "FailMessageContains",
+          "Type": "IReadOnlyList\u003Cstring\u003E?",
+          "Required": false,
+          "Description": "Additional message substrings that should fail the step.",
+          "Example": null
+        },
+        {
+          "Name": "MaxEvents",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum events to include in output; zero means no cap.",
+          "Example": "50"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "observedEventCount",
+          "Type": "int",
+          "Description": "Provider event count observed in the window."
+        },
+        {
+          "Name": "errorOrCriticalCount",
+          "Type": "int",
+          "Description": "Error/Critical event count in the window."
+        },
+        {
+          "Name": "configAdsStateCount",
+          "Type": "int",
+          "Description": "AdsState \u003E15\u003C Config message count in the window."
+        },
+        {
+          "Name": "errorsText",
+          "Type": "string",
+          "Description": "Human-readable assertion failures."
+        },
+        {
+          "Name": "assertionJson",
+          "Type": "json",
+          "Description": "Full event window assertion result."
+        }
+      ],
+      "VerificationNotes": [
+        "For OptCNC activation proof, this step closes the gap where engineering.activate-configuration succeeds but TcSysSrv immediately reports an error or returns to Config."
+      ]
+    },
+    {
+      "Kind": "validation.assert-process-crash-window",
+      "MethodName": "AdsValidationService.AssertProcessCrashWindow",
+      "Category": "validation",
+      "Summary": "Asserts that no matching Windows Application crash events appeared after a marker or within a recent time window.",
+      "Preconditions": [
+        "Use after Visual Studio/XAE launch, solution open, build, or activation when unattended runs must distinguish a COM/RPC disconnect from a crashed IDE host.",
+        "By default it checks Application Error, .NET Runtime, and Windows Error Reporting events for devenv.exe, TcXaeShell.exe, and TwinCAT System Manager modules."
+      ],
+      "Inputs": [
+        {
+          "Name": "Marker",
+          "Type": "EventLogWindowMarker?",
+          "Required": false,
+          "Description": "Inline marker returned by validation.mark-event-log-window.",
+          "Example": null
+        },
+        {
+          "Name": "MarkerFilePath",
+          "Type": "string?",
+          "Required": false,
+          "Description": "Marker JSON file written by validation.mark-event-log-window.",
+          "Example": null
+        },
+        {
+          "Name": "LogName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Windows event log name.",
+          "Example": "Application"
+        },
+        {
+          "Name": "LookbackSeconds",
+          "Type": "int",
+          "Required": false,
+          "Description": "Fallback lookback window when no marker is supplied.",
+          "Example": "300"
+        },
+        {
+          "Name": "ProviderNames",
+          "Type": "IReadOnlyList\u003Cstring\u003E?",
+          "Required": false,
+          "Description": "Event sources to scan. Direct CLI accepts semicolon-separated provider names.",
+          "Example": null
+        },
+        {
+          "Name": "ProcessNames",
+          "Type": "IReadOnlyList\u003Cstring\u003E?",
+          "Required": false,
+          "Description": "Process names that should fail when found in an event message.",
+          "Example": null
+        },
+        {
+          "Name": "ModuleNames",
+          "Type": "IReadOnlyList\u003Cstring\u003E?",
+          "Required": false,
+          "Description": "Fault module names that should fail when found in an event message.",
+          "Example": null
+        },
+        {
+          "Name": "MessageContains",
+          "Type": "IReadOnlyList\u003Cstring\u003E?",
+          "Required": false,
+          "Description": "Additional message substrings that should fail the step.",
+          "Example": null
+        },
+        {
+          "Name": "MaxEvents",
+          "Type": "int",
+          "Required": false,
+          "Description": "Maximum events to include in output; zero means no cap.",
+          "Example": "100"
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "observedEventCount",
+          "Type": "int",
+          "Description": "Application event count observed in the window."
+        },
+        {
+          "Name": "matchingEventCount",
+          "Type": "int",
+          "Description": "Crash event count matching the requested process/module/message filters."
+        },
+        {
+          "Name": "errorsText",
+          "Type": "string",
+          "Description": "Human-readable assertion failures."
+        },
+        {
+          "Name": "matchingEventsJson",
+          "Type": "json",
+          "Description": "Matching crash event snapshots."
+        },
+        {
+          "Name": "assertionJson",
+          "Type": "json",
+          "Description": "Full process crash assertion result."
+        }
+      ],
+      "VerificationNotes": [
+        "For OptCNC, use the same marker file as the activation TcSysSrv event guard so a Visual Studio/XAE crash becomes an explicit validation failure instead of only an RPC error."
+      ]
+    },
+    {
+      "Kind": "validation.mark-event-log-window",
+      "MethodName": "AdsValidationService.MarkEventLogWindow",
+      "Category": "validation",
+      "Summary": "Marks the current Windows event-log position so a later step can assert only events from the same activation window.",
+      "Preconditions": [
+        "Use immediately before engineering.activate-configuration.",
+        "This step is read-only and does not require Visual Studio or ADS."
+      ],
+      "Inputs": [
+        {
+          "Name": "LogName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Windows event log name.",
+          "Example": "Application"
+        },
+        {
+          "Name": "ProviderName",
+          "Type": "string",
+          "Required": false,
+          "Description": "Event source/provider to mark.",
+          "Example": "TcSysSrv"
+        },
+        {
+          "Name": "MarkerFilePath",
+          "Type": "string?",
+          "Required": false,
+          "Description": "Optional JSON file path where the marker should be written for a later plan step.",
+          "Example": null
+        }
+      ],
+      "Outputs": [
+        {
+          "Name": "markedAt",
+          "Type": "datetime",
+          "Description": "Marker timestamp."
+        },
+        {
+          "Name": "lastEntryIndex",
+          "Type": "int?",
+          "Description": "Last observed provider event index at marker time."
+        },
+        {
+          "Name": "markerJson",
+          "Type": "json",
+          "Description": "Marker payload usable by validation.assert-event-log-window."
+        }
+      ],
+      "VerificationNotes": [
+        "For OptCNC, write the marker to evidenceDir before activation, then pass the marker file to validation.assert-event-log-window after ADS assertions."
       ]
     }
   ]

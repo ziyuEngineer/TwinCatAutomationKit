@@ -5,8 +5,10 @@ internal static class CliOptionParser
     public static Dictionary<string, string> Parse(IEnumerable<string> args)
     {
         Dictionary<string, string> options = new(StringComparer.OrdinalIgnoreCase);
-        foreach (string arg in args)
+        string[] tokens = args.ToArray();
+        for (int index = 0; index < tokens.Length; index++)
         {
+            string arg = tokens[index];
             if (!arg.StartsWith("--", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -15,6 +17,13 @@ internal static class CliOptionParser
             int separatorIndex = arg.IndexOf('=');
             if (separatorIndex < 0)
             {
+                if (index + 1 < tokens.Length &&
+                    !tokens[index + 1].StartsWith("--", StringComparison.OrdinalIgnoreCase))
+                {
+                    options[arg[2..]] = tokens[++index];
+                    continue;
+                }
+
                 options[arg[2..]] = "true";
                 continue;
             }
@@ -38,6 +47,37 @@ internal static class CliOptionParser
         }
 
         return null;
+    }
+
+    public static Dictionary<string, string> GetPrefixedOptions(
+        IReadOnlyDictionary<string, string> options,
+        string prefix)
+    {
+        Dictionary<string, string> result = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string key, string value) in options)
+        {
+            if (key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                result[key[prefix.Length..]] = value;
+            }
+        }
+
+        if (options.TryGetValue(prefix.TrimEnd(':'), out string? compactValues) &&
+            !string.IsNullOrWhiteSpace(compactValues))
+        {
+            foreach (string item in compactValues.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                int separatorIndex = item.IndexOf('=');
+                if (separatorIndex <= 0)
+                {
+                    throw new InvalidOperationException($"--{prefix.TrimEnd(':')} entries must use name=value. Actual='{item}'.");
+                }
+
+                result[item[..separatorIndex].Trim()] = item[(separatorIndex + 1)..].Trim();
+            }
+        }
+
+        return result;
     }
 
     public static string RequireOption(
@@ -81,6 +121,24 @@ internal static class CliOptionParser
         if (string.IsNullOrWhiteSpace(raw))
         {
             return fallback;
+        }
+
+        if (!bool.TryParse(raw, out bool value))
+        {
+            throw new InvalidOperationException($"--{key} must be true or false. Actual='{raw}'.");
+        }
+
+        return value;
+    }
+
+    public static bool? GetNullableBoolOption(
+        IReadOnlyDictionary<string, string> options,
+        string key)
+    {
+        string? raw = GetOption(options, key);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
         }
 
         if (!bool.TryParse(raw, out bool value))

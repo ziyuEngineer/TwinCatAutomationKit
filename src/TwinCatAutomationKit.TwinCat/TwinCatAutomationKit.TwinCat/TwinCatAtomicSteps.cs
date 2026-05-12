@@ -16,6 +16,7 @@ public static class TwinCatStateKeys
     public const string LastTaskObjectId = "twincat.lastTaskObjectId";
     public const string LastAdsValue = "twincat.lastAdsValue";
     public const string LastAdsValues = "twincat.lastAdsValues";
+    public const string LastAdsStateAssertion = "twincat.lastAdsStateAssertion";
 }
 
 public static class TwinCatAtomicSteps
@@ -1473,6 +1474,140 @@ public static class TwinCatAtomicSteps
                 return StepExecutionOutcome.Success(
                     "ADS read symbols completed: " + valuesText,
                     outputs);
+            });
+
+    public static IAutomationStep AssertAdsState(
+        string stepId,
+        AdsValidationService service,
+        AssertAdsStateRequest request,
+        string lastResultStateKey = TwinCatStateKeys.LastAdsStateAssertion) =>
+        Create(
+            stepId,
+            "Assert ADS State",
+            "validation.assert-ads-state",
+            context =>
+            {
+                AssertAdsStateResult result = service.AssertStates(request);
+                string statesText = string.Join(
+                    "; ",
+                    result.Ports.Select(port =>
+                        port.Succeeded
+                            ? $"{port.Port}={port.ActualAdsState}"
+                            : $"{port.Port}=<expected {port.ExpectedAdsState}, actual {port.ActualAdsState ?? "(unreachable)"}: {port.ErrorMessage}>"));
+
+                context.State.Set(lastResultStateKey, result);
+                IReadOnlyDictionary<string, string?> outputs = new Dictionary<string, string?>
+                {
+                    ["succeededCount"] = result.SucceededCount.ToString(),
+                    ["failedCount"] = result.FailedCount.ToString(),
+                    ["statesText"] = statesText,
+                    ["statesJson"] = JsonSerializer.Serialize(result.Ports, AdsJsonOptions)
+                };
+
+                if (!result.Succeeded)
+                {
+                    return new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        "ADS state assertion failed: " + statesText,
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+                }
+
+                return StepExecutionOutcome.Success(
+                    "ADS state assertion succeeded: " + statesText,
+                    outputs);
+            });
+
+    public static IAutomationStep MarkEventLogWindow(
+        string stepId,
+        AdsValidationService service,
+        MarkEventLogWindowRequest request,
+        string lastMarkerStateKey = "event.lastWindowMarker") =>
+        Create(
+            stepId,
+            "Mark Event Log Window",
+            "validation.mark-event-log-window",
+            context =>
+            {
+                EventLogWindowMarker marker = service.MarkEventLogWindow(request);
+                context.State.Set(lastMarkerStateKey, marker);
+                IReadOnlyDictionary<string, string?> outputs = new Dictionary<string, string?>
+                {
+                    ["markedAt"] = marker.MarkedAt.ToString("O"),
+                    ["lastEntryIndex"] = marker.LastEntryIndex?.ToString(),
+                    ["markerJson"] = JsonSerializer.Serialize(marker, AdsJsonOptions)
+                };
+
+                return StepExecutionOutcome.Success(
+                    $"Event log window marked for {marker.ProviderName}.",
+                    outputs);
+            });
+
+    public static IAutomationStep AssertEventLogWindow(
+        string stepId,
+        AdsValidationService service,
+        AssertEventLogWindowRequest request,
+        string lastResultStateKey = "event.lastWindowAssertion") =>
+        Create(
+            stepId,
+            "Assert Event Log Window",
+            "validation.assert-event-log-window",
+            context =>
+            {
+                AssertEventLogWindowResult result = service.AssertEventLogWindow(request);
+                context.State.Set(lastResultStateKey, result);
+                IReadOnlyDictionary<string, string?> outputs = new Dictionary<string, string?>
+                {
+                    ["observedEventCount"] = result.ObservedEventCount.ToString(),
+                    ["errorOrCriticalCount"] = result.ErrorOrCriticalCount.ToString(),
+                    ["configAdsStateCount"] = result.ConfigAdsStateCount.ToString(),
+                    ["errorsText"] = string.Join("; ", result.Errors),
+                    ["assertionJson"] = JsonSerializer.Serialize(result, AdsJsonOptions)
+                };
+
+                if (!result.Succeeded)
+                {
+                    return new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary,
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+                }
+
+                return StepExecutionOutcome.Success(result.Summary, outputs);
+            });
+
+    public static IAutomationStep AssertProcessCrashWindow(
+        string stepId,
+        AdsValidationService service,
+        AssertProcessCrashWindowRequest request,
+        string lastResultStateKey = "event.lastProcessCrashAssertion") =>
+        Create(
+            stepId,
+            "Assert Process Crash Window",
+            "validation.assert-process-crash-window",
+            context =>
+            {
+                AssertProcessCrashWindowResult result = service.AssertProcessCrashWindow(request);
+                context.State.Set(lastResultStateKey, result);
+                IReadOnlyDictionary<string, string?> outputs = new Dictionary<string, string?>
+                {
+                    ["observedEventCount"] = result.ObservedEventCount.ToString(),
+                    ["matchingEventCount"] = result.MatchingEventCount.ToString(),
+                    ["errorsText"] = string.Join("; ", result.Errors),
+                    ["assertionJson"] = JsonSerializer.Serialize(result, AdsJsonOptions)
+                };
+
+                if (!result.Succeeded)
+                {
+                    return new StepExecutionOutcome(
+                        StepExecutionStatus.Failed,
+                        result.Summary,
+                        outputs,
+                        Array.Empty<EvidenceArtifact>());
+                }
+
+                return StepExecutionOutcome.Success(result.Summary, outputs);
             });
 
     public static IAutomationStep GrantSigningCertificate(

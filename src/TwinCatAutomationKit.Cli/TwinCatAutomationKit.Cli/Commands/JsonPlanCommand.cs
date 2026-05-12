@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using TwinCatAutomationKit.Abstractions;
 
@@ -20,12 +21,22 @@ public static class JsonPlanCommand
         string planPath = Path.GetFullPath(CliOptionParser.RequireOption(options, "file", "plan"));
         bool dryRun = CliOptionParser.GetBoolOption(options, "dry-run", false);
         bool stopOnFailure = CliOptionParser.GetBoolOption(options, "stop-on-failure", true);
+        int commandTimeoutMs = CliOptionParser.GetIntOption(options, "command-timeout-ms", 0);
+        bool reuseEngineeringSession = CliOptionParser.GetBoolOption(options, "reuse-engineering-session", false);
         string? summaryPath = CliOptionParser.GetOption(options, "summary");
 
         try
         {
             JsonAutomationPlan plan = LoadPlan(planPath);
-            JsonPlanExecutionResult result = Execute(plan, planPath, dryRun, stopOnFailure);
+            Dictionary<string, string> variableOverrides = CliOptionParser.GetPrefixedOptions(options, "var:");
+            JsonPlanExecutionResult result = Execute(
+                plan,
+                planPath,
+                dryRun,
+                stopOnFailure,
+                commandTimeoutMs,
+                variableOverrides,
+                reuseEngineeringSession);
 
             if (!string.IsNullOrWhiteSpace(summaryPath))
             {
@@ -93,10 +104,17 @@ public static class JsonPlanCommand
         return plan;
     }
 
-    public static JsonPlanExecutionResult Execute(JsonAutomationPlan plan, string planPath, bool dryRun, bool stopOnFailure)
+    public static JsonPlanExecutionResult Execute(
+        JsonAutomationPlan plan,
+        string planPath,
+        bool dryRun,
+        bool stopOnFailure,
+        int commandTimeoutMs = 0,
+        IReadOnlyDictionary<string, string>? variableOverrides = null,
+        bool reuseEngineeringSession = false)
     {
         string planDirectory = Path.GetDirectoryName(Path.GetFullPath(planPath)) ?? Directory.GetCurrentDirectory();
-        Dictionary<string, string> variables = BuildVariables(plan, planDirectory);
+        Dictionary<string, string> variables = BuildVariables(plan, planDirectory, variableOverrides);
         Dictionary<string, JsonPlanStepResult> completedSteps = new(StringComparer.OrdinalIgnoreCase);
         List<JsonPlanStepResult> results = [];
         List<JsonPlanFile> pendingFiles = [.. plan.Files];
@@ -104,6 +122,14 @@ public static class JsonPlanCommand
         Console.WriteLine($"Plan: {plan.Name ?? Path.GetFileNameWithoutExtension(planPath)}");
         Console.WriteLine($"File: {Path.GetFullPath(planPath)}");
         Console.WriteLine(dryRun ? "Mode: dry-run" : "Mode: execute");
+        if (reuseEngineeringSession && !dryRun)
+        {
+            Console.WriteLine("Engineering session reuse: enabled");
+            if (commandTimeoutMs > 0)
+            {
+                Console.WriteLine("Per-step command timeout: disabled for low-risk reused engineering steps; launch/open/export/build/activation keep the timeout for unattended runs.");
+            }
+        }
 
         if (dryRun)
         {
@@ -118,6 +144,11 @@ public static class JsonPlanCommand
             WriteReadyFiles(pendingFiles, variables, completedSteps);
         }
 
+        using IDisposable? engineeringSessionReuseScope = reuseEngineeringSession && !dryRun
+            ? StepInvokeCommand.BeginEngineeringSessionReuse()
+            : null;
+
+        bool stopRequestedAfterFailure = false;
         foreach (JsonAutomationStep step in plan.Steps)
         {
             if (!dryRun)
@@ -125,19 +156,51 @@ public static class JsonPlanCommand
                 WriteReadyFiles(pendingFiles, variables, completedSteps);
             }
 
-            bool enabled = ResolveEnabled(step, variables, completedSteps, dryRun);
-            Dictionary<string, string> stepOptions = MergeOptions(plan.Defaults, step.Options, variables, completedSteps, dryRun);
-            Dictionary<string, string> redactedStepOptions = RedactSensitiveOptions(stepOptions);
+            bool runAfterFailure = stopRequestedAfterFailure
+                ? ResolveRunAfterFailureAfterStop(step, variables, completedSteps, dryRun)
+                : ResolveRunAfterFailure(step, variables, completedSteps, dryRun);
             Console.WriteLine();
             Console.WriteLine($"[{results.Count + 1:00}] {step.Id}: {step.Kind}");
 
-            if (!enabled)
+            if (stopRequestedAfterFailure && !runAfterFailure)
             {
-                JsonPlanStepResult skipped = JsonPlanStepResult.Skipped(step.Id, step.Kind, "Step disabled by plan.");
+                Dictionary<string, string> skippedOptions = [];
+                JsonPlanStepResult skipped = JsonPlanStepResult.Skipped(
+                    step.Id,
+                    step.Kind,
+                    "Step skipped after a previous failure requested stop-on-failure.",
+                    skippedOptions);
                 results.Add(skipped);
                 completedSteps[step.Id] = skipped;
                 Console.WriteLine("Status: Skipped");
                 continue;
+            }
+
+            bool enabled = ResolveEnabled(step, variables, completedSteps, dryRun);
+            if (!enabled)
+            {
+                Dictionary<string, string> skippedOptions = [];
+                if (runAfterFailure)
+                {
+                    skippedOptions["_runAfterFailure"] = "true";
+                }
+
+                JsonPlanStepResult skipped = JsonPlanStepResult.Skipped(
+                    step.Id,
+                    step.Kind,
+                    "Step disabled by plan.",
+                    skippedOptions);
+                results.Add(skipped);
+                completedSteps[step.Id] = skipped;
+                Console.WriteLine("Status: Skipped");
+                continue;
+            }
+
+            Dictionary<string, string> stepOptions = MergeOptions(plan.Defaults, step.Options, variables, completedSteps, dryRun);
+            Dictionary<string, string> redactedStepOptions = RedactSensitiveOptions(stepOptions);
+            if (runAfterFailure)
+            {
+                redactedStepOptions["_runAfterFailure"] = "true";
             }
 
             if (dryRun)
@@ -152,7 +215,23 @@ public static class JsonPlanCommand
             DateTimeOffset startedAt = DateTimeOffset.Now;
             try
             {
-                StepExecutionOutcome outcome = StepInvokeCommand.ExecutePlanStep(step.Kind, stepOptions);
+                int stepCommandTimeoutMs = ResolveStepCommandTimeout(stepOptions, commandTimeoutMs);
+                if (reuseEngineeringSession)
+                {
+                    if (StepInvokeCommand.SupportsEngineeringSessionReuse(step.Kind))
+                    {
+                        if (!StepInvokeCommand.RequiresCommandTimeoutWhenReusingEngineeringSession(step.Kind))
+                        {
+                            stepCommandTimeoutMs = 0;
+                        }
+                    }
+                    else
+                    {
+                        StepInvokeCommand.CloseReusedEngineeringSessionIfOpen(saveBeforeClose: true);
+                    }
+                }
+
+                StepExecutionOutcome outcome = StepInvokeCommand.ExecutePlanStep(step.Kind, stepOptions, stepCommandTimeoutMs);
                 JsonPlanStepResult result = JsonPlanStepResult.FromOutcome(step.Id, step.Kind, startedAt, DateTimeOffset.Now, redactedStepOptions, outcome);
                 results.Add(result);
                 completedSteps[step.Id] = result;
@@ -165,7 +244,18 @@ public static class JsonPlanCommand
 
                 if (outcome.Status == StepExecutionStatus.Failed && stopOnFailure)
                 {
-                    break;
+                    if (reuseEngineeringSession)
+                    {
+                        StepInvokeCommand.AbandonReusedEngineeringSessionIfOpen();
+                    }
+
+                    stopRequestedAfterFailure = true;
+                    continue;
+                }
+
+                if (outcome.Status == StepExecutionStatus.Failed && reuseEngineeringSession)
+                {
+                    StepInvokeCommand.AbandonReusedEngineeringSessionIfOpen();
                 }
             }
             catch (Exception ex)
@@ -175,14 +265,25 @@ public static class JsonPlanCommand
                 completedSteps[step.Id] = failed;
                 Console.WriteLine("Status: Failed");
                 Console.WriteLine("Result: " + ex.Message);
-                if (stopOnFailure)
+                if (reuseEngineeringSession)
                 {
-                    break;
+                    StepInvokeCommand.AbandonReusedEngineeringSessionIfOpen();
+                }
+
+                if (stopOnFailure || ex is TimeoutException)
+                {
+                    stopRequestedAfterFailure = true;
+                    continue;
                 }
             }
         }
 
-        if (!dryRun)
+        if (!dryRun && reuseEngineeringSession)
+        {
+            StepInvokeCommand.CloseReusedEngineeringSessionIfOpen(saveBeforeClose: true);
+        }
+
+        if (!dryRun && !stopRequestedAfterFailure)
         {
             WriteReadyFiles(pendingFiles, variables, completedSteps);
             if (pendingFiles.Count > 0)
@@ -190,6 +291,10 @@ public static class JsonPlanCommand
                 string paths = string.Join(", ", pendingFiles.Select(file => file.Path));
                 throw new InvalidOperationException($"Some plan payload files still contain unresolved step output references: {paths}");
             }
+        }
+        else if (!dryRun && pendingFiles.Count > 0)
+        {
+            Console.WriteLine($"Deferred payload files left unresolved after stop-on-failure: {pendingFiles.Count}");
         }
 
         bool succeeded = results.All(item =>
@@ -203,6 +308,17 @@ public static class JsonPlanCommand
         Console.WriteLine($"  Failed:    {results.Count(item => item.Status == nameof(StepExecutionStatus.Failed))}");
 
         return new JsonPlanExecutionResult(plan.Name, dryRun, succeeded, results);
+    }
+
+    private static int ResolveStepCommandTimeout(IReadOnlyDictionary<string, string> stepOptions, int planDefaultTimeoutMs)
+    {
+        if (stepOptions.TryGetValue("command-timeout-ms", out string? timeoutText) &&
+            int.TryParse(timeoutText, out int stepTimeoutMs))
+        {
+            return stepTimeoutMs;
+        }
+
+        return planDefaultTimeoutMs;
     }
 
     private static Dictionary<string, string> RedactSensitiveOptions(IReadOnlyDictionary<string, string> options)
@@ -246,7 +362,10 @@ public static class JsonPlanCommand
         TokenPattern.Matches(value)
             .Any(match => match.Groups[1].Value.Trim().StartsWith("steps.", StringComparison.OrdinalIgnoreCase));
 
-    private static Dictionary<string, string> BuildVariables(JsonAutomationPlan plan, string planDirectory)
+    private static Dictionary<string, string> BuildVariables(
+        JsonAutomationPlan plan,
+        string planDirectory,
+        IReadOnlyDictionary<string, string>? overrides)
     {
         Dictionary<string, string> variables = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -256,7 +375,20 @@ public static class JsonPlanCommand
 
         foreach ((string key, JsonElement value) in plan.Variables)
         {
-            variables[key] = ConvertJsonValueToString(value, variables, new Dictionary<string, JsonPlanStepResult>(StringComparer.OrdinalIgnoreCase), allowUnresolvedStepReferences: false);
+            variables[key] = ConvertJsonValueToRawString(value);
+        }
+
+        if (overrides is not null)
+        {
+            foreach ((string key, string value) in overrides)
+            {
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    throw new InvalidOperationException("Variable override key cannot be empty.");
+                }
+
+                variables[key] = value;
+            }
         }
 
         for (int i = 0; i < 8; i++)
@@ -281,6 +413,20 @@ public static class JsonPlanCommand
         throw new InvalidOperationException("Variable interpolation did not converge. Check for circular ${...} references.");
     }
 
+    private static string ConvertJsonValueToRawString(JsonElement value)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString() ?? string.Empty,
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Null => string.Empty,
+            JsonValueKind.Object or JsonValueKind.Array => value.GetRawText(),
+            _ => string.Empty
+        };
+    }
+
     private static bool ResolveEnabled(
         JsonAutomationStep step,
         IReadOnlyDictionary<string, string> variables,
@@ -296,6 +442,52 @@ public static class JsonPlanCommand
         return bool.TryParse(value, out bool parsed)
             ? parsed
             : throw new InvalidOperationException($"Step '{step.Id}' has invalid enabled value '{value}'.");
+    }
+
+    private static bool ResolveRunAfterFailure(
+        JsonAutomationStep step,
+        IReadOnlyDictionary<string, string> variables,
+        IReadOnlyDictionary<string, JsonPlanStepResult> completedSteps,
+        bool dryRun)
+    {
+        if (step.RunAfterFailure.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return false;
+        }
+
+        string value = ConvertJsonValueToString(step.RunAfterFailure, variables, completedSteps, dryRun);
+        return bool.TryParse(value, out bool parsed)
+            ? parsed
+            : throw new InvalidOperationException($"Step '{step.Id}' has invalid runAfterFailure value '{value}'.");
+    }
+
+    private static bool ResolveRunAfterFailureAfterStop(
+        JsonAutomationStep step,
+        IReadOnlyDictionary<string, string> variables,
+        IReadOnlyDictionary<string, JsonPlanStepResult> completedSteps,
+        bool dryRun)
+    {
+        if (step.RunAfterFailure.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return false;
+        }
+
+        string value;
+        try
+        {
+            value = ConvertJsonValueToString(step.RunAfterFailure, variables, completedSteps, allowUnresolvedStepReferences: true);
+        }
+        catch (InvalidOperationException) when (!dryRun)
+        {
+            return false;
+        }
+
+        if (ContainsUnresolvedStepReference(value))
+        {
+            return false;
+        }
+
+        return bool.TryParse(value, out bool parsed) && parsed;
     }
 
     private static Dictionary<string, string> MergeOptions(
@@ -332,9 +524,54 @@ public static class JsonPlanCommand
             JsonValueKind.True => "true",
             JsonValueKind.False => "false",
             JsonValueKind.Null => string.Empty,
-            JsonValueKind.Object or JsonValueKind.Array => ResolveString(value.GetRawText(), variables, completedSteps, allowUnresolvedStepReferences),
+            JsonValueKind.Object or JsonValueKind.Array => ResolveJsonNode(value, variables, completedSteps, allowUnresolvedStepReferences)?.ToJsonString(JsonOptions) ?? "null",
             _ => string.Empty
         };
+    }
+
+    private static JsonNode? ResolveJsonNode(
+        JsonElement value,
+        IReadOnlyDictionary<string, string> variables,
+        IReadOnlyDictionary<string, JsonPlanStepResult> completedSteps,
+        bool allowUnresolvedStepReferences)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                JsonObject obj = [];
+                foreach (JsonProperty property in value.EnumerateObject())
+                {
+                    obj[property.Name] = ResolveJsonNode(property.Value, variables, completedSteps, allowUnresolvedStepReferences);
+                }
+
+                return obj;
+
+            case JsonValueKind.Array:
+                JsonArray array = [];
+                foreach (JsonElement item in value.EnumerateArray())
+                {
+                    array.Add(ResolveJsonNode(item, variables, completedSteps, allowUnresolvedStepReferences));
+                }
+
+                return array;
+
+            case JsonValueKind.String:
+                return JsonValue.Create(ResolveString(value.GetString() ?? string.Empty, variables, completedSteps, allowUnresolvedStepReferences));
+
+            case JsonValueKind.Number:
+                return JsonNode.Parse(value.GetRawText());
+
+            case JsonValueKind.True:
+                return JsonValue.Create(true);
+
+            case JsonValueKind.False:
+                return JsonValue.Create(false);
+
+            case JsonValueKind.Null:
+            case JsonValueKind.Undefined:
+            default:
+                return null;
+        }
     }
 
     private static string ResolveString(
@@ -394,7 +631,8 @@ public sealed record JsonAutomationStep(
     string Id,
     string Kind,
     Dictionary<string, JsonElement> Options,
-    JsonElement Enabled)
+    JsonElement Enabled,
+    JsonElement RunAfterFailure)
 {
     public Dictionary<string, JsonElement> Options { get; init; } = Options ?? new(StringComparer.OrdinalIgnoreCase);
 }
@@ -419,8 +657,12 @@ public sealed record JsonPlanStepResult(
     public static JsonPlanStepResult DryRun(string id, string kind, IReadOnlyDictionary<string, string> options) =>
         new(id, kind, "DryRun", "Step was resolved but not executed.", null, null, options, EmptyOutputs, []);
 
-    public static JsonPlanStepResult Skipped(string id, string kind, string summary) =>
-        new(id, kind, nameof(StepExecutionStatus.Skipped), summary, null, null, EmptyOptions, EmptyOutputs, []);
+    public static JsonPlanStepResult Skipped(
+        string id,
+        string kind,
+        string summary,
+        IReadOnlyDictionary<string, string>? options = null) =>
+        new(id, kind, nameof(StepExecutionStatus.Skipped), summary, null, null, options ?? EmptyOptions, EmptyOutputs, []);
 
     public static JsonPlanStepResult Failed(
         string id,

@@ -8,8 +8,11 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using EnvDTE;
+using Microsoft.Win32;
 using TwinCatAutomationKit.Abstractions;
 using TCatSysManagerLib;
+using DiagnosticsProcess = System.Diagnostics.Process;
+using DiagnosticsProcessStartInfo = System.Diagnostics.ProcessStartInfo;
 using ThreadingThread = System.Threading.Thread;
 
 namespace TwinCatAutomationKit.TwinCat;
@@ -23,6 +26,10 @@ public sealed class TwinCatEngineeringService
     private const int ComServerExecFailure = unchecked((int)0x80080005);
     private const string TcModuleClassSchema = "http://www.beckhoff.com/schemas/2009/05/TcModuleClass";
     private const string TcCppLicenseId = "{304D006A-8299-4560-AB79-438534B50288}";
+    private const string TwinCatScopeProjectTypeGuid = "{FD9F1D59-E000-42F3-8744-88DE1BE93C06}";
+
+    private static readonly IReadOnlyDictionary<string, int> EmptyAutoDismissedDialogs =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
     private static readonly IReadOnlyDictionary<string, TmcTypeInfo> BuiltInTmcTypes =
         new Dictionary<string, TmcTypeInfo>(StringComparer.OrdinalIgnoreCase)
@@ -58,16 +65,138 @@ public sealed class TwinCatEngineeringService
         Type dteType = Type.GetTypeFromProgID(request.ProgId, throwOnError: true)
             ?? throw new InvalidOperationException($"Unable to resolve DTE ProgId '{request.ProgId}'.");
 
-        (DTE dte, bool attachedToExisting) = CreateOrAttachVisualStudioDte(dteType, request.ProgId);
-        ThreadingThread.Sleep(request.StartupDelayMs);
-        RetryComCall(() => dte.SuppressUI = false);
-        if (!attachedToExisting)
+        (
+            DTE dte,
+            bool attachedToExisting,
+            IReadOnlyCollection<int> targetProcessIds,
+            IReadOnlyDictionary<string, int> launchAutoDismissedDialogs) =
+            CreateOrAttachVisualStudioDte(
+                dteType,
+                request.ProgId,
+                request.LaunchTimeoutMs,
+                request.AttachToExisting,
+                request.EnableDialogAutoDismiss,
+                request.DialogPollIntervalMs,
+                request.RootSuffix,
+                request.DteHostPath,
+                request.PreferDteHostLaunch);
+        TwinCatEngineeringSession.TwinCatDialogAutoDismissScope? startupDialogScope = null;
+        try
         {
-            RetryComCall(() => dte.MainWindow.Visible = request.Visible);
-            RetryComCall(() => dte.UserControl = false);
+            if (request.EnableDialogAutoDismiss && targetProcessIds.Count > 0)
+            {
+                startupDialogScope = TwinCatEngineeringSession.TwinCatDialogAutoDismissScope.Start(
+                    targetProcessIds,
+                    request.DialogPollIntervalMs);
+            }
+
+            ThreadingThread.Sleep(request.StartupDelayMs);
+            RetryComCall(() => dte.SuppressUI = request.SuppressUi);
+            if (!attachedToExisting)
+            {
+                RetryComCall(() => dte.MainWindow.Visible = request.Visible);
+                RetryComCall(() => dte.UserControl = false);
+            }
+
+            return new TwinCatEngineeringSession(
+                dte,
+                attachedToExisting,
+                targetProcessIds,
+                request.EnableDialogAutoDismiss,
+                request.DialogPollIntervalMs,
+                MergeAutoDismissedDialogs(launchAutoDismissedDialogs, startupDialogScope?.Snapshot()));
+        }
+        finally
+        {
+            startupDialogScope?.Dispose();
+        }
+    }
+
+    public CleanupDteHostProcessesResult CleanupDteHostProcesses(CleanupDteHostProcessesRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        IReadOnlyList<string> processNames = request.ProcessNames is { Count: > 0 }
+            ? request.ProcessNames
+            : DteHostProcessNames;
+        HashSet<int> requestedProcessIds = request.ProcessIds is { Count: > 0 }
+            ? new HashSet<int>(request.ProcessIds)
+            : [];
+
+        List<DteHostProcessCleanupItem> items = [];
+        foreach (string processName in processNames.Where(item => !string.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (DiagnosticsProcess process in DiagnosticsProcess.GetProcessesByName(processName))
+            {
+                using (process)
+                {
+                    int processId;
+                    try
+                    {
+                        processId = process.Id;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        continue;
+                    }
+
+                    string? title = TryReadProcessString(() => process.MainWindowTitle);
+                    string? path = TryReadProcessString(() => process.MainModule?.FileName);
+                    DateTimeOffset? startTime = TryReadProcessTime(process);
+                    bool explicitProcessMatch = requestedProcessIds.Count == 0 || requestedProcessIds.Contains(processId);
+                    bool windowMatch = request.IncludeWindowed || string.IsNullOrWhiteSpace(title);
+                    bool matched = explicitProcessMatch && windowMatch;
+                    bool killed = false;
+                    string? error = null;
+
+                    if (matched && !request.DryRun)
+                    {
+                        try
+                        {
+                            process.Kill(request.KillProcessTree);
+                            killed = true;
+                        }
+                        catch (InvalidOperationException)
+                        {
+                            error = "Process exited before cleanup.";
+                        }
+                        catch (System.ComponentModel.Win32Exception ex)
+                        {
+                            error = ex.Message;
+                        }
+                        catch (NotSupportedException ex)
+                        {
+                            error = ex.Message;
+                        }
+                    }
+
+                    items.Add(new DteHostProcessCleanupItem(
+                        processId,
+                        process.ProcessName,
+                        title,
+                        path,
+                        startTime,
+                        matched,
+                        killed,
+                        error));
+                }
+            }
         }
 
-        return new TwinCatEngineeringSession(dte);
+        int matchedCount = items.Count(item => item.Matched);
+        int killedCount = items.Count(item => item.Killed);
+        bool succeeded = request.DryRun || items.Where(item => item.Matched).All(item => item.Killed || item.ErrorMessage == "Process exited before cleanup.");
+        string summary = request.DryRun
+            ? $"DTE host cleanup dry-run found {matchedCount} candidate process(es)."
+            : $"DTE host cleanup killed {killedCount} of {matchedCount} candidate process(es).";
+
+        return new CleanupDteHostProcessesResult(
+            succeeded,
+            request.DryRun,
+            matchedCount,
+            killedCount,
+            items,
+            summary);
     }
 
     public TwinCatProjectInfo CreateTwinCatSolution(TwinCatEngineeringSession session, CreateTwinCatSolutionRequest request)
@@ -648,6 +777,86 @@ public sealed class TwinCatEngineeringService
         return new VisualStudioCppProjectInfo(projectFilePath, projectGuid, projectDirectory);
     }
 
+    public ScopeProjectInfo CreateScopeProject(
+        TwinCatEngineeringSession session,
+        CreateScopeProjectRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.ProjectName))
+        {
+            throw new InvalidOperationException("ProjectName must not be empty.");
+        }
+
+        string solutionDirectory = ResolveSolutionDirectory(session);
+        string solutionPath = RetryComCall(() => session.Dte.Solution.FullName, 10, 300);
+        if (string.IsNullOrWhiteSpace(solutionPath) || !File.Exists(solutionPath))
+        {
+            throw new InvalidOperationException("The loaded solution does not have a saved .sln path.");
+        }
+
+        string projectDirectory = ResolveRequestedProjectDirectory(solutionDirectory, request.ProjectName, request.ProjectDirectory);
+        string projectFilePath = Path.Combine(projectDirectory, request.ProjectName + ".tcmproj");
+        string? configurationFileName = !string.IsNullOrWhiteSpace(request.ConfigurationFileName)
+            ? NormalizeProjectRelativePath(request.ConfigurationFileName!)
+            : request.CreateEmptyConfiguration
+                ? request.ProjectName + ".tcscopex"
+                : null;
+        string? configurationFilePath = configurationFileName is not null
+            ? ResolveProjectContainedPath(projectDirectory, configurationFileName)
+            : null;
+
+        Directory.CreateDirectory(projectDirectory);
+        EnsureScopeProjectFile(projectFilePath, request.ProjectName, configurationFileName);
+
+        if (request.CreateEmptyConfiguration && configurationFilePath is not null && !File.Exists(configurationFilePath))
+        {
+            WriteEmptyScopeConfiguration(configurationFilePath, request.ProjectName);
+        }
+
+        bool addedToSolution = FindProjectByFullName(session.Dte, Path.GetFullPath(projectFilePath)) is not null;
+        bool usedSolutionFileFallback = false;
+        if (!addedToSolution)
+        {
+            if (request.AllowSolutionFileFallback)
+            {
+                SaveAll(session);
+                string projectGuid = ReadOrCreateProjectGuid(projectFilePath);
+                UpsertSlnProjectEntry(solutionPath, TwinCatScopeProjectTypeGuid, request.ProjectName, projectFilePath, projectGuid);
+                usedSolutionFileFallback = true;
+                addedToSolution = true;
+            }
+            else
+            {
+                RetryComCall(() => session.Dte.Solution.AddFromFile(projectFilePath, false), 60, 500);
+                WaitUntil(
+                    () => FindProjectByFullName(session.Dte, Path.GetFullPath(projectFilePath)) is not null,
+                    TimeSpan.FromMinutes(1),
+                    $"Visual Studio solution model did not expose Scope project '{request.ProjectName}'.");
+                addedToSolution = true;
+                SaveAll(session);
+            }
+        }
+        else
+        {
+            SaveAll(session);
+        }
+
+        string finalProjectGuid = ReadOrCreateProjectGuid(projectFilePath);
+        if (usedSolutionFileFallback)
+        {
+            UpsertSlnProjectEntry(solutionPath, TwinCatScopeProjectTypeGuid, request.ProjectName, projectFilePath, finalProjectGuid);
+        }
+
+        return new ScopeProjectInfo(
+            projectFilePath,
+            finalProjectGuid,
+            projectDirectory,
+            configurationFilePath,
+            addedToSolution,
+            usedSolutionFileFallback);
+    }
+
     public SolutionProjectDependencyResult EnsureSolutionProjectDependency(
         TwinCatEngineeringSession session,
         EnsureSolutionProjectDependencyRequest request)
@@ -669,6 +878,217 @@ public sealed class TwinCatEngineeringService
         return new SolutionProjectDependencyResult(project.Guid, dependency.Guid);
     }
 
+    public TwinCatNodeInfo CreateIoDevice(TwinCatEngineeringSession session, CreateIoDeviceRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequiredText(request.Name, nameof(request.Name));
+        ValidateRequiredText(request.ParentTreeItemPath, nameof(request.ParentTreeItemPath));
+
+        ITcSysManager sysManager = RequireSysManager(session);
+        string candidatePath = JoinTreePath(request.ParentTreeItemPath, request.Name);
+        ITcSmTreeItem? existing = request.AllowExisting
+            ? TryGetTreeItem(sysManager, candidatePath)
+            : null;
+        if (existing is not null)
+        {
+            try
+            {
+                ApplyDisabledState(existing, request.Disabled);
+                SaveAll(session);
+                return CreateNodeInfo(existing, candidatePath, UsedFallback: false);
+            }
+            finally
+            {
+                ReleaseComObjectIfNeeded(existing);
+            }
+        }
+
+        ITcSmTreeItem? parent = null;
+        ITcSmTreeItem? created = null;
+        try
+        {
+            parent = GetTreeItem(sysManager, request.ParentTreeItemPath);
+            created = RetryComCall(() => parent.CreateChild(
+                request.Name,
+                request.SubType,
+                request.Before ?? string.Empty,
+                request.VInfo ?? string.Empty),
+                30,
+                500);
+            ApplyDisabledState(created, request.Disabled);
+            SaveAll(session);
+            ThreadingThread.Sleep(Math.Max(0, request.PostCreateDelayMs));
+            return CreateNodeInfo(created, candidatePath, UsedFallback: false);
+        }
+        finally
+        {
+            ReleaseComObjectIfNeeded(created);
+            ReleaseComObjectIfNeeded(parent);
+        }
+    }
+
+    public TwinCatNodeInfo CreateEthercatBox(TwinCatEngineeringSession session, CreateEthercatBoxRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateRequiredText(request.Name, nameof(request.Name));
+        ValidateRequiredText(request.ParentTreeItemPath, nameof(request.ParentTreeItemPath));
+
+        string? vInfo = string.IsNullOrWhiteSpace(request.VInfo)
+            ? request.ProductRevision
+            : request.VInfo;
+        CreateIoDeviceRequest createRequest = new(
+            request.Name,
+            request.SubType,
+            request.ParentTreeItemPath,
+            request.Before,
+            vInfo,
+            request.Disabled,
+            request.AllowExisting,
+            request.PostCreateDelayMs);
+        return CreateIoDevice(session, createRequest);
+    }
+
+    public EngineeringCommandResult GenerateIoMappings(TwinCatEngineeringSession session, GenerateIoMappingsRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        return ExecuteSysManagerCommand(
+            session,
+            request.SuppressUi,
+            request.TimeoutMs,
+            "TwinCAT GenerateMappings",
+            "GenerateMappings",
+            commands => commands.GenerateMappings(),
+            commands => commands.GenerateMappings(),
+            request.AllowDteCommandFallback,
+            "TwinCAT.生成映射",
+            "TwinCAT.GenerateMappings",
+            "TcXaeShell.TwinCAT.GenerateMappings");
+    }
+
+    public EngineeringCommandResult SearchIoDevices(TwinCatEngineeringSession session, SearchIoDevicesRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        return ExecuteSysManagerCommand(
+            session,
+            request.SuppressUi,
+            request.TimeoutMs,
+            "TwinCAT SearchDevices",
+            "SearchDevices",
+            commands => commands.SearchDevices(),
+            commands => commands.SearchDevices());
+    }
+
+    public EngineeringCommandResult ReloadIoDevices(TwinCatEngineeringSession session, ReloadIoDevicesRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        return ExecuteSysManagerCommand(
+            session,
+            request.SuppressUi,
+            request.TimeoutMs,
+            "TwinCAT ReloadDevices",
+            "ReloadDevices",
+            commands => commands.ReloadDevices(),
+            commands => commands.ReloadDevices());
+    }
+
+    public ApplyIoTreePlanResult ApplyIoTreePlan(TwinCatEngineeringSession session, ApplyIoTreePlanRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(request);
+
+        List<TwinCatNodeInfo> nodes = [];
+        int deviceCount = 0;
+        foreach (CreateIoDeviceRequest device in request.Devices ?? Array.Empty<CreateIoDeviceRequest>())
+        {
+            nodes.Add(CreateIoDevice(session, device));
+            deviceCount++;
+        }
+
+        int boxCount = 0;
+        foreach (CreateEthercatBoxRequest box in request.Boxes ?? Array.Empty<CreateEthercatBoxRequest>())
+        {
+            nodes.Add(CreateEthercatBox(session, box));
+            boxCount++;
+        }
+
+        SaveAll(session);
+        return new ApplyIoTreePlanResult(
+            true,
+            deviceCount,
+            boxCount,
+            nodes,
+            $"Applied IO tree plan: {deviceCount} device(s), {boxCount} box(es).");
+    }
+
+    private EngineeringCommandResult ExecuteSysManagerCommand(
+        TwinCatEngineeringSession session,
+        bool suppressUi,
+        int timeoutMs,
+        string operationName,
+        string commandName,
+        Action<ITcSmCommands> invokeCommands,
+        Action<ITcSmCommands2> invokeCommands2,
+        bool allowDteCommandFallback = false,
+        params string[] dteCommandFallbacks)
+    {
+        ITcSysManager sysManager = RequireSysManager(session);
+        if (suppressUi)
+        {
+            SuppressVisualStudioUi(session);
+        }
+
+        List<string> attempted = [];
+        string command = RunOnStaThreadWithTimeout(
+            () =>
+            {
+                attempted.Add("ITcSmCommands." + commandName);
+                if (sysManager is ITcSmCommands smCommands)
+                {
+                    RetryComCall(() => invokeCommands(smCommands), 10, 500);
+                    return "ITcSmCommands." + commandName;
+                }
+
+                attempted.Add("ITcSmCommands2." + commandName);
+                if (sysManager is ITcSmCommands2 commands2)
+                {
+                    RetryComCall(() => invokeCommands2(commands2), 10, 500);
+                    return "ITcSmCommands2." + commandName;
+                }
+
+                if (allowDteCommandFallback)
+                {
+                    foreach (string dteCommand in dteCommandFallbacks)
+                    {
+                        attempted.Add(dteCommand);
+                        try
+                        {
+                            RetryComCall(() => session.Dte.ExecuteCommand(dteCommand), 5, 500);
+                            return dteCommand;
+                        }
+                        catch
+                        {
+                        }
+                    }
+                }
+
+                throw new InvalidOperationException(
+                    $"The current ITcSysManager object does not expose ITcSmCommands.{commandName}; menu-command fallback is intentionally disabled for unattended runs.");
+            },
+            timeoutMs > 0 ? timeoutMs : 120000,
+            operationName);
+
+        SaveAll(session);
+        return new EngineeringCommandResult(true, command, attempted);
+    }
+
     public CppProjectItemResult CreateCppProjectItem(
         TwinCatEngineeringSession session,
         CreateCppProjectItemRequest request)
@@ -677,6 +1097,25 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(request);
 
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        return CreateCppProjectItem(paths, request, session);
+    }
+
+    public CppProjectItemResult CreateCppProjectItem(
+        string twinCatProjectDirectory,
+        CreateCppProjectItemRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(twinCatProjectDirectory);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(twinCatProjectDirectory, request.ProjectName);
+        return CreateCppProjectItem(paths, request, session: null);
+    }
+
+    private CppProjectItemResult CreateCppProjectItem(
+        CppProjectPaths paths,
+        CreateCppProjectItemRequest request,
+        TwinCatEngineeringSession? session)
+    {
         string relativePath = NormalizeProjectRelativePath(request.RelativePath);
         string filePath = ResolveProjectContainedPath(paths.ProjectDirectory, relativePath);
         CppProjectItemType itemType = ResolveCppProjectItemType(relativePath, request.ItemType);
@@ -698,9 +1137,15 @@ public sealed class TwinCatEngineeringService
         bool addedToProject = false;
         if (request.AddToProject)
         {
+            if (!request.AllowMsBuildFallback && session is null)
+            {
+                throw new InvalidOperationException(
+                    "C++ project item creation without MSBuild fallback requires an active DTE session.");
+            }
+
             if (!request.AllowMsBuildFallback)
             {
-                Project project = FindProjectByName(session.Dte, request.ProjectName)
+                Project project = FindProjectByName(session!.Dte, request.ProjectName)
                     ?? throw new InvalidOperationException($"DTE solution model does not contain C++ project '{request.ProjectName}'.");
                 RetryComCall(() => project.ProjectItems.AddFromFile(filePath), 20, 300);
             }
@@ -725,6 +1170,24 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(request);
 
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        return WriteCppProjectItemContent(paths, request);
+    }
+
+    public CppProjectItemContentResult WriteCppProjectItemContent(
+        string twinCatProjectDirectory,
+        WriteCppProjectItemContentRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(twinCatProjectDirectory);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(twinCatProjectDirectory, request.ProjectName);
+        return WriteCppProjectItemContent(paths, request);
+    }
+
+    private static CppProjectItemContentResult WriteCppProjectItemContent(
+        CppProjectPaths paths,
+        WriteCppProjectItemContentRequest request)
+    {
         string relativePath = NormalizeProjectRelativePath(request.RelativePath);
         string filePath = ResolveProjectContainedPath(paths.ProjectDirectory, relativePath);
         if (request.RequireProjectRegistration &&
@@ -748,6 +1211,24 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(request);
 
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        return RemoveCppProjectItem(paths, request);
+    }
+
+    public RemoveCppProjectItemResult RemoveCppProjectItem(
+        string twinCatProjectDirectory,
+        RemoveCppProjectItemRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(twinCatProjectDirectory);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(twinCatProjectDirectory, request.ProjectName);
+        return RemoveCppProjectItem(paths, request);
+    }
+
+    private static RemoveCppProjectItemResult RemoveCppProjectItem(
+        CppProjectPaths paths,
+        RemoveCppProjectItemRequest request)
+    {
         string relativePath = NormalizeProjectRelativePath(request.RelativePath);
         CppProjectItemType itemType = ResolveCppProjectItemType(relativePath, request.ItemType);
         string filePath = ResolveProjectContainedPath(paths.ProjectDirectory, relativePath);
@@ -783,6 +1264,24 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(request);
 
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        return SetCppProjectProperty(paths, request);
+    }
+
+    public CppProjectPropertyResult SetCppProjectProperty(
+        string twinCatProjectDirectory,
+        SetCppProjectPropertyRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(twinCatProjectDirectory);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(twinCatProjectDirectory, request.ProjectName);
+        return SetCppProjectProperty(paths, request);
+    }
+
+    private static CppProjectPropertyResult SetCppProjectProperty(
+        CppProjectPaths paths,
+        SetCppProjectPropertyRequest request)
+    {
         UpsertCppProjectProperty(
             paths.ProjectFilePath,
             request.PropertyName,
@@ -800,6 +1299,24 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(request);
 
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        return SetCppItemDefinitionProperty(paths, request);
+    }
+
+    public CppItemDefinitionPropertyResult SetCppItemDefinitionProperty(
+        string twinCatProjectDirectory,
+        SetCppItemDefinitionPropertyRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(twinCatProjectDirectory);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(twinCatProjectDirectory, request.ProjectName);
+        return SetCppItemDefinitionProperty(paths, request);
+    }
+
+    private static CppItemDefinitionPropertyResult SetCppItemDefinitionProperty(
+        CppProjectPaths paths,
+        SetCppItemDefinitionPropertyRequest request)
+    {
         UpsertCppItemDefinitionProperty(
             paths.ProjectFilePath,
             request.ToolName,
@@ -817,6 +1334,24 @@ public sealed class TwinCatEngineeringService
         ArgumentNullException.ThrowIfNull(request);
 
         CppProjectPaths paths = ResolveCppProjectPaths(session, request.ProjectName);
+        return SetCppProjectItemMetadata(paths, request);
+    }
+
+    public CppProjectItemMetadataResult SetCppProjectItemMetadata(
+        string twinCatProjectDirectory,
+        SetCppProjectItemMetadataRequest request)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(twinCatProjectDirectory);
+        ArgumentNullException.ThrowIfNull(request);
+
+        CppProjectPaths paths = ResolveCppProjectPaths(twinCatProjectDirectory, request.ProjectName);
+        return SetCppProjectItemMetadata(paths, request);
+    }
+
+    private static CppProjectItemMetadataResult SetCppProjectItemMetadata(
+        CppProjectPaths paths,
+        SetCppProjectItemMetadataRequest request)
+    {
         string relativePath = NormalizeProjectRelativePath(request.RelativePath);
         CppProjectItemType itemType = ResolveCppProjectItemType(relativePath, request.ItemType);
         UpsertCppProjectItemMetadata(
@@ -1237,6 +1772,8 @@ public sealed class TwinCatEngineeringService
 
     public void SaveAll(TwinCatEngineeringSession session)
     {
+        SuppressVisualStudioUi(session);
+
         try
         {
             RetryComCall(() => session.Dte.ExecuteCommand("File.SaveAll"), 5, 300);
@@ -1264,11 +1801,52 @@ public sealed class TwinCatEngineeringService
 
     public BuildResult BuildCurrentSolution(TwinCatEngineeringSession session, BuildSolutionRequest request)
     {
+        if (request.BuildEngine == BuildSolutionEngine.CommandLine)
+        {
+            string solutionPath = RetryComCall(() => session.Dte.Solution.FullName);
+            if (string.IsNullOrWhiteSpace(solutionPath))
+            {
+                throw new InvalidOperationException("No solution is currently loaded.");
+            }
+
+            try
+            {
+                SaveAll(session);
+            }
+            catch
+            {
+                // Command-line build can continue from the saved project files if DTE is already unstable.
+            }
+
+            return BuildSolutionFromCommandLineCore(solutionPath, request);
+        }
+
+        if (request.BuildEngine == BuildSolutionEngine.MsBuildProjects)
+        {
+            string solutionPath = RetryComCall(() => session.Dte.Solution.FullName);
+            if (string.IsNullOrWhiteSpace(solutionPath))
+            {
+                throw new InvalidOperationException("No solution is currently loaded.");
+            }
+
+            try
+            {
+                SaveAll(session);
+            }
+            catch
+            {
+                // MSBuild project sequence uses the on-disk project files if DTE is already unstable.
+            }
+
+            return BuildSolutionFromMsBuildProjects(solutionPath, request);
+        }
+
         if (session.Dte.Solution is null)
         {
             throw new InvalidOperationException("No solution is currently loaded.");
         }
 
+        SuppressVisualStudioUi(session);
         SolutionBuild build = RetryComCall(() => session.Dte.Solution.SolutionBuild);
         RetryComCall(() => build.Build(false));
 
@@ -1292,7 +1870,372 @@ public sealed class TwinCatEngineeringService
         int lastBuildInfo = RetryComCall(() => build.LastBuildInfo);
         bool succeeded = lastBuildInfo == 0 && RetryComCall(() => build.BuildState) == vsBuildState.vsBuildStateDone;
         string? outputText = TryReadOutputWindowText(session.Dte);
-        return new BuildResult(succeeded, lastBuildInfo, outputText);
+        return new BuildResult(succeeded, lastBuildInfo, outputText, BuildEngine: "dte");
+    }
+
+    public BuildResult BuildSolutionFromCommandLine(string solutionPath, BuildSolutionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(solutionPath))
+        {
+            throw new InvalidOperationException("A solution path is required for command-line build.");
+        }
+
+        string fullSolutionPath = Path.GetFullPath(solutionPath);
+        if (!File.Exists(fullSolutionPath))
+        {
+            throw new FileNotFoundException("Solution file was not found for command-line build.", fullSolutionPath);
+        }
+
+        return BuildSolutionFromCommandLineCore(fullSolutionPath, request);
+    }
+
+    public BuildResult BuildSolutionFromMsBuildProjects(string solutionPath, BuildSolutionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(solutionPath))
+        {
+            throw new InvalidOperationException("A solution path is required for MSBuild project sequence build.");
+        }
+
+        string fullSolutionPath = Path.GetFullPath(solutionPath);
+        if (!File.Exists(fullSolutionPath))
+        {
+            throw new FileNotFoundException("Solution file was not found for MSBuild project sequence build.", fullSolutionPath);
+        }
+
+        return BuildSolutionFromMsBuildProjectsCore(fullSolutionPath, request);
+    }
+
+    private static BuildResult BuildSolutionFromCommandLineCore(string solutionPath, BuildSolutionRequest request)
+    {
+        string devenvPath = ResolveDevenvComPath(request.DevenvPath);
+        string configurationPlatform = $"{request.Configuration}|{request.Platform}";
+        string logFilePath = string.IsNullOrWhiteSpace(request.LogFilePath)
+            ? Path.Combine(Path.GetDirectoryName(solutionPath) ?? Environment.CurrentDirectory, "_json_plan_evidence", "devenv-build.log")
+            : Path.GetFullPath(request.LogFilePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(logFilePath)!);
+
+        DiagnosticsProcessStartInfo startInfo = new()
+        {
+            FileName = devenvPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        startInfo.ArgumentList.Add(solutionPath);
+        startInfo.ArgumentList.Add("/Build");
+        startInfo.ArgumentList.Add(configurationPlatform);
+        startInfo.ArgumentList.Add("/Out");
+        startInfo.ArgumentList.Add(logFilePath);
+
+        StringBuilder output = new();
+        using DiagnosticsProcess process = new() { StartInfo = startInfo };
+        process.Start();
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        Task<string> stderr = process.StandardError.ReadToEndAsync();
+
+        bool finished = process.WaitForExit(request.TimeoutMs > 0 ? request.TimeoutMs : 300000);
+        if (!finished)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+            }
+
+            throw new TimeoutException($"devenv.com build did not finish within {request.TimeoutMs} ms.");
+        }
+
+        output.Append(stdout.GetAwaiter().GetResult());
+        string error = stderr.GetAwaiter().GetResult();
+        if (!string.IsNullOrWhiteSpace(error))
+        {
+            if (output.Length > 0)
+            {
+                output.AppendLine();
+            }
+
+            output.Append(error);
+        }
+
+        string? logText = File.Exists(logFilePath) ? File.ReadAllText(logFilePath) : null;
+        if (!string.IsNullOrWhiteSpace(logText))
+        {
+            if (output.Length > 0)
+            {
+                output.AppendLine();
+            }
+
+            output.AppendLine("--- devenv /Out log ---");
+            output.Append(logText);
+        }
+
+        string commandLine = BuildCommandLine(devenvPath, startInfo.ArgumentList);
+        return new BuildResult(
+            process.ExitCode == 0,
+            process.ExitCode,
+            output.ToString().Trim(),
+            BuildEngine: "command-line",
+            ExitCode: process.ExitCode,
+            CommandLine: commandLine,
+            LogFilePath: logFilePath);
+    }
+
+    private static BuildResult BuildSolutionFromMsBuildProjectsCore(string solutionPath, BuildSolutionRequest request)
+    {
+        string msBuildPath = ResolveMsBuildPath(request.MsBuildPath);
+        string solutionDirectory = EnsureTrailingDirectorySeparator(Path.GetDirectoryName(solutionPath) ?? Environment.CurrentDirectory);
+        IReadOnlyList<string> projectPaths = ResolveMsBuildProjectSequence(solutionDirectory, request.ProjectPaths);
+        string logFilePath = string.IsNullOrWhiteSpace(request.LogFilePath)
+            ? Path.Combine(solutionDirectory, "_json_plan_evidence", "msbuild-projects.log")
+            : Path.GetFullPath(request.LogFilePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(logFilePath)!);
+
+        StringBuilder combinedOutput = new();
+        int exitCode = 0;
+        foreach (string projectPath in projectPaths)
+        {
+            DiagnosticsProcessStartInfo startInfo = new()
+            {
+                FileName = msBuildPath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add(projectPath);
+            startInfo.ArgumentList.Add($"/p:Configuration={request.Configuration}");
+            startInfo.ArgumentList.Add($"/p:Platform={request.Platform}");
+            startInfo.ArgumentList.Add($"/p:SolutionDir={solutionDirectory}");
+            startInfo.ArgumentList.Add("/m:1");
+            startInfo.ArgumentList.Add("/v:minimal");
+            startInfo.ArgumentList.Add("/nr:false");
+
+            using DiagnosticsProcess process = new() { StartInfo = startInfo };
+            process.Start();
+            Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = process.StandardError.ReadToEndAsync();
+            bool finished = process.WaitForExit(request.TimeoutMs > 0 ? request.TimeoutMs : 300000);
+            if (!finished)
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                }
+
+                throw new TimeoutException($"MSBuild did not finish within {request.TimeoutMs} ms for {projectPath}.");
+            }
+
+            string commandLine = BuildCommandLine(msBuildPath, startInfo.ArgumentList);
+            combinedOutput.AppendLine(">>> " + commandLine);
+            combinedOutput.Append(stdout.GetAwaiter().GetResult());
+            string error = stderr.GetAwaiter().GetResult();
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                if (combinedOutput.Length > 0)
+                {
+                    combinedOutput.AppendLine();
+                }
+
+                combinedOutput.Append(error);
+            }
+
+            exitCode = process.ExitCode;
+            if (exitCode != 0)
+            {
+                break;
+            }
+        }
+
+        string outputText = combinedOutput.ToString().Trim();
+        File.WriteAllText(logFilePath, outputText);
+        return new BuildResult(
+            exitCode == 0,
+            exitCode,
+            outputText,
+            BuildEngine: "msbuild-projects",
+            ExitCode: exitCode,
+            CommandLine: $"{QuoteCommandArgument(msBuildPath)} <project sequence: {string.Join(";", projectPaths.Select(Path.GetFileName))}>",
+            LogFilePath: logFilePath);
+    }
+
+    private static IReadOnlyList<string> ResolveMsBuildProjectSequence(string solutionDirectory, IReadOnlyList<string>? requestedProjectPaths)
+    {
+        IReadOnlyList<string> candidates = requestedProjectPaths is { Count: > 0 }
+            ? requestedProjectPaths
+            : ["OptcncTwinCAT\\Ruckig\\Ruckig.vcxproj", "OptcncTwinCAT\\Tinyxml2\\Tinyxml2.vcxproj", "OptcncTwinCAT\\MotionControl\\MotionControl.vcxproj"];
+
+        return candidates
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(solutionDirectory, path)))
+            .ToArray();
+    }
+
+    private static string ResolveMsBuildPath(string? requestedPath)
+    {
+        foreach (string candidate in EnumerateMsBuildPathCandidates(requestedPath))
+        {
+            string fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(candidate));
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        throw new FileNotFoundException("MSBuild.exe was not found. Pass --msbuild-path or install Visual Studio Build Tools.");
+    }
+
+    private static IEnumerable<string> EnumerateMsBuildPathCandidates(string? requestedPath)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedPath))
+        {
+            yield return requestedPath;
+        }
+
+        string? vsInstallDir = Environment.GetEnvironmentVariable("VSINSTALLDIR");
+        if (!string.IsNullOrWhiteSpace(vsInstallDir))
+        {
+            yield return Path.Combine(vsInstallDir, "MSBuild", "Current", "Bin", "MSBuild.exe");
+        }
+
+        string? programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        if (!string.IsNullOrWhiteSpace(programFilesX86))
+        {
+            string vswherePath = Path.Combine(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+            string? installationPath = TryReadLatestVisualStudioInstallationPath(vswherePath);
+            if (!string.IsNullOrWhiteSpace(installationPath))
+            {
+                yield return Path.Combine(installationPath, "MSBuild", "Current", "Bin", "MSBuild.exe");
+            }
+        }
+    }
+
+    private static string ResolveDevenvComPath(string? requestedPath)
+    {
+        foreach (string candidate in EnumerateDevenvComPathCandidates(requestedPath))
+        {
+            string fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(candidate));
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        throw new FileNotFoundException("devenv.com was not found. Pass --devenv-path or install Visual Studio with TwinCAT XAE support.");
+    }
+
+    private static IEnumerable<string> EnumerateDevenvComPathCandidates(string? requestedPath)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedPath))
+        {
+            yield return requestedPath;
+        }
+
+        string? vsInstallDir = Environment.GetEnvironmentVariable("VSINSTALLDIR");
+        if (!string.IsNullOrWhiteSpace(vsInstallDir))
+        {
+            yield return Path.Combine(vsInstallDir, "Common7", "IDE", "devenv.com");
+        }
+
+        string? programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        if (!string.IsNullOrWhiteSpace(programFilesX86))
+        {
+            string vswherePath = Path.Combine(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+            string? installationPath = TryReadLatestVisualStudioInstallationPath(vswherePath);
+            if (!string.IsNullOrWhiteSpace(installationPath))
+            {
+                yield return Path.Combine(installationPath, "Common7", "IDE", "devenv.com");
+            }
+        }
+
+        Type? dteType = Type.GetTypeFromProgID("VisualStudio.DTE.17.0", throwOnError: false);
+        if (dteType is not null)
+        {
+            string? devenvExe = ResolveDevenvPath(dteType);
+            if (!string.IsNullOrWhiteSpace(devenvExe))
+            {
+                yield return Path.ChangeExtension(devenvExe, ".com");
+            }
+        }
+    }
+
+    private static string? TryReadLatestVisualStudioInstallationPath(string vswherePath, int? majorVersion = null)
+    {
+        if (!File.Exists(vswherePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            DiagnosticsProcessStartInfo startInfo = new()
+            {
+                FileName = vswherePath,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            startInfo.ArgumentList.Add("-latest");
+            if (majorVersion == 17)
+            {
+                startInfo.ArgumentList.Add("-version");
+                startInfo.ArgumentList.Add("[17.0,18.0)");
+            }
+            else if (majorVersion == 16)
+            {
+                startInfo.ArgumentList.Add("-version");
+                startInfo.ArgumentList.Add("[16.0,17.0)");
+            }
+
+            startInfo.ArgumentList.Add("-property");
+            startInfo.ArgumentList.Add("installationPath");
+
+            using DiagnosticsProcess process = new() { StartInfo = startInfo };
+            process.Start();
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            _ = process.StandardError.ReadToEnd();
+            process.WaitForExit(10000);
+            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output) ? output : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string BuildCommandLine(string executablePath, IEnumerable<string> arguments)
+    {
+        return string.Join(
+            " ",
+            new[] { QuoteCommandArgument(executablePath) }.Concat(arguments.Select(QuoteCommandArgument)));
+    }
+
+    private static string EnsureTrailingDirectorySeparator(string path)
+    {
+        string fullPath = Path.GetFullPath(path);
+        return fullPath.EndsWith(Path.DirectorySeparatorChar)
+            ? fullPath
+            : fullPath + Path.DirectorySeparatorChar;
+    }
+
+    private static string QuoteCommandArgument(string argument)
+    {
+        if (argument.Length == 0)
+        {
+            return "\"\"";
+        }
+
+        return argument.Any(char.IsWhiteSpace) || argument.Contains('"', StringComparison.Ordinal)
+            ? "\"" + argument.Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+            : argument;
     }
 
     private static string? TryReadOutputWindowText(DTE dte)
@@ -1335,6 +2278,11 @@ public sealed class TwinCatEngineeringService
     public ActivationResult ActivateConfiguration(TwinCatEngineeringSession session, ActivateConfigurationRequest request)
     {
         ITcSysManager sysManager = RequireSysManager(session);
+        if (request.SuppressUi)
+        {
+            SuppressVisualStudioUi(session);
+        }
+
         string? solutionPath = RetryComCall(() => session.Dte.Solution.FullName);
         string solutionDirectory = Path.GetDirectoryName(solutionPath) ?? session.CurrentSolutionDirectory ?? Environment.CurrentDirectory;
         string? archivePath = request.ConfigurationArchivePath ?? Path.Combine(solutionDirectory, "CurrentConfig.tszip");
@@ -1354,60 +2302,75 @@ public sealed class TwinCatEngineeringService
 
         List<string> attempted = new();
         string? activationCommand = null;
-        try
-        {
-            const string sysManagerActivation = "ITcSysManager.ActivateConfiguration";
-            attempted.Add(sysManagerActivation);
-            RetryComCall(() => sysManager.ActivateConfiguration());
-            activationCommand = sysManagerActivation;
-        }
-        catch
-        {
-            string[] commands =
-            {
-                "TwinCAT.激活配置",
-                "TwinCAT.激活解决方案",
-                "TwinCAT.ActivateConfiguration",
-                "TcXaeShell.TwinCAT.ActivateConfiguration",
-                "Build.ActivateConfiguration"
-            };
-
-            foreach (string command in commands)
-            {
-                attempted.Add(command);
-                try
-                {
-                    RetryComCall(() => session.Dte.ExecuteCommand(command));
-                    activationCommand = command;
-                    break;
-                }
-                catch
-                {
-                }
-            }
-
-            if (string.IsNullOrWhiteSpace(activationCommand))
-            {
-                throw;
-            }
-        }
-
-        RetryComCall(() => sysManager.StartRestartTwinCAT());
-        attempted.Add("ITcSysManager.StartRestartTwinCAT");
-        WaitUntil(
+        int timeoutMs = request.ActivationTimeoutMs > 0 ? request.ActivationTimeoutMs : 120000;
+        activationCommand = RunOnStaThreadWithTimeout(
             () =>
             {
+                string? commandUsed = null;
                 try
                 {
-                    return RetryComCall(() => sysManager.IsTwinCATStarted());
+                    const string sysManagerActivation = "ITcSysManager.ActivateConfiguration";
+                    attempted.Add(sysManagerActivation);
+                    RetryComCall(() => sysManager.ActivateConfiguration());
+                    commandUsed = sysManagerActivation;
                 }
                 catch
                 {
-                    return false;
+                    if (!request.AllowDteCommandFallback)
+                    {
+                        throw;
+                    }
+
+                    string[] commands =
+                    {
+                        "TwinCAT.激活配置",
+                        "TwinCAT.激活解决方案",
+                        "TwinCAT.ActivateConfiguration",
+                        "TcXaeShell.TwinCAT.ActivateConfiguration",
+                        "Build.ActivateConfiguration"
+                    };
+
+                    foreach (string command in commands)
+                    {
+                        attempted.Add(command);
+                        try
+                        {
+                            RetryComCall(() => session.Dte.ExecuteCommand(command));
+                            commandUsed = command;
+                            break;
+                        }
+                        catch
+                        {
+                        }
+                    }
+
+                    if (string.IsNullOrWhiteSpace(commandUsed))
+                    {
+                        throw;
+                    }
                 }
+
+                RetryComCall(() => sysManager.StartRestartTwinCAT());
+                attempted.Add("ITcSysManager.StartRestartTwinCAT");
+                WaitUntil(
+                    () =>
+                    {
+                        try
+                        {
+                            return RetryComCall(() => sysManager.IsTwinCATStarted());
+                        }
+                        catch
+                        {
+                            return false;
+                        }
+                    },
+                    TimeSpan.FromMinutes(1),
+                    "TwinCAT did not report started after StartRestartTwinCAT.");
+
+                return commandUsed!;
             },
-            TimeSpan.FromMinutes(1),
-            "TwinCAT did not report started after StartRestartTwinCAT.");
+            timeoutMs,
+            "TwinCAT activation");
 
         if (request.SaveConfigurationArchive &&
             !string.IsNullOrWhiteSpace(archivePath) &&
@@ -1417,6 +2380,50 @@ public sealed class TwinCatEngineeringService
         }
 
         return new ActivationResult(true, archivePath, activationCommand, attempted);
+    }
+
+    private static T RunOnStaThreadWithTimeout<T>(Func<T> action, int timeoutMs, string operationName)
+    {
+        T? result = default;
+        Exception? exception = null;
+        ThreadingThread thread = new(() =>
+        {
+            try
+            {
+                result = action();
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        if (!thread.Join(timeoutMs))
+        {
+            throw new TimeoutException($"{operationName} did not finish within {timeoutMs} ms.");
+        }
+
+        if (exception is not null)
+        {
+            throw exception;
+        }
+
+        return result!;
+    }
+
+    private static void SuppressVisualStudioUi(TwinCatEngineeringSession session)
+    {
+        try
+        {
+            RetryComCall(() => session.Dte.SuppressUI = true, 3, 200);
+        }
+        catch
+        {
+            // SuppressUI is best-effort; the caller should still avoid UI command fallbacks when unattended.
+        }
     }
 
     private static void WriteFallbackActivationEvidenceArchive(
@@ -1477,6 +2484,8 @@ public sealed class TwinCatEngineeringService
 
     public void CloseVisualStudio(TwinCatEngineeringSession session, bool saveBeforeClose = true)
     {
+        SuppressVisualStudioUi(session);
+
         if (saveBeforeClose)
         {
             SaveAll(session);
@@ -1666,12 +2675,146 @@ public sealed class TwinCatEngineeringService
             new XElement(ns + "UniqueIdentifier", Guid.NewGuid().ToString("B").ToUpperInvariant()),
             new XElement(ns + "Extensions", extensions));
 
+    private static void EnsureScopeProjectFile(string projectFilePath, string projectName, string? configurationFileName)
+    {
+        if (!File.Exists(projectFilePath))
+        {
+            WriteScopeProjectFile(projectFilePath, projectName, configurationFileName);
+            return;
+        }
+
+        XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
+        XElement root = document.Root ?? throw new InvalidOperationException($"Scope project '{projectFilePath}' is empty.");
+        XNamespace ns = root.Name.Namespace;
+        bool changed = false;
+
+        XElement propertyGroup = root.Elements(ns + "PropertyGroup")
+            .FirstOrDefault(group => group.Elements(ns + "ProjectGuid").Any())
+            ?? root.Elements(ns + "PropertyGroup")
+                .FirstOrDefault(group => string.Equals(group.Attribute("Label")?.Value, "Globals", StringComparison.OrdinalIgnoreCase))
+            ?? root.Elements(ns + "PropertyGroup").FirstOrDefault()
+            ?? new XElement(ns + "PropertyGroup", new XAttribute("Label", "Globals"));
+        if (propertyGroup.Parent is null)
+        {
+            root.AddFirst(propertyGroup);
+            changed = true;
+        }
+
+        changed |= EnsureMsBuildChildValue(propertyGroup, ns, "ProjectGuid", Guid.NewGuid().ToString("B").ToUpperInvariant());
+        changed |= EnsureMsBuildChildValue(propertyGroup, ns, "AssemblyName", projectName);
+        changed |= EnsureMsBuildChildValue(propertyGroup, ns, "Name", projectName);
+        changed |= EnsureMsBuildChildValue(propertyGroup, ns, "RootNamespace", MakeSafeIdentifier(projectName));
+
+        if (!string.IsNullOrWhiteSpace(configurationFileName) &&
+            !root.Descendants(ns + "Content").Any(content =>
+                string.Equals(content.Attribute("Include")?.Value, configurationFileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            root.Add(
+                new XElement(
+                    ns + "ItemGroup",
+                    new XElement(
+                        ns + "Content",
+                        new XAttribute("Include", configurationFileName!),
+                        new XElement(ns + "SubType", "Content"))));
+            changed = true;
+        }
+
+        if (changed)
+        {
+            document.Save(projectFilePath, SaveOptions.DisableFormatting);
+        }
+    }
+
+    private static bool EnsureMsBuildChildValue(XElement parent, XNamespace ns, string childName, string value)
+    {
+        XElement? child = parent.Elements(ns + childName).FirstOrDefault();
+        if (child is null)
+        {
+            parent.Add(new XElement(ns + childName, value));
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(child.Value))
+        {
+            child.Value = value;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static void WriteScopeProjectFile(string projectFilePath, string projectName, string? configurationFileName)
+    {
+        string projectDirectory = Path.GetDirectoryName(projectFilePath)
+            ?? throw new InvalidOperationException($"Unable to resolve project directory for '{projectFilePath}'.");
+        Directory.CreateDirectory(projectDirectory);
+
+        XNamespace ns = "http://schemas.microsoft.com/developer/msbuild/2003";
+        string projectGuid = Guid.NewGuid().ToString("B").ToUpperInvariant();
+        XElement root = new(
+            ns + "Project",
+            new XAttribute("ToolsVersion", "4.0"),
+            new XAttribute("DefaultTargets", "Build"),
+            new XElement(
+                ns + "PropertyGroup",
+                new XAttribute("Label", "Globals"),
+                new XElement(ns + "ProjectGuid", projectGuid),
+                new XElement(ns + "AssemblyName", projectName),
+                new XElement(ns + "Name", projectName),
+                new XElement(ns + "RootNamespace", MakeSafeIdentifier(projectName))));
+
+        if (!string.IsNullOrWhiteSpace(configurationFileName))
+        {
+            root.Add(
+                new XElement(
+                    ns + "ItemGroup",
+                    new XElement(
+                        ns + "Content",
+                        new XAttribute("Include", configurationFileName!),
+                        new XElement(ns + "SubType", "Content"))));
+        }
+
+        new XDocument(root).Save(projectFilePath);
+    }
+
+    private static void WriteEmptyScopeConfiguration(string configurationFilePath, string projectName)
+    {
+        string directory = Path.GetDirectoryName(configurationFilePath)
+            ?? throw new InvalidOperationException($"Unable to resolve Scope configuration directory for '{configurationFilePath}'.");
+        Directory.CreateDirectory(directory);
+
+        XDocument document = new(
+            new XElement(
+                "ScopeProject",
+                new XAttribute("AssemblyName", "TwinCAT.Measurement.Scope.API.Model"),
+                new XElement("AutoRestartRecord", "false"),
+                new XElement("AutoSaveMode", "None"),
+                new XElement("DisplayColor", "Black"),
+                new XElement("Guid", Guid.NewGuid().ToString("D")),
+                new XElement("MainServer", "127.0.0.1.1.1"),
+                new XElement("Name", projectName),
+                new XElement("RecordTime", "6000000000"),
+                new XElement("SortPriority", "100"),
+                new XElement("StopMode", "AutoStop"),
+                new XElement("SubMember")));
+        document.Save(configurationFilePath);
+    }
+
     private static string ReadOrCreateProjectGuid(string projectFilePath)
     {
         XDocument document = XDocument.Load(projectFilePath, LoadOptions.PreserveWhitespace);
         XNamespace ns = document.Root?.Name.Namespace ?? XNamespace.None;
+        XElement? existingGuid = document.Root?
+            .Descendants(ns + "ProjectGuid")
+            .FirstOrDefault(element => !string.IsNullOrWhiteSpace(element.Value));
+        if (existingGuid is not null)
+        {
+            return NormalizeGuidText(existingGuid.Value);
+        }
+
         XElement globals = document.Root?.Elements(ns + "PropertyGroup")
             .FirstOrDefault(group => string.Equals(group.Attribute("Label")?.Value, "Globals", StringComparison.OrdinalIgnoreCase))
+            ?? document.Root?.Elements(ns + "PropertyGroup").FirstOrDefault()
             ?? new XElement(ns + "PropertyGroup", new XAttribute("Label", "Globals"));
         if (globals.Parent is null)
         {
@@ -1807,6 +2950,52 @@ public sealed class TwinCatEngineeringService
         File.WriteAllText(solutionPath, text, Encoding.UTF8);
     }
 
+    private static void UpsertSlnProjectEntry(
+        string solutionPath,
+        string projectTypeGuid,
+        string projectName,
+        string projectFilePath,
+        string projectGuid)
+    {
+        string text = File.ReadAllText(solutionPath);
+        string normalizedTypeGuid = NormalizeGuidText(projectTypeGuid);
+        string normalizedProjectGuid = NormalizeGuidText(projectGuid);
+        if (text.Contains(normalizedProjectGuid, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        string solutionDirectory = Path.GetDirectoryName(solutionPath)
+            ?? throw new InvalidOperationException($"Unable to resolve solution directory for '{solutionPath}'.");
+        string relativePath = Path.GetRelativePath(solutionDirectory, projectFilePath).Replace('/', '\\');
+        string safeProjectName = projectName.Replace("\"", string.Empty, StringComparison.Ordinal);
+        string safeRelativePath = relativePath.Replace("\"", string.Empty, StringComparison.Ordinal);
+        string block =
+            $"Project(\"{normalizedTypeGuid}\") = \"{safeProjectName}\", \"{safeRelativePath}\", \"{normalizedProjectGuid}\"{Environment.NewLine}" +
+            $"EndProject{Environment.NewLine}";
+
+        Regex projectRegex = new(
+            @"Project\(""\{(?<type>[^""]+)\}""\)\s*=\s*""(?<name>[^""]+)""\s*,\s*""(?<path>[^""]+)""\s*,\s*""(?<guid>\{[^""]+\})""(?<body>.*?)EndProject\r?\n?",
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        Match? existing = projectRegex.Matches(text)
+            .Cast<Match>()
+            .FirstOrDefault(match =>
+                string.Equals(match.Groups["name"].Value, safeProjectName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(match.Groups["path"].Value.Replace('/', '\\'), safeRelativePath, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            string updatedExisting = text.Remove(existing.Index, existing.Length).Insert(existing.Index, block);
+            File.WriteAllText(solutionPath, updatedExisting, Encoding.UTF8);
+            return;
+        }
+
+        int globalIndex = text.IndexOf("Global", StringComparison.OrdinalIgnoreCase);
+        string updated = globalIndex >= 0
+            ? text.Insert(globalIndex, block)
+            : text.TrimEnd() + Environment.NewLine + block;
+        File.WriteAllText(solutionPath, updated, Encoding.UTF8);
+    }
+
     private CppProjectPaths ResolveCppProjectPaths(TwinCatEngineeringSession session, string projectName)
     {
         if (string.IsNullOrWhiteSpace(projectName))
@@ -1817,6 +3006,29 @@ public sealed class TwinCatEngineeringService
         Project? dteProject = FindProjectByName(session.Dte, projectName);
         string? fullName = dteProject is null ? null : SafeGetProjectFullName(dteProject);
         string projectFilePath = ResolveCppProjectFilePath(session, projectName, fullName);
+        if (!File.Exists(projectFilePath))
+        {
+            throw new FileNotFoundException($"C++ .vcxproj file was not found for project '{projectName}'.", projectFilePath);
+        }
+
+        string projectDirectory = Path.GetDirectoryName(projectFilePath)
+            ?? throw new InvalidOperationException($"Unable to resolve project directory from '{projectFilePath}'.");
+        return new CppProjectPaths(projectName, projectDirectory, projectFilePath, projectFilePath + ".filters");
+    }
+
+    private static CppProjectPaths ResolveCppProjectPaths(string twinCatProjectDirectory, string projectName)
+    {
+        if (string.IsNullOrWhiteSpace(projectName))
+        {
+            throw new InvalidOperationException("ProjectName must not be empty.");
+        }
+
+        if (string.IsNullOrWhiteSpace(twinCatProjectDirectory))
+        {
+            throw new InvalidOperationException("TwinCAT project directory must not be empty.");
+        }
+
+        string projectFilePath = ResolveCppProjectFilePath(twinCatProjectDirectory, projectName);
         if (!File.Exists(projectFilePath))
         {
             throw new FileNotFoundException($"C++ .vcxproj file was not found for project '{projectName}'.", projectFilePath);
@@ -1888,6 +3100,47 @@ public sealed class TwinCatEngineeringService
         }
 
         return Path.GetFullPath(Path.Combine(ResolveSolutionDirectory(session), projectName, projectName + ".vcxproj"));
+    }
+
+    private static string ResolveCppProjectFilePath(string twinCatProjectDirectory, string projectName)
+    {
+        string root = Path.GetFullPath(twinCatProjectDirectory);
+        List<string> candidates =
+        [
+            Path.Combine(root, projectName, projectName + ".vcxproj")
+        ];
+
+        if (Directory.Exists(root))
+        {
+            candidates.AddRange(Directory.GetFiles(root, projectName + ".vcxproj", SearchOption.AllDirectories));
+        }
+
+        string[] existing = candidates
+            .Select(Path.GetFullPath)
+            .Where(File.Exists)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (existing.Length == 1)
+        {
+            return existing[0];
+        }
+
+        string[] exactParentMatches = existing
+            .Where(path => string.Equals(Path.GetFileName(Path.GetDirectoryName(path)), projectName, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (exactParentMatches.Length == 1)
+        {
+            return exactParentMatches[0];
+        }
+
+        if (existing.Length > 1)
+        {
+            throw new InvalidOperationException(
+                $"Multiple C++ .vcxproj files named '{projectName}.vcxproj' were found under '{root}'. " +
+                string.Join("; ", existing));
+        }
+
+        return Path.GetFullPath(Path.Combine(root, projectName, projectName + ".vcxproj"));
     }
 
     private static string NormalizeProjectRelativePath(string relativePath)
@@ -2538,49 +3791,189 @@ public sealed class TwinCatEngineeringService
         }
     }
 
-    private static (DTE Dte, bool AttachedToExisting) CreateOrAttachVisualStudioDte(Type dteType, string progId)
+    private static (
+        DTE Dte,
+        bool AttachedToExisting,
+        IReadOnlyCollection<int> TargetProcessIds,
+        IReadOnlyDictionary<string, int> AutoDismissedDialogs) CreateOrAttachVisualStudioDte(
+        Type dteType,
+        string progId,
+        int launchTimeoutMs,
+        bool attachToExisting,
+        bool enableDialogAutoDismiss,
+        int dialogPollIntervalMs,
+        string? rootSuffix,
+        string? dteHostPath,
+        bool preferDteHostLaunch)
     {
+        int timeoutMs = launchTimeoutMs > 0 ? launchTimeoutMs : 60000;
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        HashSet<int> existingDteHostProcessIds = CaptureDteHostProcessIds();
+        DateTime launchWindowStart = DateTime.Now;
         Exception? lastException = null;
-        try
-        {
-            if (TryGetActiveVisualStudioDte(progId) is DTE activeDte)
-            {
-                return (activeDte, true);
-            }
-        }
-        catch (COMException ex)
-        {
-            lastException = ex;
-        }
-
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            try
-            {
-                return ((DTE)Activator.CreateInstance(dteType)!, false);
-            }
-            catch (COMException ex) when (IsRetryableLaunchFailure(ex))
-            {
-                lastException = ex;
-                ThreadingThread.Sleep(1000 * (attempt + 1));
-            }
-        }
+        bool succeeded = false;
+        DteFallbackLaunchInfo? fallbackLaunchInfo = null;
+        TwinCatEngineeringSession.TwinCatDialogAutoDismissScope? launchDialogScope = enableDialogAutoDismiss
+            ? TwinCatEngineeringSession.TwinCatDialogAutoDismissScope.Start(Array.Empty<int>(), dialogPollIntervalMs)
+            : null;
 
         try
         {
-            if (TryGetActiveVisualStudioDte(progId) is DTE activeDte)
+            if (attachToExisting)
             {
-                return (activeDte, true);
+                try
+                {
+                    if (TryGetActiveVisualStudioDte(progId) is DTE activeDte)
+                    {
+                        succeeded = true;
+                        return (activeDte, true, Array.Empty<int>(), SnapshotAutoDismissedDialogs(launchDialogScope));
+                    }
+                }
+                catch (COMException ex)
+                {
+                    lastException = ex;
+                }
+            }
+
+            if (preferDteHostLaunch && RemainingLaunchMilliseconds(deadline) > 0)
+            {
+                fallbackLaunchInfo = TryStartDteHostForDte(progId, dteType, rootSuffix, dteHostPath);
+                if (fallbackLaunchInfo is not null)
+                {
+                    while (RemainingLaunchMilliseconds(deadline) > 0)
+                    {
+                        launchDialogScope?.AddTargetProcessIds(DetectNewDteHostProcessIds(existingDteHostProcessIds));
+                        try
+                        {
+                            if (TryGetActiveVisualStudioDte(progId, existingDteHostProcessIds) is DTE activeDteAfterExplicitStart)
+                            {
+                                succeeded = true;
+                                return (activeDteAfterExplicitStart, false, DetectNewDteHostProcessIds(existingDteHostProcessIds), SnapshotAutoDismissedDialogs(launchDialogScope));
+                            }
+                        }
+                        catch (COMException ex)
+                        {
+                            lastException = ex;
+                        }
+
+                        if (fallbackLaunchInfo is not null && HasFallbackHostExitedWithActivityLogErrors(fallbackLaunchInfo))
+                        {
+                            break;
+                        }
+
+                        ThreadingThread.Sleep(Math.Min(1000, Math.Max(0, RemainingLaunchMilliseconds(deadline))));
+                    }
+                }
+            }
+
+            if (!preferDteHostLaunch && RemainingLaunchMilliseconds(deadline) > 0)
+            {
+                try
+                {
+                    launchDialogScope?.AddTargetProcessIds(DetectNewDteHostProcessIds(existingDteHostProcessIds));
+                    int activationProbeMs = Math.Min(
+                        RemainingLaunchMilliseconds(deadline),
+                        Math.Clamp(timeoutMs / 2, 10000, 25000));
+                    DTE created = CreateDteWithTimeout(
+                        dteType,
+                        activationProbeMs,
+                        launchDialogScope,
+                        existingDteHostProcessIds);
+                    launchDialogScope?.AddTargetProcessIds(DetectNewDteHostProcessIds(existingDteHostProcessIds));
+                    if (attachToExisting)
+                    {
+                        succeeded = true;
+                        return (created, false, DetectNewDteHostProcessIds(existingDteHostProcessIds), SnapshotAutoDismissedDialogs(launchDialogScope));
+                    }
+
+                    if (TryGetDteProcessId(created) is int createdProcessId &&
+                        !existingDteHostProcessIds.Contains(createdProcessId))
+                    {
+                        succeeded = true;
+                        return (created, false, DetectNewDteHostProcessIds(existingDteHostProcessIds), SnapshotAutoDismissedDialogs(launchDialogScope));
+                    }
+
+                    int rotProbeMs = Math.Min(RemainingLaunchMilliseconds(deadline), 5000);
+                    DateTime rotProbeDeadline = DateTime.UtcNow.AddMilliseconds(rotProbeMs);
+                    while (RemainingLaunchMilliseconds(rotProbeDeadline) > 0)
+                    {
+                        if (TryGetActiveVisualStudioDte(progId, existingDteHostProcessIds) is DTE createdFromRot)
+                        {
+                            succeeded = true;
+                            return (createdFromRot, false, DetectNewDteHostProcessIds(existingDteHostProcessIds), SnapshotAutoDismissedDialogs(launchDialogScope));
+                        }
+
+                        ThreadingThread.Sleep(500);
+                    }
+
+                    lastException = new InvalidOperationException(
+                        "DTE COM activation returned a pre-existing Visual Studio host while AttachToExisting=false.");
+                }
+                catch (Exception ex) when (IsRetryableLaunchFailure(ex))
+                {
+                    lastException = ex;
+                }
+            }
+
+            fallbackLaunchInfo ??= TryStartDteHostForDte(progId, dteType, rootSuffix, dteHostPath);
+            while (RemainingLaunchMilliseconds(deadline) > 0)
+            {
+                launchDialogScope?.AddTargetProcessIds(DetectNewDteHostProcessIds(existingDteHostProcessIds));
+                try
+                {
+                    if (TryGetActiveVisualStudioDte(progId, existingDteHostProcessIds) is DTE activeDteAfterStart)
+                    {
+                        succeeded = true;
+                        return (activeDteAfterStart, false, DetectNewDteHostProcessIds(existingDteHostProcessIds), SnapshotAutoDismissedDialogs(launchDialogScope));
+                    }
+                }
+                catch (COMException ex)
+                {
+                    lastException = ex;
+                }
+
+                if (fallbackLaunchInfo is not null && HasFallbackHostExitedWithActivityLogErrors(fallbackLaunchInfo))
+                {
+                    break;
+                }
+
+                ThreadingThread.Sleep(Math.Min(1000, Math.Max(0, RemainingLaunchMilliseconds(deadline))));
+            }
+
+            if (attachToExisting)
+            {
+                try
+                {
+                    if (TryGetActiveVisualStudioDte(progId) is DTE activeDte)
+                    {
+                        succeeded = true;
+                        return (activeDte, true, Array.Empty<int>(), SnapshotAutoDismissedDialogs(launchDialogScope));
+                    }
+                }
+                catch (COMException ex)
+                {
+                    lastException = ex;
+                }
+            }
+
+            throw new InvalidOperationException(
+                BuildDteLaunchFailureMessage(
+                    progId,
+                    lastException,
+                    existingDteHostProcessIds,
+                    launchWindowStart,
+                    SnapshotAutoDismissedDialogs(launchDialogScope),
+                    fallbackLaunchInfo),
+                lastException);
+        }
+        finally
+        {
+            launchDialogScope?.Dispose();
+            if (!succeeded)
+            {
+                CleanupFailedLaunchDteHostProcesses(existingDteHostProcessIds, launchWindowStart);
             }
         }
-        catch (COMException ex)
-        {
-            lastException = ex;
-        }
-
-        throw new InvalidOperationException(
-            $"Unable to launch or attach to Visual Studio DTE '{progId}'.",
-            lastException);
     }
 
     private static bool IsRetryableLaunchFailure(COMException ex) =>
@@ -2589,6 +3982,433 @@ public sealed class TwinCatEngineeringService
         ex.HResult == RpcCallRejected ||
         ex.HResult == RpcRetryLater ||
         ex.HResult == RpcCallFailed;
+
+    private static bool IsRetryableLaunchFailure(Exception ex) =>
+        ex is TimeoutException ||
+        ex is COMException comException && IsRetryableLaunchFailure(comException);
+
+    private static IReadOnlyDictionary<string, int> SnapshotAutoDismissedDialogs(
+        TwinCatEngineeringSession.TwinCatDialogAutoDismissScope? scope) =>
+        scope?.Snapshot() ?? EmptyAutoDismissedDialogs;
+
+    private static IReadOnlyDictionary<string, int> MergeAutoDismissedDialogs(
+        IReadOnlyDictionary<string, int>? first,
+        IReadOnlyDictionary<string, int>? second)
+    {
+        if ((first is null || first.Count == 0) && (second is null || second.Count == 0))
+        {
+            return EmptyAutoDismissedDialogs;
+        }
+
+        Dictionary<string, int> merged = new(StringComparer.OrdinalIgnoreCase);
+        AddAutoDismissedDialogs(merged, first);
+        AddAutoDismissedDialogs(merged, second);
+        return merged;
+    }
+
+    private static void AddAutoDismissedDialogs(
+        Dictionary<string, int> target,
+        IReadOnlyDictionary<string, int>? source)
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        foreach ((string key, int count) in source)
+        {
+            if (string.IsNullOrWhiteSpace(key) || count <= 0)
+            {
+                continue;
+            }
+
+            target[key] = target.TryGetValue(key, out int existing) ? existing + count : count;
+        }
+    }
+
+    private static string BuildDteLaunchFailureMessage(
+        string progId,
+        Exception? lastException,
+        HashSet<int> existingProcessIds,
+        DateTime launchWindowStart,
+        IReadOnlyDictionary<string, int>? autoDismissedDialogs,
+        DteFallbackLaunchInfo? fallbackLaunchInfo)
+    {
+        StringBuilder builder = new($"Unable to launch or attach to Visual Studio DTE '{progId}'.");
+        if (lastException is not null)
+        {
+            builder.Append(" Last error: ")
+                .Append(lastException.GetType().Name)
+                .Append(": ")
+                .Append(lastException.Message);
+        }
+
+        string processSnapshot = DescribeDteHostProcesses(existingProcessIds, launchWindowStart);
+        if (!string.IsNullOrWhiteSpace(processSnapshot))
+        {
+            builder.Append(" DTE host snapshot: ").Append(processSnapshot);
+        }
+
+        if (autoDismissedDialogs is { Count: > 0 })
+        {
+            builder.Append(" Auto-dismissed launch dialogs: ")
+                .Append(string.Join("; ", autoDismissedDialogs.Select(item => $"{item.Key} x{item.Value}")));
+        }
+
+        if (fallbackLaunchInfo is not null)
+        {
+            builder.Append(" Fallback launch: host=")
+                .Append(fallbackLaunchInfo.HostPath);
+            if (fallbackLaunchInfo.ProcessId.HasValue)
+            {
+                builder.Append(" pid=").Append(fallbackLaunchInfo.ProcessId.Value.ToString(CultureInfo.InvariantCulture));
+            }
+
+            if (!string.IsNullOrWhiteSpace(fallbackLaunchInfo.Arguments))
+            {
+                builder.Append(" args=").Append(fallbackLaunchInfo.Arguments);
+            }
+
+            builder.Append(" startSucceeded=")
+                .Append(fallbackLaunchInfo.StartSucceeded ? "true" : "false");
+            if (!string.IsNullOrWhiteSpace(fallbackLaunchInfo.StartError))
+            {
+                builder.Append(" startError=").Append(fallbackLaunchInfo.StartError);
+            }
+        }
+
+        AppendActivityLogSummary(builder, fallbackLaunchInfo?.ActivityLogPath);
+
+        return builder.ToString();
+    }
+
+    private static DTE CreateDteWithTimeout(
+        Type dteType,
+        int launchTimeoutMs,
+        TwinCatEngineeringSession.TwinCatDialogAutoDismissScope? launchDialogScope,
+        HashSet<int> existingDteHostProcessIds)
+    {
+        int timeoutMs = launchTimeoutMs > 0 ? launchTimeoutMs : 60000;
+        DTE? created = null;
+        Exception? exception = null;
+        ThreadingThread thread = new(() =>
+        {
+            try
+            {
+                created = (DTE)Activator.CreateInstance(dteType)!;
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.IsBackground = true;
+        thread.Start();
+
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (RemainingLaunchMilliseconds(deadline) > 0)
+        {
+            int waitMs = Math.Min(500, RemainingLaunchMilliseconds(deadline));
+            if (thread.Join(waitMs))
+            {
+                break;
+            }
+
+            launchDialogScope?.AddTargetProcessIds(DetectNewDteHostProcessIds(existingDteHostProcessIds));
+        }
+
+        if (thread.IsAlive)
+        {
+            throw new TimeoutException($"Visual Studio DTE COM activation did not complete within {timeoutMs} ms.");
+        }
+
+        if (exception is not null)
+        {
+            throw exception;
+        }
+
+        return created ?? throw new InvalidOperationException("Visual Studio DTE COM activation returned null.");
+    }
+
+    private static int RemainingLaunchMilliseconds(DateTime deadline)
+    {
+        double remaining = (deadline - DateTime.UtcNow).TotalMilliseconds;
+        return remaining <= 0 ? 0 : (int)Math.Ceiling(remaining);
+    }
+
+    private static DteFallbackLaunchInfo? TryStartDteHostForDte(
+        string progId,
+        Type dteType,
+        string? rootSuffix,
+        string? requestedHostPath)
+    {
+        string? hostPath = ResolveDteHostPath(progId, dteType, requestedHostPath);
+        if (string.IsNullOrWhiteSpace(hostPath) || !File.Exists(hostPath))
+        {
+            return null;
+        }
+
+        string? activityLogPath = BuildFallbackActivityLogPath(progId);
+        try
+        {
+            string arguments = string.IsNullOrWhiteSpace(activityLogPath)
+                ? "/Embedding /NoSplash"
+                : $"/Embedding /NoSplash /Log \"{activityLogPath}\"";
+            if (!string.IsNullOrWhiteSpace(rootSuffix))
+            {
+                arguments += $" /RootSuffix \"{rootSuffix.Trim()}\"";
+            }
+
+            DiagnosticsProcess? process = DiagnosticsProcess.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = hostPath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            return new DteFallbackLaunchInfo(
+                hostPath,
+                arguments,
+                activityLogPath,
+                StartSucceeded: true,
+                StartError: null,
+                ProcessId: process?.Id);
+        }
+        catch (Exception ex)
+        {
+            // Explicit host launch is a fallback after COM activation failed; keep the original COM error.
+            return new DteFallbackLaunchInfo(
+                hostPath,
+                string.Empty,
+                activityLogPath,
+                StartSucceeded: false,
+                StartError: ex.Message,
+                ProcessId: null);
+        }
+    }
+
+    private static bool HasFallbackHostExitedWithActivityLogErrors(DteFallbackLaunchInfo fallbackLaunchInfo)
+    {
+        if (fallbackLaunchInfo.ProcessId is not int processId)
+        {
+            return false;
+        }
+
+        try
+        {
+            using DiagnosticsProcess process = DiagnosticsProcess.GetProcessById(processId);
+            if (!process.HasExited)
+            {
+                return false;
+            }
+        }
+        catch
+        {
+            // If the host process has already disappeared, use the ActivityLog as the authoritative failure detail.
+        }
+
+        return !string.IsNullOrWhiteSpace(fallbackLaunchInfo.ActivityLogPath)
+            && File.Exists(fallbackLaunchInfo.ActivityLogPath)
+            && ReadActivityLogErrorSummaries(fallbackLaunchInfo.ActivityLogPath, maxErrors: 1).Count > 0;
+    }
+
+    private static string? BuildFallbackActivityLogPath(string progId)
+    {
+        try
+        {
+            string safeProgId = Regex.Replace(progId, @"[^A-Za-z0-9_.-]+", "_");
+            string directory = Path.Combine(
+                AppContext.BaseDirectory,
+                "dte-launch-logs");
+            Directory.CreateDirectory(directory);
+            return Path.Combine(
+                directory,
+                $"{safeProgId}-{DateTime.Now:yyyyMMdd-HHmmss-fff}-ActivityLog.xml");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? ResolveDteHostPath(string progId, Type dteType, string? requestedHostPath = null)
+    {
+        foreach (string candidate in EnumerateDteHostPathCandidates(progId, dteType, requestedHostPath))
+        {
+            if (string.IsNullOrWhiteSpace(candidate))
+            {
+                continue;
+            }
+
+            string fullPath;
+            try
+            {
+                fullPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(candidate));
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (File.Exists(fullPath))
+            {
+                return fullPath;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? ResolveDevenvPath(Type dteType) =>
+        ResolveDteHostPath("VisualStudio.DTE.17.0", dteType);
+
+    private static IEnumerable<string> EnumerateDteHostPathCandidates(
+        string progId,
+        Type dteType,
+        string? requestedHostPath)
+    {
+        if (!string.IsNullOrWhiteSpace(requestedHostPath))
+        {
+            yield return requestedHostPath;
+        }
+
+        string? comLocalServer = TryReadComLocalServerPath(dteType);
+        if (!string.IsNullOrWhiteSpace(comLocalServer))
+        {
+            yield return comLocalServer;
+        }
+
+        if (IsTcXaeShellProgId(progId))
+        {
+            foreach (string candidate in EnumerateTcXaeShellPathCandidates())
+            {
+                yield return candidate;
+            }
+
+            yield break;
+        }
+
+        foreach (string candidate in EnumerateVisualStudioDteHostPathCandidates(progId))
+        {
+            yield return candidate;
+        }
+    }
+
+    private static string? TryReadComLocalServerPath(Type dteType)
+    {
+        try
+        {
+            string clsidKey = $@"CLSID\{{{dteType.GUID}}}\LocalServer32";
+            using RegistryKey? key = Registry.ClassesRoot.OpenSubKey(clsidKey);
+            if (key?.GetValue(null) is string localServer)
+            {
+                return ParseExecutablePath(localServer);
+            }
+        }
+        catch
+        {
+        }
+
+        return null;
+    }
+
+    private static bool IsTcXaeShellProgId(string progId) =>
+        progId.StartsWith("TcXaeShell.", StringComparison.OrdinalIgnoreCase)
+        || progId.Equals("TcXaeShell", StringComparison.OrdinalIgnoreCase);
+
+    private static IEnumerable<string> EnumerateTcXaeShellPathCandidates()
+    {
+        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+
+        if (!string.IsNullOrWhiteSpace(programFilesX86))
+        {
+            yield return Path.Combine(programFilesX86, "Beckhoff", "TcXaeShell", "Common7", "IDE", "TcXaeShell.exe");
+            yield return Path.Combine(programFilesX86, "Beckhoff", "TwinCAT", "3.1", "Components", "Base", "TcXaeShell", "TcXaeShell.exe");
+        }
+
+        if (!string.IsNullOrWhiteSpace(programFiles))
+        {
+            yield return Path.Combine(programFiles, "Beckhoff", "TcXaeShell", "Common7", "IDE", "TcXaeShell.exe");
+            yield return Path.Combine(programFiles, "Beckhoff", "TwinCAT", "3.1", "Components", "Base", "TcXaeShell", "TcXaeShell.exe");
+        }
+
+        yield return Path.Combine("C:\\", "TwinCAT", "3.1", "Components", "Base", "TcXaeShell", "TcXaeShell.exe");
+    }
+
+    private static IEnumerable<string> EnumerateVisualStudioDteHostPathCandidates(string progId)
+    {
+        int? majorVersion = TryGetVisualStudioMajorVersion(progId);
+        string? vsInstallDir = Environment.GetEnvironmentVariable("VSINSTALLDIR");
+        if (!string.IsNullOrWhiteSpace(vsInstallDir))
+        {
+            yield return Path.Combine(vsInstallDir, "Common7", "IDE", "devenv.exe");
+        }
+
+        string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        if (!string.IsNullOrWhiteSpace(programFilesX86))
+        {
+            string vswherePath = Path.Combine(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+            string? installationPath = TryReadLatestVisualStudioInstallationPath(vswherePath, majorVersion);
+            if (!string.IsNullOrWhiteSpace(installationPath))
+            {
+                yield return Path.Combine(installationPath, "Common7", "IDE", "devenv.exe");
+            }
+
+            foreach (string productYear in EnumerateVisualStudioProductYears(majorVersion))
+            {
+                yield return Path.Combine(programFilesX86, "Microsoft Visual Studio", productYear, "Enterprise", "Common7", "IDE", "devenv.exe");
+                yield return Path.Combine(programFilesX86, "Microsoft Visual Studio", productYear, "Professional", "Common7", "IDE", "devenv.exe");
+                yield return Path.Combine(programFilesX86, "Microsoft Visual Studio", productYear, "Community", "Common7", "IDE", "devenv.exe");
+                yield return Path.Combine(programFilesX86, "Microsoft Visual Studio", productYear, "BuildTools", "Common7", "IDE", "devenv.exe");
+            }
+        }
+    }
+
+    private static int? TryGetVisualStudioMajorVersion(string progId)
+    {
+        Match match = Regex.Match(progId, @"^VisualStudio\.DTE\.(\d+)\.0$", RegexOptions.IgnoreCase);
+        return match.Success && int.TryParse(match.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int version)
+            ? version
+            : null;
+    }
+
+    private static IEnumerable<string> EnumerateVisualStudioProductYears(int? majorVersion)
+    {
+        if (majorVersion == 17)
+        {
+            yield return "2022";
+            yield break;
+        }
+
+        if (majorVersion == 16)
+        {
+            yield return "2019";
+            yield break;
+        }
+
+        yield return "2022";
+        yield return "2019";
+    }
+
+    private static string? ParseExecutablePath(string commandLine)
+    {
+        string trimmed = commandLine.Trim();
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
+        if (trimmed[0] == '"')
+        {
+            int closingQuote = trimmed.IndexOf('"', 1);
+            return closingQuote > 1 ? trimmed[1..closingQuote] : null;
+        }
+
+        int exeIndex = trimmed.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+        return exeIndex >= 0 ? trimmed[..(exeIndex + 4)] : trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+    }
 
     private static object? TryGetActiveComObject(string progId)
     {
@@ -2615,14 +4435,16 @@ public sealed class TwinCatEngineeringService
 
     private static DTE? TryGetActiveVisualStudioDte(string progId)
     {
-        if (TryGetActiveComObject(progId) is DTE activeDte)
+        if (TryGetActiveComObject(progId) is DTE activeDte &&
+            IsResponsiveDte(activeDte))
         {
             return activeDte;
         }
 
         foreach (object candidate in EnumerateRunningVisualStudioDteObjects(progId))
         {
-            if (candidate is DTE dte)
+            if (candidate is DTE dte &&
+                IsResponsiveDte(dte))
             {
                 return dte;
             }
@@ -2630,6 +4452,328 @@ public sealed class TwinCatEngineeringService
 
         return null;
     }
+
+    private static DTE? TryGetActiveVisualStudioDte(string progId, HashSet<int> excludedProcessIds)
+    {
+        foreach (object candidate in EnumerateRunningVisualStudioDteObjects(progId))
+        {
+            if (candidate is not DTE dte ||
+                !IsResponsiveDte(dte) ||
+                TryGetDteProcessId(dte) is not int processId ||
+                excludedProcessIds.Contains(processId))
+            {
+                continue;
+            }
+
+            return dte;
+        }
+
+        return null;
+    }
+
+    private static bool IsResponsiveDte(DTE dte)
+    {
+        try
+        {
+            _ = RetryComCall(() => dte.Version, 3, 200);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int? TryGetDteProcessId(DTE dte)
+    {
+        try
+        {
+            IntPtr hwnd = new(RetryComCall(() => dte.MainWindow.HWnd, 3, 200));
+            if (hwnd == IntPtr.Zero)
+            {
+                return null;
+            }
+
+            GetWindowThreadProcessId(hwnd, out int processId);
+            return processId > 0 ? processId : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static HashSet<int> CaptureDteHostProcessIds()
+    {
+        HashSet<int> processIds = [];
+        foreach (string processName in DteHostProcessNames)
+        {
+            foreach (DiagnosticsProcess process in DiagnosticsProcess.GetProcessesByName(processName))
+            {
+                using (process)
+                {
+                    processIds.Add(process.Id);
+                }
+            }
+        }
+
+        return processIds;
+    }
+
+    private static void CleanupFailedLaunchDteHostProcesses(HashSet<int> existingProcessIds, DateTime launchWindowStart)
+    {
+        foreach (string processName in DteHostProcessNames)
+        {
+            foreach (DiagnosticsProcess process in DiagnosticsProcess.GetProcessesByName(processName))
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (existingProcessIds.Contains(process.Id) ||
+                            process.StartTime < launchWindowStart.AddSeconds(-2))
+                        {
+                            continue;
+                        }
+
+                        process.Kill(entireProcessTree: true);
+                        process.WaitForExit(5000);
+                    }
+                    catch
+                    {
+                        // Best-effort cleanup of failed unattended DTE launches only.
+                    }
+                }
+            }
+        }
+    }
+
+    private static IReadOnlyCollection<int> DetectNewDteHostProcessIds(HashSet<int> existingProcessIds)
+    {
+        HashSet<int> current = CaptureDteHostProcessIds();
+        current.ExceptWith(existingProcessIds);
+        return current.ToArray();
+    }
+
+    private static string DescribeDteHostProcesses(HashSet<int> existingProcessIds, DateTime launchWindowStart)
+    {
+        List<string> items = [];
+        int total = 0;
+        int headless = 0;
+        foreach (string processName in DteHostProcessNames)
+        {
+            foreach (DiagnosticsProcess process in DiagnosticsProcess.GetProcessesByName(processName))
+            {
+                using (process)
+                {
+                    total++;
+                    int processId;
+                    try
+                    {
+                        processId = process.Id;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        continue;
+                    }
+
+                    string? title = TryReadProcessString(() => process.MainWindowTitle);
+                    if (string.IsNullOrWhiteSpace(title))
+                    {
+                        headless++;
+                    }
+
+                    DateTimeOffset? startTime = TryReadProcessTime(process);
+                    string origin = existingProcessIds.Contains(processId)
+                        ? "pre-existing"
+                        : startTime.HasValue && startTime.Value.LocalDateTime >= launchWindowStart.AddSeconds(-2)
+                            ? "new"
+                            : "unknown";
+                    if (items.Count < 8)
+                    {
+                        string titleText = string.IsNullOrWhiteSpace(title) ? "(headless)" : title.Trim();
+                        string windows = DescribeVisibleWindowsForProcess(processId);
+                        items.Add($"{processName}:{processId}:{origin}:title={titleText}:windows={windows}");
+                    }
+                }
+            }
+        }
+
+        return total == 0
+            ? "none"
+            : $"total={total}, headless={headless}, samples=[{string.Join("; ", items)}]";
+    }
+
+    private static string DescribeVisibleWindowsForProcess(int processId)
+    {
+        List<string> windows = [];
+        try
+        {
+            EnumWindows((hwnd, _) =>
+            {
+                if (windows.Count >= 3)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    if (!IsWindowVisible(hwnd))
+                    {
+                        return true;
+                    }
+
+                    GetWindowThreadProcessId(hwnd, out int hwndProcessId);
+                    if (hwndProcessId != processId)
+                    {
+                        return true;
+                    }
+
+                    string className = GetClassNameText(hwnd);
+                    string title = GetWindowTextString(hwnd);
+                    string owner = GetWindow(hwnd, GwOwner) == IntPtr.Zero ? "ownerless" : "owned";
+                    string buttons = DescribeChildButtons(hwnd);
+                    windows.Add($"{className}:{owner}:title={NormalizeDiagnosticText(title)}:buttons={buttons}");
+                }
+                catch
+                {
+                }
+
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch
+        {
+        }
+
+        return windows.Count == 0 ? "none" : string.Join("|", windows);
+    }
+
+    private static string DescribeChildButtons(IntPtr hwnd)
+    {
+        List<string> buttons = [];
+        try
+        {
+            EnumChildWindows(hwnd, (child, _) =>
+            {
+                if (buttons.Count >= 5)
+                {
+                    return false;
+                }
+
+                try
+                {
+                    if (string.Equals(GetClassNameText(child), "Button", StringComparison.OrdinalIgnoreCase))
+                    {
+                        buttons.Add(NormalizeDiagnosticText(GetWindowTextString(child)));
+                    }
+                }
+                catch
+                {
+                }
+
+                return true;
+            }, IntPtr.Zero);
+        }
+        catch
+        {
+        }
+
+        return buttons.Count == 0 ? "none" : string.Join(",", buttons);
+    }
+
+    private static string NormalizeDiagnosticText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "(empty)";
+        }
+
+        string normalized = Regex.Replace(value.Trim(), @"\s+", " ");
+        return normalized.Length <= 80 ? normalized : normalized[..77] + "...";
+    }
+
+    private static void AppendActivityLogSummary(StringBuilder builder, string? activityLogPath)
+    {
+        if (string.IsNullOrWhiteSpace(activityLogPath))
+        {
+            return;
+        }
+
+        builder.Append(" Fallback activity log: ").Append(activityLogPath);
+        if (!File.Exists(activityLogPath))
+        {
+            builder.Append(" (not written)");
+            return;
+        }
+
+        try
+        {
+            IReadOnlyList<string> errors = ReadActivityLogErrorSummaries(activityLogPath, maxErrors: 3);
+            if (errors.Count > 0)
+            {
+                builder.Append(" ActivityLog errors: ").Append(string.Join(" | ", errors));
+            }
+        }
+        catch (Exception ex)
+        {
+            builder.Append(" (unable to parse: ").Append(ex.Message).Append(')');
+        }
+    }
+
+    private static IReadOnlyList<string> ReadActivityLogErrorSummaries(string activityLogPath, int maxErrors)
+    {
+        XDocument document = XDocument.Load(activityLogPath);
+        return document
+            .Descendants()
+            .Where(element => string.Equals(element.Name.LocalName, "entry", StringComparison.OrdinalIgnoreCase))
+            .Select(element => new
+            {
+                Type = GetActivityLogChildValue(element, "type"),
+                Source = GetActivityLogChildValue(element, "source"),
+                Description = GetActivityLogChildValue(element, "description"),
+                HResult = GetActivityLogChildValue(element, "hr")
+            })
+            .Where(entry => entry.Type.Contains("error", StringComparison.OrdinalIgnoreCase))
+            .Select(entry => string.IsNullOrWhiteSpace(entry.HResult)
+                ? $"{entry.Source}: {NormalizeDiagnosticText(entry.Description)}"
+                : $"{entry.Source}: {NormalizeDiagnosticText(entry.Description)} ({NormalizeDiagnosticText(entry.HResult)})")
+            .Where(text => !string.IsNullOrWhiteSpace(text))
+            .Take(maxErrors)
+            .ToList();
+    }
+
+    private static string GetActivityLogChildValue(XElement entry, string localName) =>
+        entry.Elements()
+            .FirstOrDefault(element => string.Equals(element.Name.LocalName, localName, StringComparison.OrdinalIgnoreCase))
+            ?.Value
+            ?? string.Empty;
+
+    private static string? TryReadProcessString(Func<string?> read)
+    {
+        try
+        {
+            return read();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? TryReadProcessTime(DiagnosticsProcess process)
+    {
+        try
+        {
+            return new DateTimeOffset(process.StartTime);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static readonly string[] DteHostProcessNames = ["devenv", "TcXaeShell"];
 
     private static IReadOnlyList<object> EnumerateRunningVisualStudioDteObjects(string progId)
     {
@@ -2708,6 +4852,54 @@ public sealed class TwinCatEngineeringService
     [DllImport("ole32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
     private static extern void CLSIDFromProgID(string progId, out Guid clsid);
 
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int processId);
+
+    private const int GwOwner = 4;
+
+    private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc enumProc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumChildWindows(IntPtr hwndParent, EnumWindowsProc enumProc, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hwnd, int command);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLength(IntPtr hwnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hwnd, StringBuilder className, int maxCount);
+
+    private static string GetWindowTextString(IntPtr hwnd)
+    {
+        int length = GetWindowTextLength(hwnd);
+        if (length <= 0)
+        {
+            return string.Empty;
+        }
+
+        StringBuilder builder = new(length + 1);
+        _ = GetWindowText(hwnd, builder, builder.Capacity);
+        return builder.ToString();
+    }
+
+    private static string GetClassNameText(IntPtr hwnd)
+    {
+        StringBuilder builder = new(256);
+        _ = GetClassName(hwnd, builder, builder.Capacity);
+        return builder.ToString();
+    }
+
     private static string? ResolveTwinCatProjectPathForOfflineMutation(TwinCatEngineeringSession session)
     {
         if (session.TwinCatProject is not null)
@@ -2765,6 +4957,37 @@ public sealed class TwinCatEngineeringService
         {
             return null;
         }
+    }
+
+    private static string JoinTreePath(string parentTreeItemPath, string childName) =>
+        parentTreeItemPath.TrimEnd('^') + "^" + childName;
+
+    private static TwinCatNodeInfo CreateNodeInfo(
+        ITcSmTreeItem item,
+        string fallbackPath,
+        bool UsedFallback = false) =>
+        new(
+            GetTreePath(item, fallbackPath),
+            GetTreeItemField(item, "ItemName")
+                ?? GetTreeItemField(item, "Name")
+                ?? fallbackPath.Split('^', StringSplitOptions.RemoveEmptyEntries).LastOrDefault()
+                ?? fallbackPath,
+            GetTreeItemField(item, "ObjectId"),
+            UsedFallback: UsedFallback);
+
+    private static void ApplyDisabledState(ITcSmTreeItem item, bool? disabled)
+    {
+        if (!disabled.HasValue)
+        {
+            return;
+        }
+
+        RetryComCall(() =>
+        {
+            item.Disabled = disabled.Value
+                ? DISABLED_STATE.SMDS_DISABLED
+                : DISABLED_STATE.SMDS_NOT_DISABLED;
+        }, 5, 200);
     }
 
     private static string GetTreePath(ITcSmTreeItem item, string fallback)
@@ -5592,6 +7815,14 @@ public sealed class TwinCatEngineeringService
             }
         }
     }
+
+    private sealed record DteFallbackLaunchInfo(
+        string HostPath,
+        string Arguments,
+        string? ActivityLogPath,
+        bool StartSucceeded,
+        string? StartError,
+        int? ProcessId);
 
     private sealed record CppProjectPaths(
         string ProjectName,
